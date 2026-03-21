@@ -263,6 +263,7 @@ Read these when the task requires them. Do not guess — look up the spec.
 | File | When to read it |
 |------|-----------------|
 | docs/Concrete_Contract.md | Creating any table, enum, column, or constraint |
+| docs/afcfta_corpus_parsing_agent_spec.md | Creating or verifying the canonical hs6_product backbone table and related corpus-derived schema details |
 | docs/Join_Strategy.md | Writing any SQL query or repository method |
 | docs/FastAPI_layout.md | Creating any route, schema, service, or repository |
 | docs/v1_scope.md | Checking what is in or out of scope |

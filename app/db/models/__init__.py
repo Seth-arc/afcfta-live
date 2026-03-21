@@ -1,5 +1,6 @@
 """ORM model package."""
 
+from app.db.models.cases import CaseCounterfactual, CaseFailureMode, CaseFile, CaseInputFact
 from app.db.models.evidence import (
     DocumentReadinessTemplate,
     EvidenceRequirement,
@@ -21,6 +22,10 @@ from app.db.models.tariffs import (
 )
 
 __all__ = [
+    "CaseCounterfactual",
+    "CaseFailureMode",
+    "CaseFile",
+    "CaseInputFact",
     "DocumentReadinessTemplate",
     "EvidenceRequirement",
     "EligibilityRulePathway",

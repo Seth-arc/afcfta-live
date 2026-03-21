@@ -12,6 +12,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+import app.db.models  # noqa: F401
 from app.db.base import Base
 
 load_dotenv()

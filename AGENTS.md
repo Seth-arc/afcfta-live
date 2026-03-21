@@ -80,7 +80,7 @@ boolean expressions from the database.
 - PostgreSQL 15+ with uuid-ossp and pg_trgm extensions
 - SQLAlchemy 2.0 (async, using asyncpg)
 - Pydantic v2
-- Alembic for migrations
+- Alembic for migrations. Alembic revision IDs must be under 32 characters. Use short names like 0009_eval_audit, not 0009_create_evaluation_audit_layer.
 - pytest + pytest-asyncio for testing
 
 ---

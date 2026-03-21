@@ -13,6 +13,7 @@ from app.db.models.evidence import (
 )
 from app.db.models.evaluations import EligibilityCheckResult, EligibilityEvaluation
 from app.db.models.hs import HS6Product
+from app.db.models.intelligence import AlertEvent, CorridorProfile
 from app.db.models.rules import (
     EligibilityRulePathway,
     HS6PSRApplicability,
@@ -28,10 +29,12 @@ from app.db.models.tariffs import (
 )
 
 __all__ = [
+    "AlertEvent",
     "CaseCounterfactual",
     "CaseFailureMode",
     "CaseFile",
     "CaseInputFact",
+    "CorridorProfile",
     "DocumentReadinessTemplate",
     "EvidenceRequirement",
     "EligibilityCheckResult",

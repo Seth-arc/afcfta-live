@@ -1,1 +1,641 @@
-"""Orchestrate the full deterministic pipeline and persist evaluations plus atomic checks."""
+"""Orchestrate the full deterministic eligibility pipeline and persist audit checks."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from datetime import date
+from typing import Any
+
+from app.core.entity_keys import make_entity_key
+from app.core.enums import LegalOutcome
+from app.core.exceptions import TariffNotFoundError
+from app.core.failure_codes import FAILURE_CODES
+from app.core.fact_keys import DERIVED_VARIABLES, PRODUCTION_FACTS
+from app.schemas.assessments import (
+    EligibilityAssessmentResponse,
+    EligibilityRequest,
+    TariffOutcomeResponse,
+)
+from app.schemas.rules import RulePathwayOut, RuleResolutionResult
+from app.schemas.status import StatusOverlay
+from app.schemas.tariffs import TariffResolutionResult
+from app.services.expression_evaluator import AtomicCheck, ExpressionResult
+from app.services.general_origin_rules_service import GeneralRulesResult
+
+FAILURE_MESSAGES_TO_CODES = {message: code for code, message in FAILURE_CODES.items()}
+PATHWAY_RULE_TYPES = {"WO", "CTH", "CTSH", "VNM", "VA", "PROCESS"}
+
+
+class EligibilityService:
+    """Run the deterministic engine in the locked execution order."""
+
+    def __init__(
+        self,
+        classification_service: Any,
+        rule_resolution_service: Any,
+        tariff_resolution_service: Any,
+        status_service: Any,
+        evidence_service: Any,
+        fact_normalization_service: Any,
+        expression_evaluator: Any,
+        general_origin_rules_service: Any,
+        evaluations_repository: Any | None,
+    ) -> None:
+        self.classification_service = classification_service
+        self.rule_resolution_service = rule_resolution_service
+        self.tariff_resolution_service = tariff_resolution_service
+        self.status_service = status_service
+        self.evidence_service = evidence_service
+        self.fact_normalization_service = fact_normalization_service
+        self.expression_evaluator = expression_evaluator
+        self.general_origin_rules_service = general_origin_rules_service
+        self.evaluations_repository = evaluations_repository
+
+    async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
+        """Execute the full assessment pipeline and persist audit rows when possible."""
+
+        assessment_date = date(request.year, 1, 1)
+        product = await self.classification_service.resolve_hs6(
+            request.hs6_code,
+            request.hs_version,
+        )
+        rule_bundle = await self.rule_resolution_service.resolve_rule_bundle(
+            request.hs_version,
+            product.hs6_code,
+            assessment_date,
+        )
+
+        tariff_result: TariffResolutionResult | None = None
+        audit_checks: list[dict[str, Any]] = []
+        try:
+            tariff_result = await self.tariff_resolution_service.resolve_tariff_bundle(
+                request.exporter,
+                request.importer,
+                request.hs_version,
+                product.hs6_code,
+                request.year,
+            )
+        except TariffNotFoundError:
+            tariff_result = None
+
+        corridor_key = make_entity_key(
+            "corridor",
+            exporter=request.exporter,
+            importer=request.importer,
+            hs6_code=product.hs6_code,
+        )
+        corridor_overlay = await self.status_service.get_status_overlay("corridor", corridor_key)
+
+        blocker_checks, blocker_failure_codes, blocker_missing_facts = self._run_blocker_checks(
+            rule_bundle=rule_bundle,
+            production_facts=request.production_facts,
+            tariff_result=tariff_result,
+            corridor_overlay=corridor_overlay,
+        )
+        audit_checks.extend(blocker_checks)
+
+        if self._has_hard_blocker(blocker_checks):
+            response = EligibilityAssessmentResponse(
+                hs6_code=product.hs6_code,
+                eligible=False,
+                pathway_used=None,
+                rule_status=rule_bundle.psr_rule.rule_status,
+                tariff_outcome=self._build_tariff_outcome(tariff_result),
+                failures=blocker_failure_codes,
+                missing_facts=blocker_missing_facts,
+                evidence_required=[],
+                confidence_class=self._blocked_confidence_class(
+                    rule_status=rule_bundle.psr_rule.rule_status,
+                    corridor_overlay=corridor_overlay,
+                    missing_facts=blocker_missing_facts,
+                ),
+            )
+            await self._persist_evaluation_if_possible(
+                request=request,
+                assessment_date=assessment_date,
+                rule_bundle=rule_bundle,
+                response=response,
+                pathway_used=None,
+                audit_checks=audit_checks,
+            )
+            return response
+
+        normalized_facts = self.fact_normalization_service.normalize_facts(request.production_facts)
+
+        selected_pathway: RulePathwayOut | None = None
+        pathway_failure_codes: list[str] = []
+        missing_facts: list[str] = []
+
+        for pathway in sorted(rule_bundle.pathways, key=lambda item: item.priority_rank):
+            expression = self._extract_pathway_expression(pathway.expression_json)
+            evaluation = self.expression_evaluator.evaluate(expression, normalized_facts)
+            audit_checks.extend(self._serialize_expression_checks(evaluation))
+            missing_facts = self._merge_unique(missing_facts, evaluation.missing_variables)
+            pathway_failure_codes = self._merge_unique(
+                pathway_failure_codes,
+                self._failure_codes_from_atomic_checks(evaluation.checks),
+            )
+            if evaluation.result is True:
+                selected_pathway = pathway
+                break
+
+        general_rules_result: GeneralRulesResult | None = None
+        if selected_pathway is not None:
+            general_rules_result = self.general_origin_rules_service.evaluate(
+                normalized_facts,
+                selected_pathway,
+            )
+            audit_checks.extend(self._serialize_general_checks(general_rules_result))
+            if general_rules_result.direct_transport_check == "not_checked":
+                missing_facts = self._merge_unique(missing_facts, ["direct_transport"])
+
+        rule_key = make_entity_key("psr_rule", psr_id=rule_bundle.psr_rule.psr_id)
+        rule_overlay = await self.status_service.get_status_overlay("psr_rule", rule_key)
+        audit_checks.extend(self._serialize_status_overlay(rule_overlay))
+
+        evidence_entity_type, evidence_entity_key = self._resolve_evidence_target(
+            rule_bundle=rule_bundle,
+            selected_pathway=selected_pathway,
+        )
+        evidence_result = await self.evidence_service.build_readiness(
+            evidence_entity_type,
+            evidence_entity_key,
+            request.persona_mode,
+            [],
+        )
+
+        final_failure_codes = self._derive_final_failure_codes(
+            selected_pathway=selected_pathway,
+            pathway_failure_codes=pathway_failure_codes,
+            general_rules_result=general_rules_result,
+        )
+        eligible = selected_pathway is not None and bool(
+            general_rules_result is not None and general_rules_result.general_rules_passed
+        )
+        response = EligibilityAssessmentResponse(
+            hs6_code=product.hs6_code,
+            eligible=eligible,
+            pathway_used=selected_pathway.pathway_code if selected_pathway is not None else None,
+            rule_status=rule_bundle.psr_rule.rule_status,
+            tariff_outcome=self._build_tariff_outcome(tariff_result),
+            failures=final_failure_codes,
+            missing_facts=missing_facts,
+            evidence_required=evidence_result.required_items,
+            confidence_class=self._combine_confidence_class(
+                base_confidence=rule_overlay.confidence_class,
+                missing_facts=missing_facts,
+            ),
+        )
+        await self._persist_evaluation_if_possible(
+            request=request,
+            assessment_date=assessment_date,
+            rule_bundle=rule_bundle,
+            response=response,
+            pathway_used=response.pathway_used,
+            audit_checks=audit_checks,
+        )
+        return response
+
+    def _run_blocker_checks(
+        self,
+        *,
+        rule_bundle: RuleResolutionResult,
+        production_facts: Sequence[Any],
+        tariff_result: TariffResolutionResult | None,
+        corridor_overlay: StatusOverlay,
+    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+        """Evaluate blocker-stage checks before pathway execution."""
+
+        checks: list[dict[str, Any]] = []
+        failure_codes: list[str] = []
+        missing_facts: list[str] = []
+        rule_status = self._normalize_value(rule_bundle.psr_rule.rule_status)
+
+        if rule_status in {"pending", "partially_agreed"}:
+            checks.append(
+                self._make_audit_check(
+                    check_type="blocker",
+                    check_code="RULE_STATUS",
+                    passed=False,
+                    severity="blocker",
+                    expected_value="agreed or provisional",
+                    observed_value=rule_status,
+                    explanation=FAILURE_CODES["RULE_STATUS_PENDING"],
+                    details_json={"failure_code": "RULE_STATUS_PENDING"},
+                )
+            )
+            failure_codes = self._merge_unique(failure_codes, ["RULE_STATUS_PENDING"])
+
+        if tariff_result is None:
+            checks.append(
+                self._make_audit_check(
+                    check_type="blocker",
+                    check_code="NO_SCHEDULE",
+                    passed=False,
+                    severity="major",
+                    expected_value="tariff schedule available",
+                    observed_value="not found",
+                    explanation=FAILURE_CODES["NO_SCHEDULE"],
+                    details_json={"warning_only": True},
+                )
+            )
+
+        present_fact_keys = self._present_fact_keys(production_facts)
+        pathway_missing = [
+            self._missing_required_facts_for_pathway(pathway, present_fact_keys)
+            for pathway in rule_bundle.pathways
+        ]
+        missing_pathways = [missing for missing in pathway_missing if missing]
+        if missing_pathways and len(missing_pathways) == len(rule_bundle.pathways):
+            missing_facts = self._merge_unique(*missing_pathways)
+            checks.append(
+                self._make_audit_check(
+                    check_type="blocker",
+                    check_code="MISSING_CORE_FACTS",
+                    passed=False,
+                    severity="blocker",
+                    expected_value="core pathway facts present",
+                    observed_value=", ".join(missing_facts),
+                    explanation=FAILURE_CODES["MISSING_CORE_FACTS"],
+                    details_json={
+                        "failure_code": "MISSING_CORE_FACTS",
+                        "missing_facts": missing_facts,
+                    },
+                )
+            )
+            failure_codes = self._merge_unique(failure_codes, ["MISSING_CORE_FACTS"])
+
+        corridor_status = self._normalize_value(corridor_overlay.status_type)
+        if corridor_status == "not_yet_operational":
+            checks.append(
+                self._make_audit_check(
+                    check_type="blocker",
+                    check_code="NOT_OPERATIONAL",
+                    passed=False,
+                    severity="blocker",
+                    expected_value="operational corridor",
+                    observed_value=corridor_status,
+                    explanation=FAILURE_CODES["NOT_OPERATIONAL"],
+                    details_json={"failure_code": "NOT_OPERATIONAL"},
+                )
+            )
+            failure_codes = self._merge_unique(failure_codes, ["NOT_OPERATIONAL"])
+
+        return checks, failure_codes, missing_facts
+
+    @staticmethod
+    def _has_hard_blocker(checks: Sequence[Mapping[str, Any]]) -> bool:
+        """Return True when any blocker-severity check failed."""
+
+        return any(
+            check.get("severity") == "blocker" and check.get("passed") is False for check in checks
+        )
+
+    def _present_fact_keys(self, production_facts: Sequence[Any]) -> set[str]:
+        """Collect submitted fact keys from request payloads."""
+
+        keys: set[str] = set()
+        for fact in production_facts:
+            fact_key = self._read_fact_field(
+                fact,
+                "fact_key",
+            ) or self._read_fact_field(fact, "fact_type")
+            if fact_key:
+                keys.add(str(fact_key))
+        return keys
+
+    def _missing_required_facts_for_pathway(
+        self,
+        pathway: RulePathwayOut,
+        present_fact_keys: set[str],
+    ) -> list[str]:
+        """Return the list of core facts absent for a given pathway."""
+
+        required = self._required_facts_for_pathway(pathway)
+        return [fact_key for fact_key in required if fact_key not in present_fact_keys]
+
+    def _required_facts_for_pathway(self, pathway: RulePathwayOut) -> list[str]:
+        """Infer required facts from pathway labels plus expression_json structure."""
+
+        required: list[str] = []
+        pathway_markers = {
+            marker
+            for marker in PATHWAY_RULE_TYPES
+            if marker in pathway.pathway_code.upper() or marker in pathway.pathway_label.upper()
+        }
+        for fact_key, metadata in PRODUCTION_FACTS.items():
+            rule_types = {entry.upper() for entry in metadata.get("required_for", [])}
+            if rule_types.intersection(pathway_markers):
+                required = self._merge_unique(required, [fact_key])
+
+        expression = self._extract_pathway_expression(pathway.expression_json)
+        return self._merge_unique(required, self._required_facts_from_expression(expression))
+
+    def _required_facts_from_expression(self, expression: Any) -> list[str]:
+        """Walk the supported expression tree to extract referenced facts."""
+
+        if not isinstance(expression, dict):
+            return []
+
+        op = expression.get("op")
+        if op in {"all", "any"}:
+            required: list[str] = []
+            for child in expression.get("args", []):
+                required = self._merge_unique(required, self._required_facts_from_expression(child))
+            return required
+
+        if op in {"formula_lte", "formula_gte"}:
+            formula = expression.get("formula")
+            if formula in DERIVED_VARIABLES:
+                return ["ex_works", "non_originating"]
+            return [str(formula)] if isinstance(formula, str) else []
+
+        if op == "fact_eq":
+            fact_name = expression.get("fact")
+            return [str(fact_name)] if isinstance(fact_name, str) else []
+
+        if op == "fact_ne":
+            required: list[str] = []
+            fact_name = expression.get("fact")
+            ref_fact = expression.get("ref_fact")
+            if isinstance(fact_name, str):
+                required.append(fact_name)
+            if isinstance(ref_fact, str):
+                required.append(ref_fact)
+            return required
+
+        if op == "every_non_originating_input":
+            return ["non_originating_inputs", "output_hs6_code"]
+
+        return []
+
+    @staticmethod
+    def _extract_pathway_expression(expression_json: dict[str, Any]) -> dict[str, Any]:
+        """Unwrap the nested pathway JSON shape used by the stored rule pathways."""
+
+        if "op" in expression_json:
+            return expression_json
+        nested = expression_json.get("expression")
+        if isinstance(nested, dict):
+            return nested
+        return expression_json
+
+    def _serialize_expression_checks(self, result: ExpressionResult) -> list[dict[str, Any]]:
+        """Convert evaluator atomic checks to persisted audit rows."""
+
+        checks: list[dict[str, Any]] = []
+        for check in result.checks:
+            passed = check.passed if check.passed is not None else False
+            details_json: dict[str, Any] | None = None
+            if check.passed is None:
+                details_json = {"indeterminate": True}
+            checks.append(
+                self._make_audit_check(
+                    check_type="psr",
+                    check_code=check.check_code,
+                    passed=passed,
+                    severity=self._severity_for_atomic_check(check),
+                    expected_value=check.expected_value,
+                    observed_value=check.observed_value,
+                    explanation=check.explanation,
+                    details_json=details_json,
+                )
+            )
+        return checks
+
+    def _serialize_general_checks(self, result: GeneralRulesResult) -> list[dict[str, Any]]:
+        """Convert general-origin checks to persisted audit rows."""
+
+        checks: list[dict[str, Any]] = []
+        for check in result.checks:
+            passed = check.passed if check.passed is not None else False
+            details_json: dict[str, Any] | None = None
+            if check.passed is None:
+                details_json = {"indeterminate": True}
+            checks.append(
+                self._make_audit_check(
+                    check_type="general_rule",
+                    check_code=check.check_code,
+                    passed=passed,
+                    severity="major" if check.passed is False else "info",
+                    expected_value=check.expected_value,
+                    observed_value=check.observed_value,
+                    explanation=check.explanation,
+                    details_json=details_json,
+                )
+            )
+        return checks
+
+    def _serialize_status_overlay(self, overlay: StatusOverlay) -> list[dict[str, Any]]:
+        """Convert the final status overlay into one persisted audit check."""
+
+        status_type = self._normalize_value(overlay.status_type)
+        passed = status_type in {"agreed", "in_force"}
+        severity = "info" if passed else "minor"
+        explanation = overlay.source_text_verbatim or (
+            "; ".join(overlay.constraints) if overlay.constraints else f"Status is {status_type}"
+        )
+        return [
+            self._make_audit_check(
+                check_type="status",
+                check_code="STATUS_OVERLAY",
+                passed=passed,
+                severity=severity,
+                expected_value="agreed or in_force",
+                observed_value=status_type,
+                explanation=explanation,
+            )
+        ]
+
+    @staticmethod
+    def _severity_for_atomic_check(check: AtomicCheck) -> str:
+        """Map PSR atomic checks to audit severities."""
+
+        if check.passed is False:
+            return "major"
+        return "info"
+
+    def _derive_final_failure_codes(
+        self,
+        *,
+        selected_pathway: RulePathwayOut | None,
+        pathway_failure_codes: Sequence[str],
+        general_rules_result: GeneralRulesResult | None,
+    ) -> list[str]:
+        """Return only business-result failure codes, excluding warnings."""
+
+        if selected_pathway is None:
+            return list(pathway_failure_codes)
+        if general_rules_result is None:
+            return []
+        return list(general_rules_result.failure_codes)
+
+    def _build_tariff_outcome(
+        self,
+        tariff_result: TariffResolutionResult | None,
+    ) -> TariffOutcomeResponse | None:
+        """Collapse the tariff bundle into the API contract."""
+
+        if tariff_result is None:
+            return None
+
+        return TariffOutcomeResponse(
+            preferential_rate=tariff_result.preferential_rate,
+            base_rate=tariff_result.base_rate,
+            status=self._tariff_status_for_response(tariff_result),
+        )
+
+    def _tariff_status_for_response(self, tariff_result: TariffResolutionResult) -> str:
+        """Prefer schedule-level provisional states over the year-rate status."""
+
+        schedule_status = self._normalize_value(tariff_result.schedule_status)
+        if schedule_status in {"provisional", "draft", "superseded"}:
+            return schedule_status
+        return self._normalize_value(tariff_result.tariff_status)
+
+    @staticmethod
+    def _combine_confidence_class(
+        *,
+        base_confidence: str,
+        missing_facts: Sequence[str],
+    ) -> str:
+        """Downgrade confidence when facts are missing."""
+
+        if missing_facts:
+            return "incomplete"
+        return base_confidence
+
+    def _blocked_confidence_class(
+        self,
+        *,
+        rule_status: Any,
+        corridor_overlay: StatusOverlay,
+        missing_facts: Sequence[str],
+    ) -> str:
+        """Resolve confidence when the assessment stops at the blocker stage."""
+
+        if (
+            missing_facts
+            or self._normalize_value(corridor_overlay.status_type) == "not_yet_operational"
+        ):
+            return "incomplete"
+        if self._normalize_value(rule_status) in {"pending", "partially_agreed", "provisional"}:
+            return "provisional"
+        return corridor_overlay.confidence_class
+
+    def _resolve_evidence_target(
+        self,
+        *,
+        rule_bundle: RuleResolutionResult,
+        selected_pathway: RulePathwayOut | None,
+    ) -> tuple[str, str]:
+        """Choose the evidence entity key for pathway-specific or rule-level lookups."""
+
+        if selected_pathway is not None:
+            return "pathway", make_entity_key("pathway", pathway_id=selected_pathway.pathway_id)
+        return "hs6_rule", make_entity_key("hs6_rule", psr_id=rule_bundle.psr_rule.psr_id)
+
+    async def _persist_evaluation_if_possible(
+        self,
+        *,
+        request: EligibilityRequest,
+        assessment_date: date,
+        rule_bundle: RuleResolutionResult,
+        response: EligibilityAssessmentResponse,
+        pathway_used: str | None,
+        audit_checks: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Persist the evaluation plus checks when a case_id and repository are available."""
+
+        if self.evaluations_repository is None or request.case_id is None:
+            return
+
+        evaluation_data = {
+            "case_id": request.case_id,
+            "evaluation_date": assessment_date,
+            "overall_outcome": self._overall_outcome(response),
+            "pathway_used": pathway_used,
+            "confidence_class": response.confidence_class,
+            "rule_status_at_evaluation": rule_bundle.psr_rule.rule_status,
+            "tariff_status_at_evaluation": (
+                response.tariff_outcome.status
+                if response.tariff_outcome is not None
+                else "incomplete"
+            ),
+        }
+        await self.evaluations_repository.persist_evaluation(evaluation_data, list(audit_checks))
+
+    @staticmethod
+    def _overall_outcome(response: EligibilityAssessmentResponse) -> LegalOutcome:
+        """Map the API response to the persisted overall outcome enum."""
+
+        if response.eligible:
+            return LegalOutcome.ELIGIBLE
+        if "NOT_OPERATIONAL" in response.failures:
+            return LegalOutcome.NOT_YET_OPERATIONAL
+        if response.missing_facts or "RULE_STATUS_PENDING" in response.failures:
+            return LegalOutcome.INSUFFICIENT_INFORMATION
+        return LegalOutcome.NOT_ELIGIBLE
+
+    @staticmethod
+    def _make_audit_check(
+        *,
+        check_type: str,
+        check_code: str,
+        passed: bool,
+        severity: str,
+        expected_value: str,
+        observed_value: str,
+        explanation: str,
+        details_json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create one persisted eligibility_check_result payload."""
+
+        return {
+            "check_type": check_type,
+            "check_code": check_code,
+            "passed": passed,
+            "severity": severity,
+            "expected_value": expected_value,
+            "observed_value": observed_value,
+            "explanation": explanation,
+            "details_json": details_json,
+            "linked_component_id": None,
+        }
+
+    @staticmethod
+    def _read_fact_field(fact: Any, field_name: str) -> Any:
+        """Read a field from either a dict-like or object-like fact payload."""
+
+        if isinstance(fact, Mapping):
+            return fact.get(field_name)
+        return getattr(fact, field_name, None)
+
+    def _failure_codes_from_atomic_checks(self, checks: Sequence[AtomicCheck]) -> list[str]:
+        """Map atomic-check explanations back to canonical failure codes."""
+
+        failure_codes: list[str] = []
+        for check in checks:
+            if check.passed is not False:
+                continue
+            failure_code = FAILURE_MESSAGES_TO_CODES.get(check.explanation)
+            if failure_code is not None:
+                failure_codes = self._merge_unique(failure_codes, [failure_code])
+        return failure_codes
+
+    @staticmethod
+    def _normalize_value(value: Any) -> str:
+        """Collapse enum-backed values to raw strings."""
+
+        return str(getattr(value, "value", value))
+
+    @staticmethod
+    def _merge_unique(*groups: Sequence[str]) -> list[str]:
+        """Merge string groups while preserving first-seen order."""
+
+        merged: list[str] = []
+        for group in groups:
+            for value in group:
+                if value not in merged:
+                    merged.append(value)
+        return merged

@@ -69,3 +69,15 @@ class DocumentReadinessTemplateResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class EvidenceReadinessResult(BaseModel):
+    """Service-level evidence readiness summary for one entity and persona."""
+
+    required_items: list[str] = Field(default_factory=list)
+    missing_items: list[str] = Field(default_factory=list)
+    verification_questions: list[str] = Field(default_factory=list)
+    readiness_score: float = Field(ge=0.0, le=1.0)
+    completeness_ratio: float = Field(ge=0.0, le=1.0)
+
+    model_config = ConfigDict(from_attributes=True)

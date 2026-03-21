@@ -53,6 +53,35 @@ class RulePathwayOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PSRRuleResolvedOut(BaseModel):
+    """Serialized resolved PSR rule metadata used by rule-resolution service."""
+
+    psr_id: str
+    hs_version: str
+    hs_code: str = Field(pattern=r"^\d{2,6}$")
+    rule_scope: HsLevelEnum | None = None
+    product_description: str
+    legal_rule_text_verbatim: str
+    legal_rule_text_normalized: str | None = None
+    rule_status: RuleStatusEnum
+    source_id: str | None = None
+    page_ref: int | None = None
+    row_ref: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RuleResolutionResult(BaseModel):
+    """Resolved PSR bundle including the governing rule, components, and OR pathways."""
+
+    psr_rule: PSRRuleResolvedOut
+    components: list[PSRComponentOut]
+    pathways: list[RulePathwayOut]
+    applicability_type: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RuleLookupResponse(BaseModel):
     """Serialized rule bundle for an HS6 lookup."""
 

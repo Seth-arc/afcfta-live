@@ -1,11 +1,17 @@
 """ORM model package."""
 
-from app.db.models.cases import CaseCounterfactual, CaseFailureMode, CaseFile, CaseInputFact
+from app.db.models.cases import (
+    CaseCounterfactual,
+    CaseFailureMode,
+    CaseFile,
+    CaseInputFact,
+)
 from app.db.models.evidence import (
     DocumentReadinessTemplate,
     EvidenceRequirement,
     VerificationQuestion,
 )
+from app.db.models.evaluations import EligibilityCheckResult, EligibilityEvaluation
 from app.db.models.hs import HS6Product
 from app.db.models.rules import (
     EligibilityRulePathway,
@@ -28,6 +34,8 @@ __all__ = [
     "CaseInputFact",
     "DocumentReadinessTemplate",
     "EvidenceRequirement",
+    "EligibilityCheckResult",
+    "EligibilityEvaluation",
     "EligibilityRulePathway",
     "HS6Product",
     "HS6PSRApplicability",

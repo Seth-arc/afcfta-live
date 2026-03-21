@@ -1,8 +1,18 @@
 """ORM model package."""
 
 from app.db.models.hs import HS6Product
-from app.db.models.rules import EligibilityRulePathway, HS6PSRApplicability, PSRRule, PSRRuleComponent
+from app.db.models.rules import (
+    EligibilityRulePathway,
+    HS6PSRApplicability,
+    PSRRule,
+    PSRRuleComponent,
+)
 from app.db.models.sources import LegalProvision, SourceRegistry
+from app.db.models.tariffs import (
+    TariffScheduleHeader,
+    TariffScheduleLine,
+    TariffScheduleRateByYear,
+)
 
 __all__ = [
     "EligibilityRulePathway",
@@ -12,4 +22,7 @@ __all__ = [
     "PSRRule",
     "PSRRuleComponent",
     "SourceRegistry",
+    "TariffScheduleHeader",
+    "TariffScheduleLine",
+    "TariffScheduleRateByYear",
 ]

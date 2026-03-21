@@ -1,0 +1,56 @@
+country_name,population,gdp,currency_label,currency_code,au_language,capital,ratified,date_of_ratification,deposited,date_of_deposit
+Algeria,"44,700,000","$163,512 billion",Algerian dinar (DZD),DZD,Arabic,Algiers,Yes,"December 15, 2019",Yes,"June 3, 2021"
+Angola,"31,127,674",$64.480 billion,Kwanza (AOA),AOA,Portuguese,Luanda,Yes,"October 6, 2020",Yes,"November 4, 2020"
+Arab Republic of Egypt,"101,478,581",$362 billion,Egyptian pound (E£) (EGP),EGP,Arabic,Cairo,Yes,"February 27, 2019",Yes,"April 8, 2019"
+Benin,"11,733,059",$11.386 billion,West African CFA franc (XOF),XOF,French,Porto-Novo,Pending,,,
+Botswana,"2,254,068",$18.726 billion,Pula (BWP),BWP,English,Gaborone,Pending,,,
+Burkina Faso,"21,510,181",$16.226 billion,West African CFA franc (XOF),XOF,French,Ouagadougou,Yes,"May 27, 2019",Yes,"May 29, 2019"
+Burundi,"11,865,821",$3.573 billion,Burundian franc (FBu) (BIF),BIF,French,Gitega,Pending,,,
+Cameroon,"26,545,864",$44.893 billion,Central African CFA franc (XAF),XAF,French,Yaoundé,Yes,"January 31, 2020",Yes,"December 1, 2020"
+Cape Verde,"483,628",$2.042 billion,Cape Verdean escudo (CVE),CVE,Portuguese,Praia,Yes,,,
+Central African Republic,"4,666,368",$2.321 billion,Central African CFA franc (XAF),XAF,French,Bangui,Yes,"April 9, 2020",Yes,"September 22, 2020"
+Chad,"16,244,513",$11 billion,Central African CFA franc (XAF),XAF,Arabic,N'Djamena,Yes,"June 29, 2018",Yes,"July 2, 2018"
+Comoros,"850,886",$1.179 billion,Comorian franc (KMF),KMF,French,Moroni,Yes,,,
+Congo,"5,244,359",$11.162 billion,Central African CFA franc (XAF),XAF,French,Brazzaville,Yes,"February 7, 2019",Yes,"February 10, 2019"
+Côte d'Ivoire,"26,378,274",$61.502 billion,West African CFA franc (XOF),XOF,French,Yamoussoukro,Yes,"November 13, 2018",Yes,"November 23, 2018"
+Democratic Republic of Congo,"92,377,393",$46.117 billion,Congolese franc (CDF),CDF,French,Kinshasa,Yes,,,
+Djibouti,"921,804",$2.187 billion,Djiboutian franc (DJF),DJF,French,Djibouti,Yes,"February 5, 2019",Yes,"February 11, 2019"
+Equatorial Guinea,"1,454,789",$12.432 billion,Central African CFA franc (XAF),XAF,Spanish,Malabo,Yes,"June 28, 2019",Yes,"July 2, 2019"
+Eritrea,-,$11.01 billion,Nakfa (ERN),ERN,Arabic,Asmara,Pending,,,
+Eswatini,"1,160,164",$4.211 billion,Lilangeni (SZL) & South African rand (ZAR),ZAR,Swahili,Mbabane,Yes,"June 21, 2018",Yes,"July 2, 2018"
+Ethiopia,"117,876,227",$91.514 billion,Birr (ETB),ETB,Amharic,Addis Ababa,Yes,"March 23, 2019",Yes,"April 10, 2019"
+Gabon,"2,119,275",$17.212 billion,Central African CFA franc (XAF),XAF,French,Libreville,Yes,"July 2, 2019",Yes,"July 7, 2019"
+Ghana,"31,072,940",$73.594  billion,Cedi (GHS),GHS,English,Accra,Yes,"May 7, 2018",Yes,"May 10, 2018"
+Guinea,"12,414,293",$1.480 billion,Guinean franc (GNF),GNF,French,Conakry,Yes,"July 31, 2018",Yes,"October 16, 2018"
+Guinea-Bissau,"1,726,000",$1.480 billion,West African CFA franc (XOF),XOF,French,Bissau,Pending,,,
+Kenya,"54,985,698",$109.116 billion,Kenyan shilling (KES),KES,English,Nairobi,Yes,"May 6, 2018",Yes,"May 10, 2018"
+Lesotho,"2,108,328",$2.721 billion,Loti (LSL) & South African rand (ZAR),ZAR,English,Maseru,Yes,"October 20, 2020",Yes,"November 27, 2020"
+Liberia,"5,214,030",$3.221 billion,Liberian dollar (LRD),LRD,English,Monrovia,Pending,,,
+Libya,"6,992,701",$21.805 billion,Libyan dinar (LYD),LYD,Arabic,Tripoli,Pending,,,
+Madagascar,"28,427,328",$12.734 billion,Ariary (MGA),MGA,French,Antananarivo,Pending,,,
+Malawi,"19,129,952",$7.436 billion,Malawian kwacha (D) (MWK),MWK,English,Lilongwe,Yes,"November 1, 2020",Yes,"January 15, 2021"
+Mali,"20,250,833",$17.407 billion,West African CFA franc (XOF),XOF,French,Bamako,Yes,"January 11, 2019",Yes,"February 1, 2019"
+Mauritania,"4,403,313",$5.200 billion,Ouguiya (MRU),MRU,Arabic,Nouakchott,Yes,"January 31, 2019",Yes,"February 11, 2019"
+Mauritius,"1,265,475",$14.812 billion,Mauritian rupee (MUR),MUR,English,Port Louis,Yes,"September 30, 2019",Yes,"October 7, 2019"
+Morocco,"37,112,080",$122.458 billion,Moroccan dirham (MAD),MAD,Arabic,Casablanca,Yes,,Yes,
+Mozambique,"30,066,648",$15.372 billion,Metical (MZN),MZN,Portuguese,Maputo,Yes,,,
+Namibia,"2,550,226",$10.927 billion,Namibian dollar (NAD) & South African rand (ZAR),ZAR,English,Windhoek,Yes,"January 25, 2019",Yes,"February 1, 2019"
+Niger,"24,112,753",$9.869 billion,West African CFA franc (XOF),XOF,French,Niamey,Yes,"May 28, 2018",Yes,"June 19, 2018"
+Nigeria,"211,400,708",$514.049 billion,Naira (₦) (NGN),NGN,English,Abuja,Yes,"December 3, 2020",Yes,"December 5, 2020"
+Rwanda,"12,374,397",$11.061 billion,Rwandan franc (RWF),RWF,English,Kigali,Yes,"May 25, 2018",Yes,"May 26, 2018"
+São Tomé and Príncipe,"211,028",$355 million,Dobra (STN),STN,Portuguese,São Tomé,Yes,"May 28, 2019",Yes,"June 27, 2019"
+Senegal,"15,854,323",$28.02 billion,West African CFA franc (XOF),XOF,French,Dakar,Yes,"March 12, 2019",Yes,"April 2, 2019"
+Seychelles,"98,462",$1.564 billion,Seychellois rupee (SCR),SCR,English,Victoria,Pending,,,
+Sierra Leone,"8,059,155",$3.824 billion,Leone (SLL),SLL,English,Freetown,Yes,"November 7, 2018",Yes,"April 30, 2019"
+Somalia,"15,893,219",$5.218 billion,Somali shilling (SOS),SOS,Arabic,Mogadishu,Pending,,,
+South Africa,"60,142,978",$415 billion,South African rand (ZAR),ZAR,English,Pretoria,Yes,"January 31, 2019",Yes,"February 10, 2019"
+South Sudan,"12,778,250",$3.194 billion,South Sudanese pound (SSP),SSP,English,Juba,Pending,,,
+Sudan,"44,909,353",$33.903 billion,Sudanese pound (SDG),SDG,Arabic,Khartoum,Pending,,,
+Tanzania,"61,193,226",$65.632 billion,Tanzanian shilling (TZS),TZS,Swahili,Dodoma,Yes,,,
+The Gambia,"2,173,999",$1.810 billion,Dalasi (GMD)Dalasi (GMD),GMD,English,Banjul,Yes,"April 11, 2019",Yes,"April 16, 2019"
+Togo,"8,608,444",$5.592 billion,West African CFA franc (XOF),XOF,French,Lomé,Yes,"January 9, 2019",Yes,"April 2, 2019"
+Tunisia,"11,708,370",$44.192 billion,Tunisian dinar (TND),TND,Arabic,Tunis,Yes,"September 7, 2020",Yes,"November 27, 2020"
+Uganda,"42,729,036",$30.765 billion,Ugandan shilling (UGX),UGX,English,Kampala,Yes,"November 20, 2018",Yes,"February 9, 2019"
+Western Sahara,"712,000",,Moroccan dirham (MAD),MAD,Arabic,El Aaiún,Yes,"April 27, 2019",Yes,"April 30, 2019"
+Zambia,"17,351,708",$23.946 billion,Zambian kwacha (ZMW),ZMW,English,Lusaka,Yes,"January 28, 2021",Yes,"February 5, 2021"
+Zimbabwe,"15,092,171",$22.290 billion,Zimbabwean dollar,,English,Harare,Yes,"April 25, 2019",Yes,"May 24, 2019"

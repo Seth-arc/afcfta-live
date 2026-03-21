@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -109,5 +110,18 @@ class TariffLookupResponse(BaseModel):
     rate_source_id: str | None = None
     rate_page_ref: int | None = None
     used_fallback_rate: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TariffResolutionResult(BaseModel):
+    """Service-level tariff resolution output for one corridor and HS6/year."""
+
+    base_rate: Decimal | None = None
+    preferential_rate: Decimal | None = None
+    staging_year: int | None = None
+    tariff_status: RateStatusEnum | Literal["incomplete"]
+    tariff_category: TariffCategoryEnum
+    schedule_status: ScheduleStatusEnum
 
     model_config = ConfigDict(from_attributes=True)

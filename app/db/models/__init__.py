@@ -1,5 +1,10 @@
 """ORM model package."""
 
+from app.db.models.evidence import (
+    DocumentReadinessTemplate,
+    EvidenceRequirement,
+    VerificationQuestion,
+)
 from app.db.models.hs import HS6Product
 from app.db.models.rules import (
     EligibilityRulePathway,
@@ -16,6 +21,8 @@ from app.db.models.tariffs import (
 )
 
 __all__ = [
+    "DocumentReadinessTemplate",
+    "EvidenceRequirement",
     "EligibilityRulePathway",
     "HS6Product",
     "HS6PSRApplicability",
@@ -28,4 +35,5 @@ __all__ = [
     "TariffScheduleLine",
     "TariffScheduleRateByYear",
     "TransitionClause",
+    "VerificationQuestion",
 ]

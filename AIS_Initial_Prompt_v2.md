@@ -206,15 +206,18 @@ you made where the architecture docs were ambiguous or contradictory.
 # 1. Install dependencies
 pip install -e ".[dev]"
 # or: pip install -e . && pip install pytest pytest-asyncio httpx ruff
+ - Completed
 
 # 2. Run the health test
 pytest tests/unit/test_health.py -v
 # Expected: 1 passed
+- Completed
 
 # 3. Start the app
 uvicorn app.main:app --reload
 # Hit http://localhost:8000/api/v1/health
 # Expected: {"status": "ok", "version": "0.1.0"}
+- Completed
 
 # 4. Verify Alembic
 alembic upgrade head

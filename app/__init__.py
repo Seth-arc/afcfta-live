@@ -1,0 +1,1 @@
+"""AfCFTA Intelligence application package."""

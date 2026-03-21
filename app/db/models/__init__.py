@@ -8,6 +8,7 @@ from app.db.models.rules import (
     PSRRuleComponent,
 )
 from app.db.models.sources import LegalProvision, SourceRegistry
+from app.db.models.status import StatusAssertion, TransitionClause
 from app.db.models.tariffs import (
     TariffScheduleHeader,
     TariffScheduleLine,
@@ -22,7 +23,9 @@ __all__ = [
     "PSRRule",
     "PSRRuleComponent",
     "SourceRegistry",
+    "StatusAssertion",
     "TariffScheduleHeader",
     "TariffScheduleLine",
     "TariffScheduleRateByYear",
+    "TransitionClause",
 ]

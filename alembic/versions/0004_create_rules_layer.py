@@ -6,8 +6,8 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0003_create_rules_layer"
-down_revision: str | None = "0002_create_hs6_product"
+revision: str = "0004_create_rules_layer"
+down_revision: str | None = "0003_create_provenance_layer"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

@@ -14,13 +14,13 @@ AIS answers five practical questions for a product moving across a supported AfC
 
 ## Why It Exists
 
-AfCFTA is the world’s largest free trade area by country count. Using it in practice is hard because product rules, tariff schedules, status conditions, and evidence requirements must all line up. AIS computes eligibility deterministically and traces every result to specific legal text.
+AfCFTA is the world's largest free trade area by country count. Using it in practice is hard because product rules, tariff schedules, status conditions, and evidence requirements must all line up. AIS computes eligibility deterministically and traces every result to specific legal text.
 
 ## Current Status
 
 `v0.1 Prototype`
 
-- 5 countries in scope: Nigeria, Ghana, Côte d'Ivoire, Senegal, Cameroon
+- 5 countries in scope: Nigeria, Ghana, Cote d'Ivoire, Senegal, Cameroon
 - HS6 resolution
 - Rule lookup
 - Tariff lookup
@@ -113,6 +113,8 @@ More detail: [docs/concepts/architecture-overview.md](docs/concepts/architecture
 | API Reference | [docs/api/](docs/api/) |
 | Concepts | [docs/concepts/](docs/concepts/) |
 | Developer Guide | [docs/dev/](docs/dev/) |
+| Product Brief | [PRODUCT_BRIEF.md](PRODUCT_BRIEF.md) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
 ## What This Is Not
 
@@ -120,7 +122,7 @@ AIS is not legal advice, not a customs declaration system, not probabilistic sco
 
 ## License
 
-To be determined.
+Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Contributing
 

@@ -1,9 +1,10 @@
-"""Pydantic response schemas for provenance-layer resources."""
+"""Pydantic schemas for provenance sources and legal provisions."""
 
 from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -17,9 +18,9 @@ from app.core.enums import (
 
 
 class SourceRegistryResponse(BaseModel):
-    """Serialized source registry record."""
+    """Tracked source document metadata."""
 
-    source_id: str
+    source_id: UUID
     title: str
     short_title: str
     source_group: str
@@ -40,22 +41,22 @@ class SourceRegistryResponse(BaseModel):
     mime_type: str
     source_url: str | None = None
     checksum_sha256: str
-    supersedes_source_id: str | None = None
-    superseded_by_source_id: str | None = None
+    supersedes_source_id: UUID | None = None
+    superseded_by_source_id: UUID | None = None
     citation_preferred: str | None = None
-    ingested_at: datetime
+    ingested_at: datetime | None = None
     notes: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class LegalProvisionResponse(BaseModel):
-    """Serialized extracted legal provision."""
+    """Extracted legal provision with provenance."""
 
-    provision_id: str
-    source_id: str
+    provision_id: UUID
+    source_id: UUID
     instrument_name: str
     instrument_type: InstrumentTypeEnum
     article_ref: str | None = None
@@ -73,23 +74,12 @@ class LegalProvisionResponse(BaseModel):
     expiry_date: date | None = None
     status: ProvisionStatusEnum
     cross_reference_refs: list[str] | None = None
-    authority_weight: Decimal
-    created_at: datetime
-    updated_at: datetime
+    authority_weight: Decimal | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class LegalProvisionTopicHit(BaseModel):
-    """Condensed legal provision result for topic lookup."""
-
-    provision_id: str
-    instrument_name: str
-    article_ref: str | None = None
-    annex_ref: str | None = None
-    page_start: int | None = None
-    page_end: int | None = None
-    topic_primary: str
-    provision_text_verbatim: str
-
-    model_config = ConfigDict(from_attributes=True)
+SourceRegistryOut = SourceRegistryResponse
+LegalProvisionOut = LegalProvisionResponse

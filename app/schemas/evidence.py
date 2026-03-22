@@ -1,9 +1,9 @@
-"""Pydantic schemas for evidence requirements, questions, and readiness templates."""
+"""Pydantic schemas for evidence requirements, questions, and readiness."""
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,49 +11,45 @@ from app.core.enums import PersonaModeEnum, RequirementTypeEnum, VerificationRis
 
 
 class EvidenceRequirementResponse(BaseModel):
-    """Serialized evidence requirement row."""
+    """One evidence requirement row."""
 
-    evidence_id: str
+    evidence_id: UUID
     entity_type: str
     entity_key: str
     persona_mode: PersonaModeEnum
     requirement_type: RequirementTypeEnum
     requirement_description: str
-    legal_basis_provision_id: str | None = None
-    required: bool
+    legal_basis_provision_id: UUID | None = None
+    required: bool = True
     conditional_on: dict[str, Any] | None = None
-    priority_level: int = Field(ge=1, le=5)
-    created_at: datetime
-    updated_at: datetime
+    priority_level: int = 1
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class VerificationQuestionResponse(BaseModel):
-    """Serialized verification question row."""
+    """One verification checklist question row."""
 
-    question_id: str
+    question_id: UUID
     entity_type: str
     entity_key: str
     persona_mode: PersonaModeEnum
     question_text: str
     purpose: str
-    legal_basis_provision_id: str | None = None
+    legal_basis_provision_id: UUID | None = None
     risk_category: VerificationRiskCategoryEnum
-    priority_level: int = Field(ge=1, le=5)
-    active: bool
-    question_order: int = Field(ge=1)
-    created_at: datetime
-    updated_at: datetime
+    priority_level: int = 1
+    active: bool = True
+    question_order: int = 1
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentReadinessTemplateResponse(BaseModel):
-    """Serialized reusable document readiness pack template."""
+    """Reusable template for expected document packs."""
 
-    template_id: str
-    hs_code: str = Field(pattern=r"^\d{6}$")
+    template_id: UUID
+    hs_code: str
     hs_version: str | None = None
     corridor_scope: str
     origin_pathway_type: str | None = None
@@ -61,34 +57,37 @@ class DocumentReadinessTemplateResponse(BaseModel):
     optional_docs: list[dict[str, Any]] | None = None
     common_weaknesses: list[dict[str, Any]] | None = None
     officer_focus_points: list[dict[str, Any]] | None = None
-    legal_basis_provision_ids: list[str] | None = None
-    active: bool
+    legal_basis_provision_ids: list[UUID] | None = None
+    active: bool = True
     version_label: str | None = None
     notes: str | None = None
-    created_at: datetime
-    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class EvidenceReadinessRequest(BaseModel):
-    """Request payload for persona-aware evidence readiness checks."""
+    """API request payload for evidence readiness checks."""
 
     entity_type: str
     entity_key: str
     persona_mode: PersonaModeEnum
     existing_documents: list[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EvidenceReadinessResult(BaseModel):
-    """Service-level evidence readiness summary for one entity and persona."""
+    """Computed evidence readiness output."""
 
     required_items: list[str] = Field(default_factory=list)
     missing_items: list[str] = Field(default_factory=list)
     verification_questions: list[str] = Field(default_factory=list)
-    readiness_score: float = Field(ge=0.0, le=1.0)
-    completeness_ratio: float = Field(ge=0.0, le=1.0)
+    readiness_score: float
+    completeness_ratio: float
 
     model_config = ConfigDict(from_attributes=True)
+
+
+EvidenceRequirementOut = EvidenceRequirementResponse
+VerificationQuestionOut = VerificationQuestionResponse
+DocumentReadinessTemplateOut = DocumentReadinessTemplateResponse

@@ -1,54 +1,60 @@
-"""Pydantic response schemas for persisted evaluations and audit replay."""
+"""Pydantic schemas for persisted eligibility evaluations and audit checks."""
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.enums import CheckSeverity, LegalOutcome, RuleStatusEnum
 
 
-class EligibilityCheckResultResponse(BaseModel):
-    """Serialized atomic check captured during an eligibility evaluation."""
-
-    check_result_id: str
-    evaluation_id: str
-    check_type: Literal["psr", "general_rule", "status", "blocker"]
-    check_code: str
-    passed: bool
-    severity: CheckSeverity
-    expected_value: str | None = None
-    observed_value: str | None = None
-    explanation: str
-    details_json: dict[str, Any] | list[Any] | None = None
-    linked_component_id: str | None = None
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
 class EligibilityEvaluationResponse(BaseModel):
-    """Serialized persisted evaluation row."""
+    """Stored top-level eligibility evaluation row."""
 
-    evaluation_id: str
-    case_id: str
+    evaluation_id: UUID
+    case_id: UUID
     evaluation_date: date
     overall_outcome: LegalOutcome
     pathway_used: str | None = None
-    confidence_class: Literal["complete", "provisional", "incomplete"]
-    rule_status_at_evaluation: RuleStatusEnum
+    confidence_class: str
+    rule_status_at_evaluation: RuleStatusEnum | str
     tariff_status_at_evaluation: str
-    created_at: datetime
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class EligibilityEvaluationAuditResponse(BaseModel):
-    """Audit replay payload consisting of one evaluation and its checks."""
+class EligibilityCheckResultResponse(BaseModel):
+    """Stored atomic check row linked to one evaluation."""
+
+    check_result_id: UUID
+    evaluation_id: UUID
+    check_type: str
+    check_code: str
+    passed: bool
+    severity: CheckSeverity | str
+    expected_value: str | None = None
+    observed_value: str | None = None
+    explanation: str
+    details_json: dict[str, Any] | None = None
+    linked_component_id: UUID | None = None
+    created_at: datetime | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EligibilityEvaluationWithChecksResponse(BaseModel):
+    """Full audit replay payload for one evaluation."""
 
     evaluation: EligibilityEvaluationResponse
-    checks: list[EligibilityCheckResultResponse]
+    checks: list[EligibilityCheckResultResponse] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
+
+
+EligibilityEvaluationOut = EligibilityEvaluationResponse
+EligibilityCheckResultOut = EligibilityCheckResultResponse

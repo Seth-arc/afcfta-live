@@ -1,0 +1,33 @@
+UNCTAD AfCFTA Tariff Extraction Summary
+==================================================
+Extraction time: 2026-03-22T17:52:56.039704+00:00
+Base year:       2021
+Source ID:       e599ecd1-9162-4875-b6a6-1e2cfec2c024
+Checksum:        ca694028b5d6fdb96aad379a9f63b86b30db62012d91ec55d196aa14e2dc6dd1
+
+Schedule headers:             20
+Schedule lines:          121,408
+Year rate rows:         1,221,460
+RoO cross-references:    119,776
+
+Corridors by header:
+  CIV → CMR (scheme_3): 5,836 lines
+  GHA → CMR (scheme_3): 5,836 lines
+  NGA → CMR (scheme_3): 5,836 lines
+  SEN → CMR (scheme_3): 5,836 lines
+  CMR → CIV (scheme_1): 6,129 lines
+  GHA → CIV (scheme_1): 6,129 lines
+  NGA → CIV (scheme_1): 6,129 lines
+  SEN → CIV (scheme_1): 6,129 lines
+  CMR → GHA (scheme_1): 6,129 lines
+  CIV → GHA (scheme_1): 6,129 lines
+  NGA → GHA (scheme_1): 6,129 lines
+  SEN → GHA (scheme_1): 6,129 lines
+  CMR → NGA (scheme_1): 6,129 lines
+  CIV → NGA (scheme_1): 6,129 lines
+  GHA → NGA (scheme_1): 6,129 lines
+  SEN → NGA (scheme_1): 6,129 lines
+  CMR → SEN (scheme_1): 6,129 lines
+  CIV → SEN (scheme_1): 6,129 lines
+  GHA → SEN (scheme_1): 6,129 lines
+  NGA → SEN (scheme_1): 6,129 lines

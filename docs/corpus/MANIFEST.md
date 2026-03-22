@@ -6,22 +6,30 @@ Inventory of files currently present in `rework/corpus`.
 
 | Category | Files |
 |---|---:|
-| Root | 2 |
+| Root | 3 |
+| `00_data_sources` | 1 |
 | `01_primary_law` | 12 |
 | `02_rules_of_origin` | 9 |
-| `03_tariff_schedules` | 2 |
+| `03_tariff_schedules` | 3 |
 | `04_operational_customs` | 5 |
 | `05_status_and_transition` | 1 |
 | `06_reference_data` | 30 |
 | `07_phase_2_protocols` | 7 |
-| **Total** | **68** |
+| **Total** | **71** |
 
 ## Root
 
-| Category | Filename | Ext | Duplicate | Likely use |
+| Category | Filename | Ext | Duplicate | Purpose |
 |---|---|---|---|---|
-| Root | `MANIFEST.md` | `md` | No | Generated inventory of corpus files |
-| Root | `README.md` | `md` | No | Corpus notes and organization |
+| Root | `MANIFEST.md` | `md` | No | Generated inventory of corpus files and metadata |
+| Root | `README.md` | `md` | No | Corpus organization guide, ingestion order, and versioning |
+| Root | `INGESTION_LOG.md` | `md` | No | Timestamped record of data source ingestions and transformations |
+
+## 00_data_sources
+
+| Category | Filename | Ext | Source | API/Endpoint | Ingestion Script | Likely use |
+|---|---|---|---|---|---|---|
+| `00_data_sources` | `extract_unctad_afcfta.py` | `py` | UNCTAD | `https://afcfta-api.unctad.org/tariffseliminationnew!{reporter}&{partner}&{product}` | Automated extraction | L3 tariff_schedule tables (header, line, rate_by_year) |
 
 ## 01_primary_law
 
@@ -56,10 +64,11 @@ Inventory of files currently present in `rework/corpus`.
 
 ## 03_tariff_schedules
 
-| Category | Filename | Ext | Duplicate | Likely use |
-|---|---|---|---|---|
-| `03_tariff_schedules` | `EN - AfCFTA e-Tariff Book - User Guide.pdf` | `pdf` | No | Tariff book usage guide |
-| `03_tariff_schedules` | `Status of AfCFTA ratifications 20-01-2026.pdf` | `pdf` | Yes | Ratification status sheet used with schedule context |
+| Category | Filename | Ext | Source | Duplicate | Likely use |
+|---|---|---|---|---|---|
+| `03_tariff_schedules` | `EN - AfCFTA e-Tariff Book - User Guide.pdf` | `pdf` | UNCTAD | No | Tariff book usage guide |
+| `03_tariff_schedules` | `Status of AfCFTA ratifications 20-01-2026.pdf` | `pdf` | AU | Yes | Ratification status sheet used with schedule context |
+| `03_tariff_schedules` | `tariff_schedule_extraction_metadata.json` | `json` | UNCTAD API | No | Provenance record of automated UNCTAD extraction run |
 
 ## 04_operational_customs
 
@@ -126,11 +135,11 @@ Inventory of files currently present in `rework/corpus`.
 
 ## Duplicate Files
 
-| Filename | Categories |
-|---|---|
-| `Compiled-Annexes_AfCFTA_Agreement_English-27-31_Appendix I.pdf` | `02_rules_of_origin`, `04_operational_customs`, `06_reference_data` |
-| `Compiled-Annexes_AfCFTA_Agreement_English-32_Appendix II.pdf` | `02_rules_of_origin`, `06_reference_data` |
-| `Compiled-Annexes_AfCFTA_Agreement_English-33-35_Appendix III.pdf` | `02_rules_of_origin`, `06_reference_data` |
-| `Compiled-Annexes_AfCFTA_Agreement_English-37-44_Annex_3_Customs_Cooperation.pdf` | `01_primary_law`, `04_operational_customs` |
-| `Compiled-Annexes_AfCFTA_Agreement_English-45-61_Annex_4_Trade_Facilitation.pdf` | `01_primary_law`, `04_operational_customs` |
-| `Status of AfCFTA ratifications 20-01-2026.pdf` | `03_tariff_schedules`, `06_reference_data` |
+| Filename | Categories | Notes |
+|---|---|---|
+| `Compiled-Annexes_AfCFTA_Agreement_English-27-31_Appendix I.pdf` | `02_rules_of_origin`, `04_operational_customs`, `06_reference_data` | Certificate of origin forms — needed in multiple operational contexts |
+| `Compiled-Annexes_AfCFTA_Agreement_English-32_Appendix II.pdf` | `02_rules_of_origin`, `06_reference_data` | Origin declarations — reference and operational |
+| `Compiled-Annexes_AfCFTA_Agreement_English-33-35_Appendix III.pdf` | `02_rules_of_origin`, `06_reference_data` | Supplier declarations — reference and operational |
+| `Compiled-Annexes_AfCFTA_Agreement_English-37-44_Annex_3_Customs_Cooperation.pdf` | `01_primary_law`, `04_operational_customs` | Foundational legal text and operational guidance |
+| `Compiled-Annexes_AfCFTA_Agreement_English-45-61_Annex_4_Trade_Facilitation.pdf` | `01_primary_law`, `04_operational_customs` | Foundational legal text and operational guidance |
+| `Status of AfCFTA ratifications 20-01-2026.pdf` | `03_tariff_schedules`, `06_reference_data` | Ratification status used to determine corridor operability |

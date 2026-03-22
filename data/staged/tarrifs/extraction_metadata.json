@@ -1,0 +1,11 @@
+{
+  "extraction_timestamp": "2026-03-22T17:52:56.034935+00:00",
+  "base_year": 2021,
+  "source_id": "e599ecd1-9162-4875-b6a6-1e2cfec2c024",
+  "counts": {
+    "headers": 20,
+    "lines": 121408,
+    "year_rates": 1221460,
+    "roo_crossref": 119776
+  }
+}

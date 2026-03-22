@@ -106,7 +106,7 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run application startup and shutdown hooks using FastAPI lifespan."""
 
-    settings = get_settings()
+    settings = app.state.settings
     logger.info("%s v%s starting", settings.APP_TITLE, settings.APP_VERSION)
     yield
 
@@ -120,6 +120,7 @@ def create_app() -> FastAPI:
         version=settings.APP_VERSION,
         lifespan=_lifespan,
     )
+    app.state.settings = settings
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]

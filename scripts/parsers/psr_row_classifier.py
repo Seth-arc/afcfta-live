@@ -99,12 +99,16 @@ def classify_extracted_row(row: dict[str, str]) -> ClassifiedRow:
         row_type = "note"
     elif SECTION_HEADER_RE.match(raw_hs_code) or SECTION_HEADER_RE.match(raw_description):
         row_type = "section_header"
-    elif extracted_row_type == "header" or CHAPTER_HEADER_RE.match(raw_hs_code) or CHAPTER_HEADER_RE.match(raw_description):
+    elif has_hs_reference(raw_hs_code) and raw_rule_text:
+        row_type = "rule_row"
+    elif (
+        extracted_row_type == "header"
+        or CHAPTER_HEADER_RE.match(raw_hs_code)
+        or CHAPTER_HEADER_RE.match(raw_description)
+    ):
         row_type = "chapter_header"
     elif not raw_hs_code and collapse_text(raw_description, raw_rule_text):
         row_type = "continuation"
-    elif has_hs_reference(raw_hs_code) and raw_rule_text:
-        row_type = "rule_row"
     else:
         row_type = "skip"
 

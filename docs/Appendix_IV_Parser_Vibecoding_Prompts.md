@@ -60,7 +60,7 @@ python scripts/parsers/appendix_iv_extractor.py
 ```
 Review `data/staged/extracted_tables/appendix_iv_raw.csv` — open in a
 spreadsheet and spot-check 20-30 rows across different chapters.
-
+# Completed - 22 March
 ---
 
 ## Prompt 2 — Row classifier
@@ -100,7 +100,7 @@ docs/afcfta_corpus_parsing_agent_spec.md SECTION 0 for rule status patterns.
 ```bash
 python scripts/parsers/psr_row_classifier.py
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 3 — HS code normalizer
@@ -138,7 +138,7 @@ Use only standard library + csv + re.
 ```bash
 python scripts/parsers/hs_code_normalizer.py
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 4 — Rule decomposer

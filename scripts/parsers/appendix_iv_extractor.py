@@ -183,7 +183,15 @@ def clean_text(text: str) -> str:
 
 
 def clean_hs_code(raw_code: str) -> str:
-    """Strip footnote digits/symbols baked into HS codes and normalize format."""
+    """Strip footnote digits/symbols baked into HS codes and normalize format.
+
+    HS code formats in the PDF:
+        Headings:     XX.XX      (e.g. 04.01)  → output: 04.01
+        Subheadings:  XXXX.XX    (e.g. 1103.11) → output: 11.03.11
+        Chapters:     Chapter N                  → output: Chapter N
+
+    Footnote superscripts get baked in as trailing digits (e.g. 15.046 → 15.04).
+    """
     if not raw_code:
         return raw_code
 
@@ -209,23 +217,46 @@ def clean_hs_code(raw_code: str) -> str:
         if chapter_match:
             return chapter_match.group(1)
 
-    # Extract core HS code, ignoring trailing footnote digits
-    code_match = re.search(r'(\d{1,2})[.](\d{2})(?:[.](\d{1,2}))?', text)
-    if code_match:
-        prefix = text[:code_match.start()].strip()
-        ch = code_match.group(1).zfill(2)
-        hd = code_match.group(2)
-        sh = code_match.group(3)
+    # Separate any "Ex " prefix before numeric processing
+    ex_prefix = ""
+    code_text = text
+    ex_match = re.match(r'(?i)^(ex\s+)(.*)', text)
+    if ex_match:
+        ex_prefix = "Ex "
+        code_text = ex_match.group(2).strip()
 
-        if sh:
-            clean = f"{ch}.{hd}.{sh}"
-        else:
-            clean = f"{ch}.{hd}"
+    # --- Pattern 1: Subheading format XXXX.XX (e.g. 1103.11, 0910.91) ---
+    # This is a 4-digit heading concatenated with a 2-digit subheading
+    sub_match = re.match(r'^(\d{4})[.](\d{2})', code_text)
+    if sub_match:
+        four = sub_match.group(1)   # e.g. "1103"
+        two = sub_match.group(2)    # e.g. "11"
+        ch = four[:2]               # "11"
+        hd = four[2:]               # "03"
+        return f"{ex_prefix}{ch}.{hd}.{two}"
 
-        if prefix and re.match(r'(?i)^ex', prefix):
-            clean = f"Ex {clean}"
+    # --- Pattern 2: Already formatted XX.XX.XX (subheading with dots) ---
+    sub_dot_match = re.match(r'^(\d{2})[.](\d{2})[.](\d{2})', code_text)
+    if sub_dot_match:
+        ch = sub_dot_match.group(1)
+        hd = sub_dot_match.group(2)
+        sh = sub_dot_match.group(3)
+        return f"{ex_prefix}{ch}.{hd}.{sh}"
 
-        return clean
+    # --- Pattern 3: Heading format XX.XX (e.g. 04.01, 15.18) ---
+    # Must be exactly 2 digits, dot, 2 digits — ignore trailing footnote digits
+    hd_match = re.match(r'^(\d{2})[.](\d{2})', code_text)
+    if hd_match:
+        ch = hd_match.group(1)
+        hd = hd_match.group(2)
+        return f"{ex_prefix}{ch}.{hd}"
+
+    # --- Pattern 4: Short heading with missing leading zero (e.g. 4.01) ---
+    short_match = re.match(r'^(\d{1})[.](\d{2})', code_text)
+    if short_match:
+        ch = short_match.group(1).zfill(2)
+        hd = short_match.group(2)
+        return f"{ex_prefix}{ch}.{hd}"
 
     return text
 

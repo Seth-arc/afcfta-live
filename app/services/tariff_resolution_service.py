@@ -60,6 +60,24 @@ class TariffResolutionService:
             schedule_status=tariff["schedule_status"],
         )
 
+    async def resolve(
+        self,
+        exporter_country: str,
+        importer_country: str,
+        hs_version: str,
+        hs6_code: str,
+        year: int,
+    ) -> TariffResolutionResult:
+        """Compatibility wrapper for API handlers that call the service via resolve()."""
+
+        return await self.resolve_tariff_bundle(
+            exporter_country=exporter_country,
+            importer_country=importer_country,
+            hs_version=hs_version,
+            hs6_code=hs6_code,
+            year=year,
+        )
+
     @staticmethod
     def _normalize_country_code(country_code: str) -> str:
         """Normalize and validate a v0.1 country code."""

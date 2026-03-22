@@ -245,7 +245,7 @@ docs/afcfta_corpus_parsing_agent_spec.md SECTION 19.
 ```bash
 python scripts/parsers/pathway_builder.py
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 6 — Applicability builder
@@ -289,7 +289,7 @@ database connection for this step).
 ```bash
 python scripts/parsers/applicability_builder.py
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 7 — Database inserter

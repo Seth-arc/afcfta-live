@@ -50,7 +50,7 @@ Match the hs6_product table schema from docs/Concrete_Contract.md exactly.
 ```bash
 python scripts/load_hs6_backbone.py
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 2 — SQL load script for HS6 backbone

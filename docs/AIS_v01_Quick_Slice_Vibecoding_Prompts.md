@@ -313,9 +313,9 @@ All requirement_type values must be from requirement_type_enum in docs/Concrete_
 
 **You run:**
 ```bash
-docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta -f scripts/sql/seed_evidence_requirements.sql
+docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta < scripts/sql/seed_evidence_requirements.sql
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 9 — Integration test cases

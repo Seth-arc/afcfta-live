@@ -74,6 +74,22 @@ class EvidenceService:
             completeness_ratio=readiness_score,
         )
 
+    async def get_readiness(
+        self,
+        entity_type: str,
+        entity_key: str,
+        persona_mode: str,
+        existing_documents: list[str],
+    ) -> EvidenceReadinessResult:
+        """Compatibility wrapper for API handlers that call the service via get_readiness()."""
+
+        return await self.build_readiness(
+            entity_type=entity_type,
+            entity_key=entity_key,
+            persona_mode=persona_mode,
+            existing_documents=existing_documents,
+        )
+
     @staticmethod
     def _normalize_persona_mode(persona_mode: str) -> str:
         """Collapse enum-backed persona values to their lowercase string representation."""

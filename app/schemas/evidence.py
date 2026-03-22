@@ -71,6 +71,17 @@ class DocumentReadinessTemplateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class EvidenceReadinessRequest(BaseModel):
+    """Request payload for persona-aware evidence readiness checks."""
+
+    entity_type: str
+    entity_key: str
+    persona_mode: PersonaModeEnum
+    existing_documents: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class EvidenceReadinessResult(BaseModel):
     """Service-level evidence readiness summary for one entity and persona."""
 

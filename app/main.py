@@ -1,4 +1,4 @@
-"""FastAPI application entrypoint for the AfCFTA Intelligence API."""
+"""FastAPI application factory and top-level exception handling."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
@@ -26,66 +26,101 @@ from app.schemas.common import ErrorDetail, ErrorResponse, Meta
 logger = logging.getLogger(__name__)
 
 
-def _build_error_response(
+DOMAIN_STATUS_CODES: dict[type[AISBaseException], int] = {
+    ClassificationError: 404,
+    RuleNotFoundError: 404,
+    TariffNotFoundError: 404,
+    StatusUnknownError: 404,
+    CorridorNotSupportedError: 422,
+    InsufficientFactsError: 422,
+    ExpressionEvaluationError: 500,
+}
+
+
+def _request_id(request: Request) -> str:
+    """Return the current request id, generating one if needed."""
+
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        return request_id
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    request.state.request_id = request_id
+    return request_id
+
+
+def _error_response(
     request: Request,
-    exc: AISBaseException,
+    *,
     status_code: int,
+    code: str,
+    message: str,
+    details: dict | None = None,
 ) -> JSONResponse:
-    meta = Meta(
-        request_id=request.headers.get("x-request-id", str(uuid4())),
-        timestamp=datetime.now(timezone.utc),
-    )
+    """Build a structured error payload aligned to `ErrorResponse`."""
+
+    request_id = _request_id(request)
     payload = ErrorResponse(
-        error=ErrorDetail(
-            code=exc.__class__.__name__,
-            message=str(exc),
-            details=exc.detail,
+        error=ErrorDetail(code=code, message=message, details=details),
+        meta=Meta(
+            request_id=request_id,
+            timestamp=datetime.now(timezone.utc),
         ),
-        meta=meta,
     )
-    return JSONResponse(status_code=status_code, content=payload.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=status_code,
+        content=payload.model_dump(mode="json"),
+        headers={"X-Request-ID": request_id},
+    )
 
 
-async def _not_found_handler(request: Request, exc: AISBaseException) -> JSONResponse:
-    return _build_error_response(request, exc, status.HTTP_404_NOT_FOUND)
+async def _domain_exception_handler(request: Request, exc: AISBaseException) -> JSONResponse:
+    """Render domain exceptions as structured JSON without leaking internals."""
+
+    status_code = DOMAIN_STATUS_CODES.get(type(exc), 400)
+    return _error_response(
+        request,
+        status_code=status_code,
+        code=exc.code,
+        message=exc.message,
+        details=exc.detail,
+    )
 
 
-async def _unprocessable_handler(request: Request, exc: AISBaseException) -> JSONResponse:
-    return _build_error_response(request, exc, status.HTTP_422_UNPROCESSABLE_ENTITY)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a generic 500 response for unexpected errors."""
 
-
-async def _bad_request_handler(request: Request, exc: AISBaseException) -> JSONResponse:
-    return _build_error_response(request, exc, status.HTTP_400_BAD_REQUEST)
-
-
-async def _server_error_handler(request: Request, exc: AISBaseException) -> JSONResponse:
-    return _build_error_response(request, exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    logger.exception("Unhandled exception while processing request %s", _request_id(request))
+    return _error_response(
+        request,
+        status_code=500,
+        code="INTERNAL_ERROR",
+        message="An unexpected error occurred",
+    )
 
 
 def create_app() -> FastAPI:
-    """Create the FastAPI application."""
+    """Create and configure the FastAPI application."""
 
     settings = get_settings()
-    app = FastAPI(title=settings.APP_TITLE, version=settings.APP_VERSION)
-    app.include_router(api_router, prefix="/api/v1")
+    app = FastAPI(
+        title=settings.APP_TITLE,
+        version=settings.APP_VERSION,
+    )
 
-    for exception_class in (
-        ClassificationError,
-        RuleNotFoundError,
-        TariffNotFoundError,
-        StatusUnknownError,
-    ):
-        app.add_exception_handler(exception_class, _not_found_handler)
-
-    app.add_exception_handler(InsufficientFactsError, _unprocessable_handler)
-    app.add_exception_handler(CorridorNotSupportedError, _bad_request_handler)
-    app.add_exception_handler(ExpressionEvaluationError, _server_error_handler)
-    app.add_exception_handler(AISBaseException, _bad_request_handler)
+    @app.middleware("http")
+    async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]
+        request.state.request_id = request.headers.get("X-Request-ID") or str(uuid4())
+        response = await call_next(request)
+        response.headers.setdefault("X-Request-ID", request.state.request_id)
+        return response
 
     @app.on_event("startup")
-    async def log_startup() -> None:
+    async def startup_event() -> None:
         logger.info("%s v%s starting", settings.APP_TITLE, settings.APP_VERSION)
 
+    app.add_exception_handler(AISBaseException, _domain_exception_handler)
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
+    app.include_router(api_router, prefix="/api/v1")
     return app
 
 

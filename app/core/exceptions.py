@@ -1,4 +1,4 @@
-"""Domain exceptions raised by the AfCFTA Intelligence API."""
+"""Domain exception hierarchy for the AfCFTA Intelligence System."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ from typing import Any
 
 
 class AISBaseException(Exception):
-    """Base class for all domain exceptions."""
+    """Base class for domain-level engine errors."""
+
+    code = "AIS_ERROR"
 
     def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -15,28 +17,42 @@ class AISBaseException(Exception):
 
 
 class ClassificationError(AISBaseException):
-    """Raised when an HS6 code cannot be resolved."""
+    """Raised when an HS code cannot be resolved to the canonical HS6 backbone."""
+
+    code = "CLASSIFICATION_ERROR"
 
 
 class RuleNotFoundError(AISBaseException):
-    """Raised when no PSR is available for an HS6 code."""
+    """Raised when no applicable PSR rule exists for the resolved HS6."""
+
+    code = "RULE_NOT_FOUND"
 
 
 class TariffNotFoundError(AISBaseException):
-    """Raised when no tariff schedule exists for a corridor."""
+    """Raised when no tariff schedule exists for the requested corridor and HS6."""
+
+    code = "TARIFF_NOT_FOUND"
 
 
 class StatusUnknownError(AISBaseException):
-    """Raised when no status assertion can be resolved."""
+    """Raised when no current status assertion can be found for an entity key."""
+
+    code = "STATUS_UNKNOWN"
 
 
 class ExpressionEvaluationError(AISBaseException):
-    """Raised when expression evaluation fails."""
+    """Raised when the safe expression evaluator cannot evaluate a rule expression."""
+
+    code = "EXPRESSION_EVALUATION_ERROR"
 
 
 class InsufficientFactsError(AISBaseException):
-    """Raised when required input facts are missing."""
+    """Raised when required production facts are absent for a deterministic assessment."""
+
+    code = "INSUFFICIENT_FACTS"
 
 
 class CorridorNotSupportedError(AISBaseException):
-    """Raised when a country pair falls outside the locked v0.1 scope."""
+    """Raised when a country pair falls outside the locked v0.1 corridor scope."""
+
+    code = "CORRIDOR_NOT_SUPPORTED"

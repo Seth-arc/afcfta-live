@@ -106,9 +106,9 @@ Add clear comments explaining this is Step 2, and that Step 1 (hs6_product) must
 
 **You run:**
 ```bash
-psql -U afcfta_user -d afcfta_db -f scripts/sql/load_tariff_data.sql
+psql -U afcfta -d afcfta -f scripts/sql/load_tariff_data.sql
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 4 — Source registry entry for Appendix IV
@@ -143,7 +143,7 @@ All enum values must match docs/Concrete_Contract.md Section 1.2 exactly.
 ```bash
 psql -U afcfta_user -d afcfta_db -f scripts/sql/seed_appendix_iv_source.sql
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 5 — PSR rule seeder script

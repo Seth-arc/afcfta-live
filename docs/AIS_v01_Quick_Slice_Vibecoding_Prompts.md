@@ -211,7 +211,7 @@ applicability rows were inserted.
 ```bash
 python scripts/seed_psr_rules.py
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 6 — PSR validation queries
@@ -237,9 +237,9 @@ and prints results:
 
 **You run:**
 ```bash
-psql -U afcfta_user -d afcfta_db -f scripts/sql/validate_psr_rules.sql
+docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta -f scripts/sql/validate_psr_rules.sql
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 7 — Status assertions seeder
@@ -269,9 +269,9 @@ Verify status_type values are from status_type_enum.
 
 **You run:**
 ```bash
-psql -U afcfta_user -d afcfta_db -f scripts/sql/seed_status_assertions.sql
+docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta -f scripts/sql/seed_status_assertions.sql
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 8 — Evidence requirements seeder
@@ -313,7 +313,7 @@ All requirement_type values must be from requirement_type_enum in docs/Concrete_
 
 **You run:**
 ```bash
-psql -U afcfta_user -d afcfta_db -f scripts/sql/seed_evidence_requirements.sql
+docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta -f scripts/sql/seed_evidence_requirements.sql
 ```
 
 ---
@@ -402,7 +402,7 @@ Format output with clear PASS/FAIL indicators where possible, e.g.:
 
 **You run:**
 ```bash
-psql -U afcfta_user -d afcfta_db -f scripts/sql/validate_quick_slice.sql
+docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta -f scripts/sql/validate_quick_slice.sql
 ```
 
 ---

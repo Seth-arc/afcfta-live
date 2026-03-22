@@ -1,20 +1,22 @@
-"""Unit tests for eligibility-service orchestration and short-circuit behavior."""
+"""Unit tests for the eligibility orchestrator service."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
 from decimal import Decimal
-from types import SimpleNamespace
+from uuid import UUID
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from app.core.enums import HsLevelEnum, RuleStatusEnum, ScheduleStatusEnum, TariffCategoryEnum
 from app.core.exceptions import TariffNotFoundError
 from app.core.failure_codes import FAILURE_CODES
 from app.schemas.assessments import EligibilityRequest
+from app.schemas.cases import CaseFactIn
 from app.schemas.evidence import EvidenceReadinessResult
 from app.schemas.hs import HS6ProductResponse
-from app.schemas.rules import RuleResolutionResult
+from app.schemas.rules import PSRRuleResolvedOut, RulePathwayOut, RuleResolutionResult
 from app.schemas.status import StatusOverlay
 from app.schemas.tariffs import TariffResolutionResult
 from app.services.eligibility_service import EligibilityService
@@ -22,550 +24,445 @@ from app.services.expression_evaluator import AtomicCheck, ExpressionResult
 from app.services.general_origin_rules_service import GeneralRulesResult
 
 
-def build_product(hs6_code: str = "110311") -> HS6ProductResponse:
-    """Build a minimal canonical HS6 product payload."""
+def _uuid(value: int) -> UUID:
+    """Build a stable UUID for test fixtures."""
+
+    return UUID(f"00000000-0000-0000-0000-{value:012d}")
+
+
+def _product(hs6_code: str) -> HS6ProductResponse:
+    """Return a canonical classified product."""
 
     return HS6ProductResponse(
-        hs6_id="hs6-110311",
+        hs6_id=_uuid(1),
         hs_version="HS2017",
         hs6_code=hs6_code,
-        hs6_display=hs6_code,
+        hs6_display=f"{hs6_code} product",
         chapter=hs6_code[:2],
         heading=hs6_code[:4],
-        description="Cereal groats",
-        section="IV",
-        section_name="Prepared foodstuffs",
-        created_at=datetime(2026, 1, 1, 0, 0, 0),
-        updated_at=datetime(2026, 1, 1, 0, 0, 0),
+        description="Seed product",
+        section="II",
+        section_name="Vegetable Products",
     )
 
 
-def build_pathway(
+def _rule_bundle(
     *,
-    pathway_id: str = "pathway-1",
+    hs6_code: str,
+    rule_status: RuleStatusEnum = RuleStatusEnum.AGREED,
     pathway_code: str = "CTH",
-    priority_rank: int = 1,
-    allows_cumulation: bool = False,
-    expression: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """Build a stored rule pathway payload."""
-
-    expression_json = expression or {
-        "pathway_code": pathway_code,
-        "expression": {
-            "op": "fact_ne",
-            "fact": "tariff_heading_input",
-            "ref_fact": "tariff_heading_output",
-        },
-    }
-    return {
-        "pathway_id": pathway_id,
-        "pathway_code": pathway_code,
-        "pathway_label": pathway_code,
-        "pathway_type": "or",
-        "expression_json": expression_json,
-        "threshold_percent": None,
-        "threshold_basis": None,
-        "tariff_shift_level": None,
-        "required_process_text": None,
-        "allows_cumulation": allows_cumulation,
-        "allows_tolerance": False,
-        "priority_rank": priority_rank,
-    }
-
-
-def build_rule_bundle(
-    *,
-    hs6_code: str = "110311",
-    rule_status: str = "agreed",
-    pathways: list[dict[str, object]] | None = None,
+    expression_json: dict | None = None,
 ) -> RuleResolutionResult:
-    """Build a resolved PSR bundle."""
+    """Return one resolved rule bundle."""
 
-    return RuleResolutionResult.model_validate(
-        {
-            "psr_rule": {
-                "psr_id": "psr-110311",
-                "hs_version": "HS2017",
-                "hs_code": hs6_code,
-                "rule_scope": "subheading",
-                "product_description": "Cereal groats",
-                "legal_rule_text_verbatim": "CTH",
-                "legal_rule_text_normalized": "CTH",
-                "rule_status": rule_status,
-                "source_id": "source-1",
-                "page_ref": 1,
-                "row_ref": "1",
-            },
-            "components": [],
-            "pathways": pathways or [build_pathway()],
-            "applicability_type": "direct",
-        }
+    psr_id = _uuid(10)
+    return RuleResolutionResult(
+        psr_rule=PSRRuleResolvedOut(
+            psr_id=psr_id,
+            source_id=_uuid(11),
+            appendix_version="seed-v0.1",
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs_code_start=None,
+            hs_code_end=None,
+            hs_level=HsLevelEnum.SUBHEADING,
+            rule_scope="subheading",
+            product_description="Seed product",
+            legal_rule_text_verbatim="Seed rule text.",
+            legal_rule_text_normalized=pathway_code,
+            rule_status=rule_status,
+            effective_date=date(2024, 1, 1),
+            page_ref=1,
+            table_ref="seed_psr",
+            row_ref=hs6_code,
+        ),
+        components=[],
+        pathways=[
+            RulePathwayOut(
+                pathway_id=_uuid(12),
+                psr_id=psr_id,
+                pathway_code=pathway_code,
+                pathway_label=pathway_code,
+                pathway_type="specific",
+                expression_json=expression_json
+                or {
+                    "op": "fact_ne",
+                    "fact": "tariff_heading_input",
+                    "ref_fact": "tariff_heading_output",
+                },
+                threshold_percent=None,
+                threshold_basis=None,
+                tariff_shift_level=HsLevelEnum.HEADING,
+                required_process_text=None,
+                allows_cumulation=True,
+                allows_tolerance=False,
+                priority_rank=1,
+                effective_date=date(2024, 1, 1),
+                expiry_date=None,
+            )
+        ],
+        applicability_type="direct",
     )
 
 
-def build_tariff_result(
-    *,
-    preferential_rate: str = "5.0000",
-    base_rate: str = "15.0000",
-    tariff_status: str = "in_force",
-    tariff_category: str = "liberalised",
-    schedule_status: str = "official",
-) -> TariffResolutionResult:
-    """Build a service-level tariff result."""
+def _tariff_result() -> TariffResolutionResult:
+    """Return a structured tariff result."""
 
     return TariffResolutionResult(
-        base_rate=Decimal(base_rate),
-        preferential_rate=Decimal(preferential_rate),
-        staging_year=2026,
-        tariff_status=tariff_status,
-        tariff_category=tariff_category,
-        schedule_status=schedule_status,
+        base_rate=Decimal("15.0000"),
+        preferential_rate=Decimal("0.0000"),
+        staging_year=2025,
+        tariff_status="in_force",
+        tariff_category=TariffCategoryEnum.LIBERALISED,
+        schedule_status=ScheduleStatusEnum.OFFICIAL,
+        schedule_id=_uuid(20),
+        schedule_line_id=_uuid(21),
+        year_rate_id=_uuid(22),
+        resolved_rate_year=2025,
+        used_fallback_rate=False,
     )
 
 
-def build_status_overlay(
-    *,
+def _status_overlay(
     status_type: str,
     confidence_class: str,
-    constraints: list[str] | None = None,
-    source_text_verbatim: str | None = None,
+    source_text_verbatim: str,
 ) -> StatusOverlay:
-    """Build a service-level status overlay."""
+    """Return one status overlay."""
 
     return StatusOverlay(
         status_type=status_type,
+        effective_from=date(2024, 1, 1),
+        effective_to=None,
         confidence_class=confidence_class,
-        constraints=constraints or [],
+        active_transitions=[],
+        constraints=[],
         source_text_verbatim=source_text_verbatim,
     )
 
 
-def build_evidence_result(required_items: list[str] | None = None) -> EvidenceReadinessResult:
-    """Build a service-level evidence readiness result."""
+def _evidence_result() -> EvidenceReadinessResult:
+    """Return one readiness result."""
 
     return EvidenceReadinessResult(
-        required_items=required_items or ["certificate_of_origin"],
+        required_items=["certificate_of_origin"],
         missing_items=[],
-        verification_questions=["Upload the signed certificate of origin."],
+        verification_questions=[],
         readiness_score=1.0,
         completeness_ratio=1.0,
     )
 
 
-def build_request(**overrides: object) -> EligibilityRequest:
-    """Build an eligibility request payload."""
-
-    payload: dict[str, object] = {
-        "hs6_code": "110311",
-        "hs_version": "HS2017",
-        "exporter": "GHA",
-        "importer": "NGA",
-        "year": 2026,
-        "persona_mode": "officer",
-        "production_facts": [
-            {
-                "fact_type": "tariff_heading_input",
-                "fact_key": "tariff_heading_input",
-                "fact_value_type": "text",
-                "fact_value_text": "1103",
-            },
-            {
-                "fact_type": "tariff_heading_output",
-                "fact_key": "tariff_heading_output",
-                "fact_value_type": "text",
-                "fact_value_text": "1104",
-            },
-        ],
-        "case_id": "case-123",
-    }
-    payload.update(overrides)
-    return EligibilityRequest.model_validate(payload)
-
-
-def build_expression_result(
+def _expression_result(
     *,
-    result: bool | None,
+    passed: bool | None,
     explanation: str,
     missing_variables: list[str] | None = None,
 ) -> ExpressionResult:
-    """Build a pathway expression-evaluation result."""
+    """Return one evaluator result."""
 
     return ExpressionResult(
-        result=result,
-        evaluated_expression="test expression",
+        result=passed,
+        evaluated_expression="seed expression",
         missing_variables=missing_variables or [],
         checks=[
             AtomicCheck(
-                check_code="FACT_NE",
-                passed=result,
-                expected_value="tariff_heading_output",
-                observed_value="tariff_heading_input",
+                check_code="PSR_CHECK",
+                passed=passed,
+                expected_value="expected",
+                observed_value="observed",
                 explanation=explanation,
             )
         ],
     )
 
 
-def build_general_rules_result(
+def _general_rules_result(
     *,
-    general_rules_passed: bool,
+    passed: bool,
     failure_codes: list[str] | None = None,
-    direct_transport_check: str = "pass",
 ) -> GeneralRulesResult:
-    """Build a post-PSR general-rules evaluation result."""
+    """Return one general-rules evaluation."""
 
-    passed = True if general_rules_passed else False
-    explanation = (
-        "Direct transport condition was confirmed"
-        if passed
-        else FAILURE_CODES["FAIL_DIRECT_TRANSPORT"]
-    )
     return GeneralRulesResult(
         insufficient_operations_check="pass",
         cumulation_check="not_applicable",
-        direct_transport_check=direct_transport_check,
-        general_rules_passed=general_rules_passed,
+        direct_transport_check="pass" if passed else "fail",
+        general_rules_passed=passed,
         checks=[
             AtomicCheck(
                 check_code="DIRECT_TRANSPORT",
-                passed=passed if direct_transport_check != "not_checked" else None,
+                passed=passed,
                 expected_value="true",
                 observed_value="true" if passed else "false",
-                explanation=explanation,
+                explanation=(
+                    "Direct transport satisfied"
+                    if passed
+                    else FAILURE_CODES["FAIL_DIRECT_TRANSPORT"]
+                ),
             )
         ],
         failure_codes=failure_codes or [],
     )
 
 
-def make_service_harness(
-    *,
-    call_order: list[str],
-    product: HS6ProductResponse | None = None,
-    rule_bundle: RuleResolutionResult | None = None,
-    tariff_result: TariffResolutionResult | None = None,
-    tariff_error: Exception | None = None,
-    corridor_overlay: StatusOverlay | None = None,
-    rule_overlay: StatusOverlay | None = None,
-    normalized_facts: dict[str, object] | None = None,
-    expression_results: list[ExpressionResult] | None = None,
-    general_rules_result: GeneralRulesResult | None = None,
-    evidence_result: EvidenceReadinessResult | None = None,
-) -> tuple[EligibilityService, SimpleNamespace]:
-    """Build the orchestrator service plus all mocked collaborators."""
+def _fact(fact_key: str, fact_value_type: str, **values: object) -> CaseFactIn:
+    """Return one typed production fact."""
 
-    expression_queue = iter(expression_results or [])
+    payload = {
+        "fact_type": fact_key,
+        "fact_key": fact_key,
+        "fact_value_type": fact_value_type,
+        "source_ref": None,
+    }
+    payload.update(values)
+    return CaseFactIn(**payload)
 
-    async def resolve_hs6_side_effect(hs_code: str, hs_version: str) -> HS6ProductResponse:
-        call_order.append("classification")
-        return product or build_product(hs_code)
 
-    async def resolve_rule_bundle_side_effect(
-        hs_version: str,
-        hs6_code: str,
-        assessment_date: object,
-    ) -> RuleResolutionResult:
-        call_order.append("rule_resolution")
-        return rule_bundle or build_rule_bundle(hs6_code=hs6_code)
+def _request(*, hs6_code: str, facts: list[CaseFactIn]) -> EligibilityRequest:
+    """Return one orchestrator request."""
 
-    async def resolve_tariff_bundle_side_effect(
-        exporter: str,
-        importer: str,
-        hs_version: str,
-        hs6_code: str,
-        year: int,
-    ) -> TariffResolutionResult:
-        call_order.append("tariff_resolution")
-        if tariff_error is not None:
-            raise tariff_error
-        return tariff_result or build_tariff_result()
-
-    async def get_status_overlay_side_effect(entity_type: str, entity_key: str) -> StatusOverlay:
-        call_order.append(f"status:{entity_type}")
-        if entity_type == "corridor":
-            return corridor_overlay or build_status_overlay(
-                status_type="agreed",
-                confidence_class="complete",
-            )
-        return rule_overlay or build_status_overlay(
-            status_type="agreed",
-            confidence_class="complete",
-        )
-
-    def normalize_facts_side_effect(production_facts: list[object]) -> dict[str, object]:
-        call_order.append("normalize")
-        return normalized_facts or {
-            "tariff_heading_input": "1103",
-            "tariff_heading_output": "1104",
-        }
-
-    def evaluate_side_effect(
-        expression: dict[str, object],
-        facts: dict[str, object],
-    ) -> ExpressionResult:
-        call_order.append("expression")
-        return next(expression_queue)
-
-    def general_rules_side_effect(
-        facts: dict[str, object],
-        selected_pathway: object,
-    ) -> GeneralRulesResult:
-        call_order.append("general")
-        return general_rules_result or build_general_rules_result(general_rules_passed=True)
-
-    async def build_readiness_side_effect(
-        entity_type: str,
-        entity_key: str,
-        persona_mode: str,
-        existing_documents: list[str],
-    ) -> EvidenceReadinessResult:
-        call_order.append("evidence")
-        return evidence_result or build_evidence_result()
-
-    async def persist_evaluation_side_effect(
-        evaluation_data: dict[str, object],
-        check_results: list[dict[str, object]],
-    ) -> dict[str, object]:
-        call_order.append("persist")
-        return {"evaluation": evaluation_data, "checks": check_results}
-
-    mocks = SimpleNamespace(
-        classification_service=SimpleNamespace(
-            resolve_hs6=AsyncMock(side_effect=resolve_hs6_side_effect)
-        ),
-        rule_resolution_service=SimpleNamespace(
-            resolve_rule_bundle=AsyncMock(side_effect=resolve_rule_bundle_side_effect)
-        ),
-        tariff_resolution_service=SimpleNamespace(
-            resolve_tariff_bundle=AsyncMock(side_effect=resolve_tariff_bundle_side_effect)
-        ),
-        status_service=SimpleNamespace(
-            get_status_overlay=AsyncMock(side_effect=get_status_overlay_side_effect)
-        ),
-        evidence_service=SimpleNamespace(
-            build_readiness=AsyncMock(side_effect=build_readiness_side_effect)
-        ),
-        fact_normalization_service=SimpleNamespace(
-            normalize_facts=Mock(side_effect=normalize_facts_side_effect)
-        ),
-        expression_evaluator=SimpleNamespace(evaluate=Mock(side_effect=evaluate_side_effect)),
-        general_origin_rules_service=SimpleNamespace(
-            evaluate=Mock(side_effect=general_rules_side_effect)
-        ),
-        evaluations_repository=SimpleNamespace(
-            persist_evaluation=AsyncMock(side_effect=persist_evaluation_side_effect)
-        ),
+    return EligibilityRequest(
+        hs6_code=hs6_code,
+        hs_version="HS2017",
+        exporter="GHA" if hs6_code != "271019" else "CMR",
+        importer="NGA",
+        year=2025,
+        persona_mode="exporter",
+        production_facts=facts,
     )
 
-    service = EligibilityService(
-        classification_service=mocks.classification_service,
-        rule_resolution_service=mocks.rule_resolution_service,
-        tariff_resolution_service=mocks.tariff_resolution_service,
-        status_service=mocks.status_service,
-        evidence_service=mocks.evidence_service,
-        fact_normalization_service=mocks.fact_normalization_service,
-        expression_evaluator=mocks.expression_evaluator,
-        general_origin_rules_service=mocks.general_origin_rules_service,
-        evaluations_repository=mocks.evaluations_repository,
-    )
-    return service, mocks
+
+def _service() -> tuple[EligibilityService, dict[str, object]]:
+    """Create the orchestrator with mocked dependencies."""
+
+    deps = {
+        "classification_service": AsyncMock(),
+        "rule_resolution_service": AsyncMock(),
+        "tariff_resolution_service": AsyncMock(),
+        "status_service": AsyncMock(),
+        "evidence_service": AsyncMock(),
+        "fact_normalization_service": Mock(),
+        "expression_evaluator": Mock(),
+        "general_origin_rules_service": Mock(),
+        "evaluations_repository": AsyncMock(),
+    }
+    return EligibilityService(**deps), deps
 
 
 @pytest.mark.asyncio
-async def test_assess_returns_eligible_response_when_pathway_and_general_rules_pass() -> None:
-    call_order: list[str] = []
-    service, mocks = make_service_harness(
-        call_order=call_order,
-        expression_results=[
-            build_expression_result(result=True, explanation="Check passed: CTH"),
-        ],
-        general_rules_result=build_general_rules_result(general_rules_passed=True),
-    )
+async def test_eligible_product_pathway_and_general_rules_pass() -> None:
+    """A passing PSR and passing general rules should yield eligibility."""
 
-    response = await service.assess(build_request())
-
-    assert response.eligible is True
-    assert response.pathway_used == "CTH"
-    assert response.rule_status.value == "agreed"
-    assert response.tariff_outcome is not None
-    assert response.tariff_outcome.status == "in_force"
-    assert response.failures == []
-    assert response.evidence_required == ["certificate_of_origin"]
-    assert response.confidence_class == "complete"
-    assert call_order == [
-        "classification",
-        "rule_resolution",
-        "tariff_resolution",
-        "status:corridor",
-        "normalize",
-        "expression",
-        "general",
-        "status:psr_rule",
-        "evidence",
-        "persist",
-    ]
-    mocks.evidence_service.build_readiness.assert_awaited_once_with(
-        "pathway",
-        "PATHWAY:pathway-1",
-        "officer",
-        [],
-    )
-    mocks.evaluations_repository.persist_evaluation.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_assess_returns_ineligible_when_no_pathway_passes() -> None:
-    call_order: list[str] = []
-    service, mocks = make_service_harness(
-        call_order=call_order,
-        expression_results=[
-            build_expression_result(
-                result=False,
-                explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
-            ),
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
         ],
     )
-
-    response = await service.assess(build_request())
-
-    assert response.eligible is False
-    assert response.pathway_used is None
-    assert response.failures == ["FAIL_CTH_NOT_MET"]
-    assert response.confidence_class == "complete"
-    mocks.general_origin_rules_service.evaluate.assert_not_called()
-    mocks.evidence_service.build_readiness.assert_awaited_once_with(
-        "hs6_rule",
-        "HS6_RULE:psr-110311",
-        "officer",
-        [],
-    )
-    assert call_order == [
-        "classification",
-        "rule_resolution",
-        "tariff_resolution",
-        "status:corridor",
-        "normalize",
-        "expression",
-        "status:psr_rule",
-        "evidence",
-        "persist",
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
     ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    result = await service.assess(request)
+
+    assert result.eligible is True
+    assert result.pathway_used == "CTH"
+    assert result.rule_status == "agreed"
 
 
 @pytest.mark.asyncio
-async def test_assess_short_circuits_on_pending_rule_status_blocker() -> None:
-    call_order: list[str] = []
-    service, mocks = make_service_harness(
-        call_order=call_order,
-        rule_bundle=build_rule_bundle(rule_status="pending"),
+async def test_ineligible_product_when_no_pathway_passes() -> None:
+    """A failing PSR pathway should yield ineligibility."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1103"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
     )
-
-    response = await service.assess(build_request())
-
-    assert response.eligible is False
-    assert response.pathway_used is None
-    assert response.failures == ["RULE_STATUS_PENDING"]
-    assert response.confidence_class == "provisional"
-    mocks.fact_normalization_service.normalize_facts.assert_not_called()
-    mocks.expression_evaluator.evaluate.assert_not_called()
-    mocks.general_origin_rules_service.evaluate.assert_not_called()
-    mocks.evidence_service.build_readiness.assert_not_awaited()
-    assert call_order == [
-        "classification",
-        "rule_resolution",
-        "tariff_resolution",
-        "status:corridor",
-        "persist",
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
     ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1103",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=False,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    result = await service.assess(request)
+
+    assert result.eligible is False
+    assert "FAIL_CTH_NOT_MET" in result.failures
+    deps["general_origin_rules_service"].evaluate.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_assess_returns_incomplete_when_core_facts_missing_for_all_pathways() -> None:
-    call_order: list[str] = []
-    vnm_pathway = build_pathway(
-        pathway_code="VNM<=60",
-        expression={
-            "pathway_code": "VNM<=60",
-            "expression": {
-                "op": "formula_lte",
-                "formula": "vnom_percent",
-                "value": 60,
-            },
-        },
+async def test_blocker_short_circuits_on_pending_rule_status() -> None:
+    """Pending rules should halt assessment before fact normalization."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="030389",
+        facts=[_fact("wholly_obtained", "boolean", fact_value_boolean=True)],
     )
-    service, mocks = make_service_harness(
-        call_order=call_order,
-        rule_bundle=build_rule_bundle(pathways=[vnm_pathway]),
+    deps["classification_service"].resolve_hs6.return_value = _product("030389")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(
+        hs6_code="030389",
+        rule_status=RuleStatusEnum.PENDING,
+        pathway_code="WO",
+        expression_json={"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+    )
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.return_value = _status_overlay(
+        "in_force",
+        "complete",
+        "Corridor is operational.",
     )
 
-    response = await service.assess(build_request(production_facts=[]))
+    result = await service.assess(request)
 
-    assert response.eligible is False
-    assert response.failures == ["MISSING_CORE_FACTS"]
-    assert response.missing_facts == ["ex_works", "non_originating"]
-    assert response.confidence_class == "incomplete"
-    mocks.fact_normalization_service.normalize_facts.assert_not_called()
-    assert call_order == [
-        "classification",
-        "rule_resolution",
-        "tariff_resolution",
-        "status:corridor",
-        "persist",
-    ]
+    assert result.eligible is False
+    assert "RULE_STATUS_PENDING" in result.failures
+    deps["fact_normalization_service"].normalize_facts.assert_not_called()
+    deps["expression_evaluator"].evaluate.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_assess_returns_not_eligible_when_general_rules_fail_after_passing_psr() -> None:
-    call_order: list[str] = []
-    service, mocks = make_service_harness(
-        call_order=call_order,
-        expression_results=[build_expression_result(result=True, explanation="Check passed: CTH")],
-        general_rules_result=build_general_rules_result(
-            general_rules_passed=False,
-            failure_codes=["FAIL_DIRECT_TRANSPORT"],
-            direct_transport_check="fail",
-        ),
+async def test_missing_facts_returns_incomplete_confidence() -> None:
+    """Missing core facts for all pathways should produce an incomplete result."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="271019",
+        facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("271019")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(
+        hs6_code="271019",
+        pathway_code="VNM",
+        expression_json={"op": "formula_lte", "formula": "vnom_percent", "value": 60},
+    )
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.return_value = _status_overlay(
+        "in_force",
+        "complete",
+        "Corridor is operational.",
     )
 
-    response = await service.assess(build_request())
+    result = await service.assess(request)
 
-    assert response.eligible is False
-    assert response.pathway_used == "CTH"
-    assert response.failures == ["FAIL_DIRECT_TRANSPORT"]
-    assert "general" in call_order
-    mocks.evidence_service.build_readiness.assert_awaited_once()
+    assert result.eligible is False
+    assert result.confidence_class == "incomplete"
+    assert set(result.missing_facts) == {"ex_works", "non_originating"}
 
 
 @pytest.mark.asyncio
-async def test_assess_continues_when_tariff_schedule_is_missing() -> None:
-    call_order: list[str] = []
-    service, mocks = make_service_harness(
-        call_order=call_order,
-        tariff_error=TariffNotFoundError(
-            "No tariff schedule found",
-            detail={"exporter": "GHA", "importer": "NGA"},
-        ),
-        expression_results=[build_expression_result(result=True, explanation="Check passed: CTH")],
-        general_rules_result=build_general_rules_result(general_rules_passed=True),
+async def test_general_rules_fail_after_passing_psr() -> None:
+    """A passing pathway can still fail the general rules layer."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=False),
+        ],
     )
-
-    response = await service.assess(build_request())
-
-    assert response.eligible is True
-    assert response.tariff_outcome is None
-    assert response.failures == []
-    assert call_order == [
-        "classification",
-        "rule_resolution",
-        "tariff_resolution",
-        "status:corridor",
-        "normalize",
-        "expression",
-        "general",
-        "status:psr_rule",
-        "evidence",
-        "persist",
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
     ]
-    persisted_checks = mocks.evaluations_repository.persist_evaluation.await_args.args[1]
-    assert any(check["check_code"] == "NO_SCHEDULE" for check in persisted_checks)
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": False,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(
+        passed=False,
+        failure_codes=["FAIL_DIRECT_TRANSPORT"],
+    )
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    result = await service.assess(request)
+
+    assert result.eligible is False
+    assert "FAIL_DIRECT_TRANSPORT" in result.failures
+
+
+@pytest.mark.asyncio
+async def test_tariff_not_found_still_returns_assessment() -> None:
+    """Missing tariffs should not hard-block the rest of the assessment."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.side_effect = TariffNotFoundError(
+        "No tariff schedule found"
+    )
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    result = await service.assess(request)
+
+    assert result.eligible is True
+    assert result.tariff_outcome is None

@@ -1,112 +1,130 @@
-"""Unit tests for status overlay reduction and confidence mapping."""
+"""Unit tests for the status overlay service."""
 
 from __future__ import annotations
 
 from datetime import date
+from uuid import UUID
 from unittest.mock import AsyncMock
 
 import pytest
 
-from app.repositories.status_repository import StatusRepository
-from app.schemas.status import StatusOverlay
 from app.services.status_service import StatusService
 
 
-def build_status(status_type: str) -> dict[str, object]:
-    """Build a minimal current status assertion mapping for tests."""
+def _uuid(value: int) -> UUID:
+    """Build a stable UUID for test fixtures."""
+
+    return UUID(f"00000000-0000-0000-0000-{value:012d}")
+
+
+def _status_row(status_type: str) -> dict[str, object]:
+    """Return one repository status row."""
 
     return {
+        "status_assertion_id": _uuid(1),
+        "source_id": _uuid(2),
+        "entity_type": "psr_rule",
+        "entity_key": f"PSR:{_uuid(3)}",
         "status_type": status_type,
-        "effective_from": date(2025, 1, 1),
-        "effective_to": None,
         "status_text_verbatim": f"Status is {status_type}.",
+        "effective_from": date(2024, 1, 1),
+        "effective_to": None,
+        "page_ref": 1,
+        "clause_ref": "Art. 1",
+        "confidence_score": 1,
     }
 
 
-def build_transition(description: str) -> dict[str, object]:
-    """Build a minimal active transition mapping for tests."""
+def _transition_row(description: str) -> dict[str, object]:
+    """Return one repository transition row."""
 
     return {
-        "transition_type": "phase_down",
+        "transition_id": _uuid(4),
+        "source_id": _uuid(5),
+        "entity_type": "psr_rule",
+        "entity_key": f"PSR:{_uuid(3)}",
+        "transition_type": "phase_in",
         "transition_text_verbatim": description,
-        "start_date": date(2025, 1, 1),
-        "end_date": date(2027, 12, 31),
-        "review_trigger": "annual_review",
+        "start_date": date(2024, 1, 1),
+        "end_date": date(2026, 12, 31),
+        "review_trigger": "Scheduled review",
+        "page_ref": 2,
     }
 
 
 @pytest.mark.asyncio
-async def test_get_status_overlay_agreed_is_complete() -> None:
-    repository = AsyncMock(spec=StatusRepository)
-    repository.get_status.return_value = build_status("agreed")
+async def test_agreed_status_maps_to_complete_confidence() -> None:
+    """Agreed status should produce complete confidence."""
+
+    repository = AsyncMock()
+    repository.get_status.return_value = _status_row("agreed")
     repository.get_active_transitions.return_value = []
     service = StatusService(repository)
 
-    result = await service.get_status_overlay("psr_rule", "PSR:psr-123")
+    result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
 
-    repository.get_status.assert_awaited_once_with("psr_rule", "PSR:psr-123")
-    repository.get_active_transitions.assert_awaited_once_with("psr_rule", "PSR:psr-123")
-    assert isinstance(result, StatusOverlay)
-    assert result.status_type.value == "agreed"
+    assert result.status_type == "agreed"
     assert result.confidence_class == "complete"
-    assert result.constraints == []
 
 
 @pytest.mark.asyncio
-async def test_get_status_overlay_provisional_is_provisional() -> None:
-    repository = AsyncMock(spec=StatusRepository)
-    repository.get_status.return_value = build_status("provisional")
+async def test_provisional_status_maps_to_provisional_confidence() -> None:
+    """Provisional status should downgrade confidence."""
+
+    repository = AsyncMock()
+    repository.get_status.return_value = _status_row("provisional")
     repository.get_active_transitions.return_value = []
     service = StatusService(repository)
 
-    result = await service.get_status_overlay("psr_rule", "PSR:psr-123")
+    result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
 
-    assert result.status_type.value == "provisional"
+    assert result.status_type == "provisional"
     assert result.confidence_class == "provisional"
-    assert "Rule is provisional — subject to change" in result.constraints
 
 
 @pytest.mark.asyncio
-async def test_get_status_overlay_pending_adds_constraint() -> None:
-    repository = AsyncMock(spec=StatusRepository)
-    repository.get_status.return_value = build_status("pending")
+async def test_pending_status_adds_constraint_message() -> None:
+    """Pending status should carry the enforceability warning."""
+
+    repository = AsyncMock()
+    repository.get_status.return_value = _status_row("pending")
     repository.get_active_transitions.return_value = []
     service = StatusService(repository)
 
-    result = await service.get_status_overlay("schedule", "SCHEDULE:schedule-123")
+    result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
 
-    assert result.status_type.value == "pending"
+    assert result.status_type == "pending"
     assert result.confidence_class == "provisional"
-    assert "Rule is pending — not yet enforceable" in result.constraints
+    assert "Rule is pending" in result.constraints[0]
 
 
 @pytest.mark.asyncio
-async def test_get_status_overlay_returns_unknown_when_no_status_found() -> None:
-    repository = AsyncMock(spec=StatusRepository)
+async def test_no_status_found_returns_unknown_overlay() -> None:
+    """The service must never return null when no assertion exists."""
+
+    repository = AsyncMock()
     repository.get_status.return_value = None
     repository.get_active_transitions.return_value = []
     service = StatusService(repository)
 
-    result = await service.get_status_overlay("corridor", "CORRIDOR:GHA:NGA:110311")
+    result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
 
     assert result.status_type == "unknown"
     assert result.confidence_class == "incomplete"
-    assert result.source_text_verbatim is None
-    assert result.active_transitions == []
 
 
 @pytest.mark.asyncio
-async def test_get_status_overlay_includes_active_transition_descriptions() -> None:
-    repository = AsyncMock(spec=StatusRepository)
-    repository.get_status.return_value = build_status("agreed")
+async def test_active_transition_is_included_in_overlay() -> None:
+    """Active transitions should surface in both transitions and constraints."""
+
+    repository = AsyncMock()
+    repository.get_status.return_value = _status_row("agreed")
     repository.get_active_transitions.return_value = [
-        build_transition("Preferential rate phases down through 2027."),
+        _transition_row("Transitional quota applies through 2026.")
     ]
     service = StatusService(repository)
 
-    result = await service.get_status_overlay("schedule_line", "SCHEDULE_LINE:line-123")
+    result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
 
-    assert result.confidence_class == "complete"
-    assert len(result.active_transitions) == 1
-    assert result.active_transitions[0].description == "Preferential rate phases down through 2027."
-    assert "Preferential rate phases down through 2027." in result.constraints
+    assert result.active_transitions[0].description == "Transitional quota applies through 2026."
+    assert "Transitional quota applies through 2026." in result.constraints

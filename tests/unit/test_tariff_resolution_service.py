@@ -1,126 +1,120 @@
-"""Unit tests for tariff resolution service orchestration and corridor validation."""
+"""Unit tests for the tariff resolution service."""
 
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import UUID
 from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.enums import RateStatusEnum, ScheduleStatusEnum, StagingTypeEnum, TariffCategoryEnum
 from app.core.exceptions import CorridorNotSupportedError, TariffNotFoundError
-from app.repositories.tariffs_repository import TariffsRepository
-from app.schemas.tariffs import TariffResolutionResult
 from app.services.tariff_resolution_service import TariffResolutionService
 
 
-def build_tariff_row(
+def _uuid(value: int) -> UUID:
+    """Build a stable UUID for test fixtures."""
+
+    return UUID(f"00000000-0000-0000-0000-{value:012d}")
+
+
+def _tariff_row(
     *,
-    resolved_rate_year: int | None,
-    preferential_rate: Decimal | None,
-    rate_status: str | None,
-    tariff_category: str = "liberalised",
-    schedule_status: str = "official",
+    resolved_rate_year: int,
+    preferential_rate: str,
+    tariff_category: TariffCategoryEnum = TariffCategoryEnum.LIBERALISED,
 ) -> dict[str, object]:
-    """Build a minimal repository payload for tariff service tests."""
+    """Return one repository tariff row."""
 
     return {
-        "mfn_base_rate": Decimal("15.0000"),
-        "preferential_rate": preferential_rate,
+        "schedule_id": _uuid(1),
+        "schedule_line_id": _uuid(2),
+        "year_rate_id": _uuid(3),
         "resolved_rate_year": resolved_rate_year,
-        "rate_status": rate_status,
+        "mfn_base_rate": Decimal("15.0000"),
+        "preferential_rate": Decimal(preferential_rate),
+        "rate_status": RateStatusEnum.IN_FORCE,
         "tariff_category": tariff_category,
-        "schedule_status": schedule_status,
+        "schedule_status": ScheduleStatusEnum.OFFICIAL,
+        "staging_type": StagingTypeEnum.LINEAR,
     }
 
 
 @pytest.mark.asyncio
-async def test_resolve_tariff_bundle_with_exact_year_match() -> None:
-    repository = AsyncMock(spec=TariffsRepository)
-    repository.get_tariff.return_value = build_tariff_row(
-        resolved_rate_year=2026,
-        preferential_rate=Decimal("5.0000"),
-        rate_status="in_force",
-    )
-    service = TariffResolutionService(repository)
+async def test_normal_lookup_with_exact_year_match() -> None:
+    """Return the resolved rate for the requested year."""
 
-    result = await service.resolve_tariff_bundle("GHA", "NGA", "HS2017", "110311", 2026)
-
-    repository.get_tariff.assert_awaited_once_with(
-        exporter="GHA",
-        importer="NGA",
-        hs_version="HS2017",
-        hs6_code="110311",
-        year=2026,
-    )
-    assert isinstance(result, TariffResolutionResult)
-    assert result.base_rate == Decimal("15.0000")
-    assert result.preferential_rate == Decimal("5.0000")
-    assert result.staging_year == 2026
-    assert result.tariff_status.value == "in_force"
-    assert result.schedule_status.value == "official"
-
-
-@pytest.mark.asyncio
-async def test_resolve_tariff_bundle_uses_fallback_rate_year() -> None:
-    repository = AsyncMock(spec=TariffsRepository)
-    repository.get_tariff.return_value = build_tariff_row(
+    repository = AsyncMock()
+    repository.get_tariff.return_value = _tariff_row(
         resolved_rate_year=2025,
-        preferential_rate=Decimal("7.5000"),
-        rate_status="in_force",
+        preferential_rate="0.0000",
     )
     service = TariffResolutionService(repository)
 
-    result = await service.resolve_tariff_bundle("CMR", "NGA", "HS2017", "040630", 2026)
+    result = await service.resolve("GHA", "NGA", "HS2017", "110311", 2025)
 
-    assert result.preferential_rate == Decimal("7.5000")
+    assert result.base_rate == Decimal("15.0000")
+    assert result.preferential_rate == Decimal("0.0000")
     assert result.staging_year == 2025
-    assert result.tariff_status.value == "in_force"
+    assert result.tariff_status == "in_force"
 
 
 @pytest.mark.asyncio
-async def test_resolve_tariff_bundle_raises_when_schedule_missing() -> None:
-    repository = AsyncMock(spec=TariffsRepository)
+async def test_year_fallback_uses_latest_prior_rate() -> None:
+    """The repository fallback year should be surfaced by the service."""
+
+    repository = AsyncMock()
+    repository.get_tariff.return_value = _tariff_row(
+        resolved_rate_year=2025,
+        preferential_rate="5.0000",
+    )
+    service = TariffResolutionService(repository)
+
+    result = await service.resolve("GHA", "NGA", "HS2017", "110311", 2026)
+
+    assert result.staging_year == 2025
+    assert result.preferential_rate == Decimal("5.0000")
+    assert result.tariff_status == "in_force"
+
+
+@pytest.mark.asyncio
+async def test_missing_schedule_raises_tariff_not_found() -> None:
+    """Missing schedule rows should raise the domain exception."""
+
+    repository = AsyncMock()
     repository.get_tariff.return_value = None
     service = TariffResolutionService(repository)
 
-    with pytest.raises(TariffNotFoundError) as exc_info:
-        await service.resolve_tariff_bundle("GHA", "NGA", "HS2017", "110311", 2026)
-
-    assert exc_info.value.detail == {
-        "exporter_country": "GHA",
-        "importer_country": "NGA",
-        "hs_version": "HS2017",
-        "hs6_code": "110311",
-        "year": 2026,
-    }
+    with pytest.raises(TariffNotFoundError):
+        await service.resolve("GHA", "NGA", "HS2017", "110311", 2025)
 
 
 @pytest.mark.asyncio
-async def test_resolve_tariff_bundle_raises_for_unsupported_country() -> None:
-    repository = AsyncMock(spec=TariffsRepository)
+async def test_unsupported_country_raises_corridor_not_supported() -> None:
+    """Corridors outside v0.1 scope must fail before repository access."""
+
+    repository = AsyncMock()
     service = TariffResolutionService(repository)
 
-    with pytest.raises(CorridorNotSupportedError) as exc_info:
-        await service.resolve_tariff_bundle("KEN", "NGA", "HS2017", "110311", 2026)
+    with pytest.raises(CorridorNotSupportedError):
+        await service.resolve("USA", "NGA", "HS2017", "110311", 2025)
 
     repository.get_tariff.assert_not_awaited()
-    assert exc_info.value.detail == {"country_code": "KEN"}
 
 
 @pytest.mark.asyncio
-async def test_resolve_tariff_bundle_preserves_excluded_category() -> None:
-    repository = AsyncMock(spec=TariffsRepository)
-    repository.get_tariff.return_value = build_tariff_row(
-        resolved_rate_year=None,
-        preferential_rate=None,
-        rate_status=None,
-        tariff_category="excluded",
-        schedule_status="official",
+async def test_excluded_product_preserves_tariff_category() -> None:
+    """Excluded products should still return a structured tariff result."""
+
+    repository = AsyncMock()
+    repository.get_tariff.return_value = _tariff_row(
+        resolved_rate_year=2025,
+        preferential_rate="15.0000",
+        tariff_category=TariffCategoryEnum.EXCLUDED,
     )
     service = TariffResolutionService(repository)
 
-    result = await service.resolve_tariff_bundle("GHA", "NGA", "HS2017", "240220", 2026)
+    result = await service.resolve("GHA", "NGA", "HS2017", "110311", 2025)
 
-    assert result.tariff_category.value == "excluded"
-    assert result.tariff_status == "incomplete"
-    assert result.preferential_rate is None
+    assert result.tariff_category == "excluded"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import date
+from time import perf_counter
 from typing import Any
 
 from app.core.entity_keys import make_entity_key
@@ -40,6 +41,7 @@ class EligibilityService:
         expression_evaluator: Any,
         general_origin_rules_service: Any,
         evaluations_repository: Any | None,
+        audit_service: Any | None = None,
     ) -> None:
         self.classification_service = classification_service
         self.rule_resolution_service = rule_resolution_service
@@ -50,23 +52,58 @@ class EligibilityService:
         self.expression_evaluator = expression_evaluator
         self.general_origin_rules_service = general_origin_rules_service
         self.evaluations_repository = evaluations_repository
+        self.audit_service = audit_service
 
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
         """Execute the full assessment pipeline and persist audit rows when possible."""
 
+        started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
+        audit_checks: list[dict[str, Any]] = []
         product = await self.classification_service.resolve_hs6(
             request.hs6_code,
             request.hs_version,
+        )
+        audit_checks.append(
+            self._make_audit_check(
+                check_type="classification",
+                check_code="HS6_RESOLUTION",
+                passed=True,
+                severity="info",
+                expected_value=request.hs6_code,
+                observed_value=product.hs6_code,
+                explanation="Resolved input HS code to the canonical HS6 product",
+                details_json={"product": product.model_dump(mode="json")},
+            )
         )
         rule_bundle = await self.rule_resolution_service.resolve_rule_bundle(
             request.hs_version,
             product.hs6_code,
             assessment_date,
         )
+        audit_checks.append(
+            self._make_audit_check(
+                check_type="rule",
+                check_code="PSR_RESOLUTION",
+                passed=True,
+                severity="info",
+                expected_value=product.hs6_code,
+                observed_value=str(rule_bundle.psr_rule.psr_id),
+                explanation="Resolved the governing PSR rule bundle",
+                details_json={
+                    "psr_rule": rule_bundle.psr_rule.model_dump(mode="json"),
+                    "components": [
+                        component.model_dump(mode="json") for component in rule_bundle.components
+                    ],
+                    "pathways": [
+                        pathway.model_dump(mode="json") for pathway in rule_bundle.pathways
+                    ],
+                    "applicability_type": rule_bundle.applicability_type,
+                },
+            )
+        )
 
         tariff_result: TariffResolutionResult | None = None
-        audit_checks: list[dict[str, Any]] = []
         try:
             tariff_result = await self.tariff_resolution_service.resolve_tariff_bundle(
                 request.exporter,
@@ -75,8 +112,21 @@ class EligibilityService:
                 product.hs6_code,
                 request.year,
             )
+            audit_checks.append(self._make_tariff_trace_check(tariff_result))
         except TariffNotFoundError:
             tariff_result = None
+            audit_checks.append(
+                self._make_audit_check(
+                    check_type="tariff",
+                    check_code="TARIFF_RESOLUTION",
+                    passed=False,
+                    severity="major",
+                    expected_value=str(request.year),
+                    observed_value="not found",
+                    explanation="No tariff schedule was found for the requested corridor",
+                    details_json={"tariff_outcome": None},
+                )
+            )
 
         corridor_key = make_entity_key(
             "corridor",
@@ -110,6 +160,7 @@ class EligibilityService:
                     missing_facts=blocker_missing_facts,
                 ),
             )
+            audit_checks.append(self._make_decision_trace_check(response))
             await self._persist_evaluation_if_possible(
                 request=request,
                 assessment_date=assessment_date,
@@ -117,6 +168,12 @@ class EligibilityService:
                 response=response,
                 pathway_used=None,
                 audit_checks=audit_checks,
+            )
+            self._log_assessment(
+                request=request,
+                response=response,
+                blocker_checks=blocker_checks,
+                started_at=started_at,
             )
             return response
 
@@ -129,7 +186,8 @@ class EligibilityService:
         for pathway in sorted(rule_bundle.pathways, key=lambda item: item.priority_rank):
             expression = self._extract_pathway_expression(pathway.expression_json)
             evaluation = self.expression_evaluator.evaluate(expression, normalized_facts)
-            audit_checks.extend(self._serialize_expression_checks(evaluation))
+            audit_checks.extend(self._serialize_expression_checks(pathway, evaluation))
+            audit_checks.append(self._make_pathway_trace_check(pathway, evaluation))
             missing_facts = self._merge_unique(missing_facts, evaluation.missing_variables)
             pathway_failure_codes = self._merge_unique(
                 pathway_failure_codes,
@@ -146,6 +204,7 @@ class EligibilityService:
                 selected_pathway,
             )
             audit_checks.extend(self._serialize_general_checks(general_rules_result))
+            audit_checks.append(self._make_general_rules_summary_check(general_rules_result))
             if general_rules_result.direct_transport_check == "not_checked":
                 missing_facts = self._merge_unique(missing_facts, ["direct_transport"])
 
@@ -163,6 +222,7 @@ class EligibilityService:
             request.persona_mode,
             [],
         )
+        audit_checks.append(self._make_evidence_trace_check(evidence_result))
 
         final_failure_codes = self._derive_final_failure_codes(
             selected_pathway=selected_pathway,
@@ -186,6 +246,7 @@ class EligibilityService:
                 missing_facts=missing_facts,
             ),
         )
+        audit_checks.append(self._make_decision_trace_check(response))
         await self._persist_evaluation_if_possible(
             request=request,
             assessment_date=assessment_date,
@@ -193,6 +254,12 @@ class EligibilityService:
             response=response,
             pathway_used=response.pathway_used,
             audit_checks=audit_checks,
+        )
+        self._log_assessment(
+            request=request,
+            response=response,
+            blocker_checks=blocker_checks,
+            started_at=started_at,
         )
         return response
 
@@ -380,15 +447,26 @@ class EligibilityService:
             return nested
         return expression_json
 
-    def _serialize_expression_checks(self, result: ExpressionResult) -> list[dict[str, Any]]:
+    def _serialize_expression_checks(
+        self,
+        pathway: RulePathwayOut,
+        result: ExpressionResult,
+    ) -> list[dict[str, Any]]:
         """Convert evaluator atomic checks to persisted audit rows."""
 
         checks: list[dict[str, Any]] = []
         for check in result.checks:
             passed = check.passed if check.passed is not None else False
-            details_json: dict[str, Any] | None = None
+            details_json: dict[str, Any] | None = {
+                "pathway_id": str(pathway.pathway_id),
+                "pathway_code": pathway.pathway_code,
+                "pathway_label": pathway.pathway_label,
+                "priority_rank": pathway.priority_rank,
+                "evaluated_expression": result.evaluated_expression,
+                "missing_variables": result.missing_variables,
+            }
             if check.passed is None:
-                details_json = {"indeterminate": True}
+                details_json["indeterminate"] = True
             checks.append(
                 self._make_audit_check(
                     check_type="psr",
@@ -444,6 +522,7 @@ class EligibilityService:
                 expected_value="agreed or in_force",
                 observed_value=status_type,
                 explanation=explanation,
+                details_json={"overlay": overlay.model_dump(mode="json")},
             )
         ]
 
@@ -602,6 +681,161 @@ class EligibilityService:
             "details_json": details_json,
             "linked_component_id": None,
         }
+
+    def _make_pathway_trace_check(
+        self,
+        pathway: RulePathwayOut,
+        result: ExpressionResult,
+    ) -> dict[str, Any]:
+        """Persist one pathway-level summary alongside the atomic evaluator checks."""
+
+        passed = result.result if result.result is not None else False
+        details_json = {
+            "pathway": pathway.model_dump(mode="json"),
+            "result": result.result,
+            "evaluated_expression": result.evaluated_expression,
+            "missing_variables": result.missing_variables,
+        }
+        if result.result is None:
+            details_json["indeterminate"] = True
+
+        return self._make_audit_check(
+            check_type="pathway",
+            check_code="PATHWAY_EVALUATION",
+            passed=passed,
+            severity="info" if result.result is True else "major",
+            expected_value="pathway passes",
+            observed_value=str(result.result).lower() if result.result is not None else "unknown",
+            explanation=f"Evaluated pathway {pathway.pathway_code}",
+            details_json=details_json,
+        )
+
+    def _make_general_rules_summary_check(
+        self,
+        result: GeneralRulesResult,
+    ) -> dict[str, Any]:
+        """Persist the aggregated general-rules outcome for later audit replay."""
+
+        return self._make_audit_check(
+            check_type="general_rule",
+            check_code="GENERAL_RULES_SUMMARY",
+            passed=result.general_rules_passed,
+            severity="info" if result.general_rules_passed else "major",
+            expected_value="all general rules pass",
+            observed_value=str(result.general_rules_passed).lower(),
+            explanation="Applied the post-PSR general origin rules",
+            details_json={
+                "general_rules_result": {
+                    "insufficient_operations_check": result.insufficient_operations_check,
+                    "cumulation_check": result.cumulation_check,
+                    "direct_transport_check": result.direct_transport_check,
+                    "general_rules_passed": result.general_rules_passed,
+                    "failure_codes": result.failure_codes,
+                }
+            },
+        )
+
+    def _make_tariff_trace_check(
+        self,
+        tariff_result: TariffResolutionResult,
+    ) -> dict[str, Any]:
+        """Persist the resolved tariff snapshot used by the assessment."""
+
+        tariff_outcome = self._build_tariff_outcome(tariff_result)
+        return self._make_audit_check(
+            check_type="tariff",
+            check_code="TARIFF_RESOLUTION",
+            passed=True,
+            severity="info",
+            expected_value="tariff schedule available",
+            observed_value=self._normalize_value(tariff_result.tariff_status),
+            explanation="Resolved the corridor tariff schedule and year-rate outcome",
+            details_json={
+                "tariff_outcome": (
+                    tariff_outcome.model_dump(mode="json") if tariff_outcome is not None else None
+                ),
+                "tariff_resolution": tariff_result.model_dump(mode="json"),
+            },
+        )
+
+    def _make_evidence_trace_check(self, evidence_result: Any) -> dict[str, Any]:
+        """Persist the evidence readiness bundle returned by the evidence service."""
+
+        payload = (
+            evidence_result.model_dump(mode="json")
+            if hasattr(evidence_result, "model_dump")
+            else dict(evidence_result)
+        )
+        return self._make_audit_check(
+            check_type="evidence",
+            check_code="EVIDENCE_READINESS",
+            passed=True,
+            severity="info",
+            expected_value="evidence readiness computed",
+            observed_value=str(payload.get("readiness_score")),
+            explanation="Built the evidence readiness checklist for this assessment",
+            details_json={"evidence_readiness": payload},
+        )
+
+    def _make_decision_trace_check(
+        self,
+        response: EligibilityAssessmentResponse,
+    ) -> dict[str, Any]:
+        """Persist the final API response fields needed for audit replay."""
+
+        return self._make_audit_check(
+            check_type="decision",
+            check_code="FINAL_DECISION",
+            passed=response.eligible,
+            severity="info" if response.eligible else "major",
+            expected_value="eligible determination",
+            observed_value=str(response.eligible).lower(),
+            explanation="Calculated the final deterministic eligibility decision",
+            details_json={
+                "final_decision": {
+                    "eligible": response.eligible,
+                    "pathway_used": response.pathway_used,
+                    "rule_status": self._normalize_value(response.rule_status),
+                    "tariff_status": (
+                        response.tariff_outcome.status
+                        if response.tariff_outcome is not None
+                        else None
+                    ),
+                    "confidence_class": response.confidence_class,
+                    "failure_codes": response.failures,
+                    "missing_facts": response.missing_facts,
+                }
+            },
+        )
+
+    def _log_assessment(
+        self,
+        *,
+        request: EligibilityRequest,
+        response: EligibilityAssessmentResponse,
+        blocker_checks: Sequence[Mapping[str, Any]],
+        started_at: float,
+    ) -> None:
+        """Emit the structured audit log for the completed assessment when enabled."""
+
+        if self.audit_service is None:
+            return
+
+        self.audit_service.log_assessment(
+            case_id=request.case_id,
+            hs6_code=response.hs6_code,
+            exporter=request.exporter,
+            importer=request.importer,
+            outcome="eligible" if response.eligible else "not_eligible",
+            confidence_class=response.confidence_class,
+            duration_ms=int((perf_counter() - started_at) * 1000),
+            blockers=[
+                str(check["check_code"])
+                for check in blocker_checks
+                if check.get("passed") is False and check.get("severity") == "blocker"
+            ],
+            missing_facts=response.missing_facts,
+        )
 
     @staticmethod
     def _read_fact_field(fact: Any, field_name: str) -> Any:

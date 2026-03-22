@@ -40,6 +40,12 @@ class StatusUnknownError(AISBaseException):
     code = "STATUS_UNKNOWN"
 
 
+class AuditTrailNotFoundError(AISBaseException):
+    """Raised when no persisted evaluation trail exists for the requested identifier."""
+
+    code = "AUDIT_TRAIL_NOT_FOUND"
+
+
 class ExpressionEvaluationError(AISBaseException):
     """Raised when the safe expression evaluator cannot evaluate a rule expression."""
 

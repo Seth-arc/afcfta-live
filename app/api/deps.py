@@ -13,6 +13,7 @@ from app.repositories.hs_repository import HSRepository
 from app.repositories.rules_repository import RulesRepository
 from app.repositories.status_repository import StatusRepository
 from app.repositories.tariffs_repository import TariffsRepository
+from app.services.audit_service import AuditService
 from app.services.classification_service import ClassificationService
 from app.services.eligibility_service import EligibilityService
 from app.services.evidence_service import EvidenceService
@@ -30,6 +31,17 @@ async def get_cases_repository(
     """Return a cases repository bound to the current request session."""
 
     return CasesRepository(session)
+
+
+async def get_audit_service(
+    session: AsyncSession = Depends(get_db),
+) -> AuditService:
+    """Return an audit service bound to the current request session."""
+
+    return AuditService(
+        evaluations_repository=EvaluationsRepository(session),
+        cases_repository=CasesRepository(session),
+    )
 
 
 async def get_classification_service(
@@ -117,4 +129,8 @@ async def get_eligibility_service(
         expression_evaluator=ExpressionEvaluator(),
         general_origin_rules_service=GeneralOriginRulesService(),
         evaluations_repository=EvaluationsRepository(session),
+        audit_service=AuditService(
+            evaluations_repository=EvaluationsRepository(session),
+            cases_repository=CasesRepository(session),
+        ),
     )

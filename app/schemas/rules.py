@@ -18,6 +18,7 @@ from app.core.enums import (
 )
 
 
+
 class PSRComponentOut(BaseModel):
     """One normalized PSR component attached to a parent rule."""
 

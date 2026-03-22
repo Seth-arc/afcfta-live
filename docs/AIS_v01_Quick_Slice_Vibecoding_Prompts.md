@@ -74,7 +74,8 @@ Add a comment at the top explaining this is Step 1 of the Quick Slice build.
 psql -U afcfta_user -d afcfta_db -f scripts/sql/load_hs6_backbone.sql
 ```
 (Adjust the psql connection to match your Docker setup.)
-
+-----
+# Completed - 22 March
 ---
 
 ## Prompt 3 — SQL load script for tariff CSVs

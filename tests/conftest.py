@@ -19,11 +19,11 @@ def test_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
 
     monkeypatch.setenv(
         "DATABASE_URL",
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/afcfta_test",
+        "postgresql+asyncpg://afcfta:afcfta_dev@localhost:5432/afcfta",
     )
     monkeypatch.setenv(
         "DATABASE_URL_SYNC",
-        "postgresql://postgres:postgres@localhost:5432/afcfta_test",
+        "postgresql://afcfta:afcfta_dev@localhost:5432/afcfta",
     )
     get_settings.cache_clear()
     yield get_settings()

@@ -185,6 +185,9 @@ class EligibilityService:
 
         for pathway in sorted(rule_bundle.pathways, key=lambda item: item.priority_rank):
             expression = self._extract_pathway_expression(pathway.expression_json)
+            if not self._is_executable_expression(expression):
+                audit_checks.append(self._make_non_executable_pathway_check(pathway))
+                continue
             evaluation = self.expression_evaluator.evaluate(expression, normalized_facts)
             audit_checks.extend(self._serialize_expression_checks(pathway, evaluation))
             audit_checks.append(self._make_pathway_trace_check(pathway, evaluation))
@@ -446,6 +449,34 @@ class EligibilityService:
         if isinstance(nested, dict):
             return nested
         return expression_json
+
+    @staticmethod
+    def _is_executable_expression(expression: Any) -> bool:
+        """Return True when the stored pathway contains an executable expression tree."""
+
+        return isinstance(expression, dict) and isinstance(expression.get("op"), str)
+
+    def _make_non_executable_pathway_check(self, pathway: RulePathwayOut) -> dict[str, Any]:
+        """Record that a manual-review-only pathway was skipped during execution."""
+
+        return self._make_audit_check(
+            check_type="psr",
+            check_code="PATHWAY_SKIPPED",
+            passed=False,
+            severity="minor",
+            expected_value="executable expression",
+            observed_value="manual review required",
+            explanation=(
+                f"Skipped pathway {pathway.pathway_code} because it does not contain an executable expression"
+            ),
+            details_json={
+                "pathway_id": str(pathway.pathway_id),
+                "pathway_code": pathway.pathway_code,
+                "pathway_label": pathway.pathway_label,
+                "priority_rank": pathway.priority_rank,
+                "expression_json": pathway.expression_json,
+            },
+        )
 
     def _serialize_expression_checks(
         self,

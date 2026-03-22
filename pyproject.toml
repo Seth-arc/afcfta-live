@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings",
     "alembic",
     "python-dotenv",
+    "pdfplumber",
 ]
 
 [dependency-groups]
@@ -25,9 +26,20 @@ dev = [
     "ruff",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "ruff",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require the integration test stack",
+]
 
 [tool.ruff]
 line-length = 100

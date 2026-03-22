@@ -2,13 +2,196 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
+
+from app.db.base import get_async_session_factory
 
 
 pytestmark = pytest.mark.integration
+
+
+def _sql_tuple(values: tuple[str, ...]) -> str:
+    return "(" + ", ".join(f"'{value}'" for value in values) + ")"
+
+
+async def _select_supported_candidate(
+    *,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+    require_rule_statuses: tuple[str, ...] = (),
+    require_component_types: tuple[str, ...] = (),
+    exclude_component_types: tuple[str, ...] = (),
+    require_pathway_codes: tuple[str, ...] = (),
+    min_pathway_count: int | None = None,
+    require_cth_before_vnm: bool = False,
+    preferred_hs6_codes: tuple[str, ...] = (),
+    year: int = 2025,
+) -> dict[str, Any] | None:
+    where_clauses = [
+        "hp.hs_version = 'HS2017'",
+        "ry.calendar_year = :year",
+        "(pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)",
+        "(pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)",
+        "(sh.effective_date IS NULL OR sh.effective_date <= :assessment_date)",
+        "(sh.expiry_date IS NULL OR sh.expiry_date >= :assessment_date)",
+    ]
+    params: dict[str, Any] = {"year": year, "assessment_date": date(year, 1, 1)}
+
+    if chapter_start is not None and chapter_end is not None:
+        where_clauses.append("CAST(hp.chapter AS INTEGER) BETWEEN :chapter_start AND :chapter_end")
+        params["chapter_start"] = chapter_start
+        params["chapter_end"] = chapter_end
+
+    if require_rule_statuses:
+        where_clauses.append(f"pr.rule_status::text IN {_sql_tuple(require_rule_statuses)}")
+
+    preferred_order_sql = "hp.hs6_code ASC"
+    if preferred_hs6_codes:
+        preferred_cases = " ".join(
+            f"WHEN '{hs6_code}' THEN {index}"
+            for index, hs6_code in enumerate(preferred_hs6_codes)
+        )
+        preferred_order_sql = f"CASE hp.hs6_code {preferred_cases} ELSE 999 END, hp.hs6_code ASC"
+
+    having_clauses = []
+    if require_component_types:
+        having_clauses.append(
+            f"COALESCE(BOOL_OR(prc.component_type::text IN {_sql_tuple(require_component_types)}), FALSE)"
+        )
+    if exclude_component_types:
+        having_clauses.append(
+            f"NOT COALESCE(BOOL_OR(prc.component_type::text IN {_sql_tuple(exclude_component_types)}), FALSE)"
+        )
+    if require_pathway_codes:
+        for pathway_code in require_pathway_codes:
+            having_clauses.append(
+                f"COALESCE(BOOL_OR(erp.pathway_code = '{pathway_code}'), FALSE)"
+            )
+    if min_pathway_count is not None:
+        having_clauses.append(f"COUNT(DISTINCT erp.pathway_code) >= {min_pathway_count}")
+    if require_cth_before_vnm:
+        having_clauses.append(
+            "MIN(CASE WHEN erp.pathway_code = 'CTH' THEN erp.priority_rank END) < "
+            "MIN(CASE WHEN erp.pathway_code = 'VNM' THEN erp.priority_rank END)"
+        )
+
+    having_sql = ""
+    if having_clauses:
+        having_sql = "\nHAVING " + " AND ".join(having_clauses)
+
+    statement = text(
+        f"""
+        SELECT
+            hp.hs6_code,
+            hp.heading,
+            hp.chapter,
+            sh.exporting_scope AS exporter,
+            sh.importing_state AS importer,
+            pr.rule_status::text AS rule_status,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT prc.component_type::text), NULL) AS component_types,
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT erp.pathway_code), NULL) AS pathway_codes
+        FROM hs6_product hp
+        JOIN hs6_psr_applicability pa ON pa.hs6_id = hp.hs6_id
+        JOIN psr_rule pr ON pr.psr_id = pa.psr_id
+        LEFT JOIN psr_rule_component prc ON prc.psr_id = pr.psr_id
+        LEFT JOIN eligibility_rule_pathway erp ON erp.psr_id = pr.psr_id
+        JOIN tariff_schedule_line sl ON LEFT(sl.hs_code, 6) = hp.hs6_code
+        JOIN tariff_schedule_header sh ON sh.schedule_id = sl.schedule_id
+        JOIN tariff_schedule_rate_by_year ry ON ry.schedule_line_id = sl.schedule_line_id
+        WHERE {' AND '.join(where_clauses)}
+        GROUP BY
+            hp.hs6_code,
+            hp.heading,
+            hp.chapter,
+            sh.exporting_scope,
+            sh.importing_state,
+            pr.rule_status
+        {having_sql}
+        ORDER BY {preferred_order_sql}, sh.exporting_scope ASC, sh.importing_state ASC
+        LIMIT 1
+        """
+    )
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        result = await session.execute(statement, params)
+        row = result.mappings().first()
+
+    if row is None:
+        return None
+
+    return {
+        "hs6_code": row["hs6_code"],
+        "heading": row["heading"],
+        "chapter": row["chapter"],
+        "exporter": row["exporter"],
+        "importer": row["importer"],
+        "rule_status": row["rule_status"],
+        "component_types": list(row["component_types"] or []),
+        "pathway_codes": list(row["pathway_codes"] or []),
+    }
+
+
+def _require_candidate(candidate: dict[str, Any] | None, reason: str) -> dict[str, Any]:
+    if candidate is None:
+        pytest.skip(reason)
+    return candidate
+
+
+def _different_heading(output_heading: str) -> str:
+    return "9999" if output_heading != "9999" else "0001"
+
+
+def _cth_pass_facts(hs6_code: str, output_heading: str) -> dict[str, Any]:
+    input_heading = _different_heading(output_heading)
+    return {
+        "tariff_heading_input": input_heading,
+        "tariff_heading_output": output_heading,
+        "non_originating_inputs": [{"hs4_code": input_heading, "hs6_code": f"{input_heading}00"}],
+        "output_hs6_code": hs6_code,
+        "direct_transport": True,
+        "cumulation_claimed": False,
+    }
+
+
+def _vnm_pass_facts(hs6_code: str, output_heading: str) -> dict[str, Any]:
+    return {
+        "tariff_heading_input": output_heading,
+        "tariff_heading_output": output_heading,
+        "ex_works": 10000,
+        "non_originating": 4000,
+        "direct_transport": True,
+        "cumulation_claimed": False,
+    }
+
+
+def _wo_pass_facts() -> dict[str, Any]:
+    return {
+        "wholly_obtained": True,
+        "direct_transport": True,
+        "cumulation_claimed": False,
+    }
+
+
+def _best_effort_pass_facts(candidate: dict[str, Any]) -> dict[str, Any]:
+    component_types = set(candidate["component_types"])
+    if "WO" in component_types:
+        return _wo_pass_facts()
+    if "CTH" in component_types:
+        return _cth_pass_facts(candidate["hs6_code"], candidate["heading"])
+    if "VNM" in component_types:
+        return _vnm_pass_facts(candidate["hs6_code"], candidate["heading"])
+
+    facts = _cth_pass_facts(candidate["hs6_code"], candidate["heading"])
+    facts["ex_works"] = 10000
+    facts["non_originating"] = 4000
+    facts["wholly_obtained"] = True
+    return facts
 
 
 def _fact_payload(fact_key: str, value: Any) -> dict[str, Any]:
@@ -168,16 +351,16 @@ async def test_quick_slice_cth_fail_no_tariff_shift(async_client: AsyncClient) -
 async def test_quick_slice_vnm_pass(async_client: AsyncClient) -> None:
     """VNM should pass when non-originating content is under the seeded threshold."""
 
+    candidate = _require_candidate(
+        await _select_supported_candidate(require_pathway_codes=("VNM",)),
+        "No tariff-backed VNM pathway candidate is loaded in the test database.",
+    )
+
     payload = _assessment_payload(
-        hs6_code="721049",
-        exporter="GHA",
-        importer="CMR",
-        facts={
-            "ex_works": 10000,
-            "non_originating": 5000,
-            "direct_transport": True,
-            "cumulation_claimed": False,
-        },
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_vnm_pass_facts(candidate["hs6_code"], candidate["heading"]),
     )
 
     response = await async_client.post("/api/v1/assessments", json=payload)
@@ -191,22 +374,22 @@ async def test_quick_slice_vnm_pass(async_client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_quick_slice_or_fallback_to_vnm(async_client: AsyncClient) -> None:
-    """When CTH fails for 180631, the engine should fall through to the VNM pathway."""
+    """When a CTH pathway fails, the engine should fall through to a VNM alternative."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_pathway_codes=("CTH", "VNM"),
+            min_pathway_count=2,
+            require_cth_before_vnm=True,
+        ),
+        "No tariff-backed multi-pathway CTH/VNM candidate is loaded in the test database.",
+    )
 
     payload = _assessment_payload(
-        hs6_code="180631",
-        exporter="CMR",
-        importer="GHA",
-        facts={
-            "tariff_heading_input": "1806",
-            "tariff_heading_output": "1806",
-            "non_originating_inputs": [{"hs4_code": "1806", "hs6_code": "180631"}],
-            "output_hs6_code": "180631",
-            "ex_works": 10000,
-            "non_originating": 5000,
-            "direct_transport": True,
-            "cumulation_claimed": False,
-        },
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_vnm_pass_facts(candidate["hs6_code"], candidate["heading"]),
     )
 
     response = await async_client.post("/api/v1/assessments", json=payload)
@@ -236,3 +419,131 @@ async def test_quick_slice_missing_facts(async_client: AsyncClient) -> None:
     _assert_response_shape(body)
     assert body["missing_facts"]
     assert body["confidence_class"] == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_parser_generated_textile_rule(async_client: AsyncClient) -> None:
+    """A parser-generated textile rule should surface its live status deterministically."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            chapter_start=50,
+            chapter_end=63,
+            preferred_hs6_codes=("610910", "630790"),
+        ),
+        "No tariff-backed textile candidate is loaded in the test database.",
+    )
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_best_effort_pass_facts(candidate),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["rule_status"] == candidate["rule_status"]
+    if candidate["rule_status"] == "pending":
+        assert body["eligible"] is False
+        assert "RULE_STATUS_PENDING" in body["failures"]
+        assert body["confidence_class"] == "provisional"
+    elif candidate["rule_status"] == "provisional":
+        assert body["confidence_class"] in ("provisional", "incomplete")
+    else:
+        assert body["confidence_class"] in ("complete", "incomplete", "provisional")
+
+
+@pytest.mark.asyncio
+async def test_parser_generated_chemical_rule(async_client: AsyncClient) -> None:
+    """A parser-generated chemical rule should expose an executable pass pathway."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            chapter_start=28,
+            chapter_end=29,
+            require_pathway_codes=("VNM",),
+            preferred_hs6_codes=("280511", "290110"),
+        ),
+        "No tariff-backed chemical executable candidate is loaded in the test database.",
+    )
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_best_effort_pass_facts(candidate),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is True
+    assert body["pathway_used"] is not None
+    assert any(code in body["pathway_used"] for code in candidate["pathway_codes"])
+
+
+@pytest.mark.asyncio
+async def test_parser_generated_machinery_vnm_rule(async_client: AsyncClient) -> None:
+    """A parser-generated machinery rule should support a VNM-based pass path."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            chapter_start=84,
+            chapter_end=84,
+            require_component_types=("VNM",),
+            exclude_component_types=("CTH", "CTSH", "CC"),
+            preferred_hs6_codes=("840110", "840810", "840820"),
+        ),
+        "No tariff-backed machinery VNM-only candidate is loaded in the test database.",
+    )
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_vnm_pass_facts(candidate["hs6_code"], candidate["heading"]),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is True
+    assert body["pathway_used"] is not None and "VNM" in body["pathway_used"]
+
+
+@pytest.mark.asyncio
+async def test_parser_generated_agricultural_wo_rule(async_client: AsyncClient) -> None:
+    """A parser-generated agricultural rule should pass on a wholly obtained declaration."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            chapter_start=6,
+            chapter_end=8,
+            require_component_types=("WO",),
+            preferred_hs6_codes=("060110", "070110", "080111"),
+        ),
+        "No tariff-backed agricultural WO candidate is loaded in the test database.",
+    )
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_wo_pass_facts(),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is True
+    assert body["pathway_used"] is not None and "WO" in body["pathway_used"]

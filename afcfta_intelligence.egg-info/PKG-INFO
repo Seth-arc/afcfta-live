@@ -11,4 +11,10 @@ Requires-Dist: pydantic>=2.0
 Requires-Dist: pydantic-settings
 Requires-Dist: alembic
 Requires-Dist: python-dotenv
+Requires-Dist: pdfplumber
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-asyncio; extra == "dev"
+Requires-Dist: httpx; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
 Dynamic: license-file

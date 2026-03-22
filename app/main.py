@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -100,6 +102,15 @@ async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run application startup and shutdown hooks using FastAPI lifespan."""
+
+    settings = get_settings()
+    logger.info("%s v%s starting", settings.APP_TITLE, settings.APP_VERSION)
+    yield
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
 
@@ -107,6 +118,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.APP_TITLE,
         version=settings.APP_VERSION,
+        lifespan=_lifespan,
     )
 
     @app.middleware("http")
@@ -115,10 +127,6 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers.setdefault("X-Request-ID", request.state.request_id)
         return response
-
-    @app.on_event("startup")
-    async def startup_event() -> None:
-        logger.info("%s v%s starting", settings.APP_TITLE, settings.APP_VERSION)
 
     app.add_exception_handler(AISBaseException, _domain_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)

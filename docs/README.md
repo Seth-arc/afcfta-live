@@ -315,3 +315,5 @@ The system enforces strict source precedence. Higher tiers override lower tiers 
 The competitive moat is not the rules, tariffs, or documents themselves — those are commoditized. The moat is the **execution layer + structured normalization + deterministic audit trail**. This system proves that trade compliance can be computed rather than interpreted, and that eligibility decisions can be simulated before export.
 
 The Cameroon inclusion (replacing Kenya in v0.1) is deliberate: it introduces ECCAS/CEMAC logic, Francophone legal parsing, weaker digitization stress-testing, and the high-friction Nigeria-Cameroon corridor — all of which are more representative of real AfCFTA usage than clean East African systems.
+
+Developer:

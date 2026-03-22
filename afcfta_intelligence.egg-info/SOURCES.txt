@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 afcfta_intelligence.egg-info/PKG-INFO
@@ -13,6 +14,7 @@ app/api/deps.py
 app/api/router.py
 app/api/v1/__init__.py
 app/api/v1/assessments.py
+app/api/v1/audit.py
 app/api/v1/cases.py
 app/api/v1/evidence.py
 app/api/v1/health.py
@@ -35,7 +37,9 @@ app/db/models/cases.py
 app/db/models/evaluations.py
 app/db/models/evidence.py
 app/db/models/hs.py
+app/db/models/intelligence.py
 app/db/models/rules.py
+app/db/models/sources.py
 app/db/models/status.py
 app/db/models/tariffs.py
 app/repositories/__init__.py
@@ -43,16 +47,22 @@ app/repositories/cases_repository.py
 app/repositories/evaluations_repository.py
 app/repositories/evidence_repository.py
 app/repositories/hs_repository.py
+app/repositories/intelligence_repository.py
 app/repositories/rules_repository.py
+app/repositories/sources_repository.py
 app/repositories/status_repository.py
 app/repositories/tariffs_repository.py
 app/schemas/__init__.py
 app/schemas/assessments.py
+app/schemas/audit.py
 app/schemas/cases.py
 app/schemas/common.py
+app/schemas/evaluations.py
 app/schemas/evidence.py
 app/schemas/hs.py
+app/schemas/intelligence.py
 app/schemas/rules.py
+app/schemas/sources.py
 app/schemas/status.py
 app/schemas/tariffs.py
 app/services/__init__.py

@@ -369,7 +369,7 @@ Check app/schemas/assessments.py for the request/response Pydantic models.
 ```bash
 python -m pytest tests/integration/test_quick_slice_e2e.py -v
 ```
-
+# Completed - 22 March
 ---
 
 ## Prompt 10 — Full validation script
@@ -404,7 +404,7 @@ Format output with clear PASS/FAIL indicators where possible, e.g.:
 ```bash
 docker exec -i afcfta-live-db-1 psql -U afcfta -d afcfta -f scripts/sql/validate_quick_slice.sql
 ```
-
+# Completed - 22 March
 ---
 
 ## Summary — execution order

@@ -2,6 +2,7 @@ Metadata-Version: 2.4
 Name: afcfta-intelligence
 Version: 0.1.0
 Requires-Python: >=3.11
+License-File: LICENSE
 Requires-Dist: fastapi
 Requires-Dist: uvicorn[standard]
 Requires-Dist: sqlalchemy[asyncio]>=2.0
@@ -10,3 +11,4 @@ Requires-Dist: pydantic>=2.0
 Requires-Dist: pydantic-settings
 Requires-Dist: alembic
 Requires-Dist: python-dotenv
+Dynamic: license-file

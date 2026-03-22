@@ -6,6 +6,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.repositories.cases_repository import CasesRepository
 from app.repositories.evidence_repository import EvidenceRepository
 from app.repositories.evaluations_repository import EvaluationsRepository
 from app.repositories.hs_repository import HSRepository
@@ -21,6 +22,14 @@ from app.services.general_origin_rules_service import GeneralOriginRulesService
 from app.services.rule_resolution_service import RuleResolutionService
 from app.services.status_service import StatusService
 from app.services.tariff_resolution_service import TariffResolutionService
+
+
+async def get_cases_repository(
+    session: AsyncSession = Depends(get_db),
+) -> CasesRepository:
+    """Return a cases repository bound to the current request session."""
+
+    return CasesRepository(session)
 
 
 async def get_classification_service(

@@ -115,6 +115,8 @@ class IntelligenceRepository:
         self,
         status: str | None,
         severity: str | None,
+        entity_type: str | None,
+        entity_key: str | None,
         limit: int,
     ) -> list[Mapping[str, Any]]:
         """List alerts with optional status and severity filters."""
@@ -149,6 +151,12 @@ class IntelligenceRepository:
         if severity is not None:
             statement_text += "\n  AND ae.severity = :severity"
             params["severity"] = severity
+        if entity_type is not None:
+            statement_text += "\n  AND ae.entity_type = :entity_type"
+            params["entity_type"] = entity_type
+        if entity_key is not None:
+            statement_text += "\n  AND ae.entity_key = :entity_key"
+            params["entity_key"] = entity_key
         statement_text += """
             ORDER BY ae.triggered_at DESC, ae.created_at DESC
             LIMIT :limit

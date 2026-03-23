@@ -10,6 +10,7 @@ from app.repositories.cases_repository import CasesRepository
 from app.repositories.evidence_repository import EvidenceRepository
 from app.repositories.evaluations_repository import EvaluationsRepository
 from app.repositories.hs_repository import HSRepository
+from app.repositories.intelligence_repository import IntelligenceRepository
 from app.repositories.rules_repository import RulesRepository
 from app.repositories.sources_repository import SourcesRepository
 from app.repositories.status_repository import StatusRepository
@@ -64,6 +65,14 @@ async def get_sources_repository(
     """Return a sources repository bound to the current request session."""
 
     return SourcesRepository(session)
+
+
+async def get_intelligence_repository(
+    session: AsyncSession = Depends(get_db),
+) -> IntelligenceRepository:
+    """Return an intelligence repository bound to the current request session."""
+
+    return IntelligenceRepository(session)
 
 
 async def get_audit_service(

@@ -110,12 +110,12 @@ This matters because AIS executes rule logic from stored expressions and must do
 
 ## Current Coverage
 
-Current test count:
+The suite includes both unit and integration coverage across the assessment engine,
+case workflow, evidence readiness, provenance, intelligence, parser tooling, and
+the expanded deterministic live slice.
 
-- `61` unit tests
-- `6` integration tests
-
-Treat those numbers as a baseline to maintain or improve when you add behavior.
+Do not rely on a hard-coded test count in this document. Use the current pytest
+output as the source of truth when validating the repository state.
 
 ## What New Code Must Be Tested
 

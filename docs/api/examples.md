@@ -148,6 +148,53 @@ assessment = response.json()
 print("Eligible:", assessment["eligible"])
 print("Pathway:", assessment["pathway_used"])
 print("Failures:", assessment["failures"])
+print("Readiness score:", assessment["readiness_score"])
+
+## Run A Case-Backed Assessment
+
+Typical flow:
+
+1. create a case and store facts
+2. assess the stored case by `case_id`
+3. retrieve the latest audit trail for that case
+
+### curl
+
+```bash
+curl -X POST http://localhost:8000/api/v1/assessments/cases/29dc2946-6ef0-46a0-b3eb-0f6a64e40db7 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "year": 2025,
+    "existing_documents": ["certificate_of_origin"]
+  }'
+```
+
+### Python (`requests`)
+
+```python
+import requests
+
+base_url = "http://localhost:8000/api/v1"
+case_id = "29dc2946-6ef0-46a0-b3eb-0f6a64e40db7"
+
+assessment_response = requests.post(
+    f"{base_url}/assessments/cases/{case_id}",
+    json={"year": 2025, "existing_documents": ["certificate_of_origin"]},
+    timeout=30,
+)
+assessment_response.raise_for_status()
+assessment = assessment_response.json()
+
+latest_response = requests.get(
+    f"{base_url}/audit/cases/{case_id}/latest",
+    timeout=30,
+)
+latest_response.raise_for_status()
+latest_trail = latest_response.json()
+
+print("Eligible:", assessment["eligible"])
+print("Latest pathway:", latest_trail["final_decision"]["pathway_used"])
+```
 ```
 
 ## Check Evidence Readiness
@@ -204,14 +251,26 @@ Typical flow:
 
 1. create or know a `case_id`
 2. run an assessment with that `case_id`
-3. list evaluations for the case
-4. fetch one full trace by `evaluation_id`
+3. list evaluations for the case or fetch the latest directly
+4. fetch one full trace by `evaluation_id` if needed
 
 ### curl
 
 ```bash
 curl http://localhost:8000/api/v1/audit/cases/29dc2946-6ef0-46a0-b3eb-0f6a64e40db7/evaluations
+curl http://localhost:8000/api/v1/audit/cases/29dc2946-6ef0-46a0-b3eb-0f6a64e40db7/latest
 curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfceef41f26
+```
+
+## Inspect Provenance And Intelligence APIs
+
+### curl
+
+```bash
+curl "http://localhost:8000/api/v1/sources?limit=5"
+curl "http://localhost:8000/api/v1/provisions?topic_primary=rules_of_origin&limit=5"
+curl "http://localhost:8000/api/v1/intelligence/corridors/CIV/NGA"
+curl "http://localhost:8000/api/v1/intelligence/alerts?status=open&severity=high"
 ```
 
 ### Python (`requests`)

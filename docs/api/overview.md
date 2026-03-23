@@ -107,6 +107,23 @@ If you place AIS behind an API gateway, apply rate limits there.
 - Core example corridor in this documentation: `GHA -> NGA`
 - Core product example in this documentation: HS6 `110311` for groats and meal of wheat
 
+## User-Facing Versus Internal Layers
+
+User-facing API capabilities in v0.1:
+
+- direct assessments
+- case-backed assessments using stored case facts
+- evidence readiness and audit replay
+- source and legal provision lookup
+- corridor profile and alert listing
+
+Internal infrastructure that supports those APIs but is not exposed as a public endpoint:
+
+- repositories and ORM models
+- parser artifact generation and promotion scripts
+- seed-data loaders and development fixtures
+- Alembic migrations and operator workflow runbooks
+
 ## Response Design Notes
 
 Two integration details matter:

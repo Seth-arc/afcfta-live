@@ -24,11 +24,32 @@ AfCFTA is the world's largest free trade area by country count. Using it in prac
 - HS6 resolution
 - Rule lookup
 - Tariff lookup
-- Eligibility engine
+- Direct and case-backed eligibility assessment
 - Evidence readiness
-- Status-aware outputs
-- Full audit trail
-- 67 passing tests
+- Status-aware outputs with snapshot-aligned rule and tariff resolution
+- Full audit trail, including latest-evaluation retrieval by case
+- Source and legal provision lookup APIs
+- Corridor profile and alert listing APIs
+- Repeatable parser promotion runbook for Appendix IV artifacts
+- Deterministic seed slice spanning 8 HS6 products across 4 supported corridors
+
+## Product Surface
+
+User-facing capabilities exposed by the API:
+
+- rules and tariff lookup
+- direct assessments and assess-by-case execution
+- evidence readiness and decision-time readiness scoring
+- audit replay by evaluation or by case
+- provenance lookup for sources and legal provisions
+- corridor intelligence profiles and alert listing
+
+Internal infrastructure that supports those capabilities but is not itself a user API:
+
+- repositories and database models
+- parser artifact generation and promotion scripts
+- seed-data and operator workflow scripts
+- Alembic migrations and development-only fixtures
 
 ## Who It Serves
 
@@ -95,15 +116,25 @@ curl -X POST http://localhost:8000/api/v1/assessments \
 | `POST` | `/api/v1/cases` | Create a case and store submitted production facts |
 | `GET` | `/api/v1/cases/{case_id}` | Retrieve a case and its stored facts |
 | `POST` | `/api/v1/assessments` | Run the full eligibility engine |
+| `POST` | `/api/v1/assessments/cases/{case_id}` | Run an assessment using facts already stored on a case |
 | `POST` | `/api/v1/evidence/readiness` | Check document readiness for a rule or pathway |
 | `GET` | `/api/v1/audit/evaluations/{evaluation_id}` | Retrieve a full decision trace |
 | `GET` | `/api/v1/audit/cases/{case_id}/evaluations` | List evaluations stored for a case |
+| `GET` | `/api/v1/audit/cases/{case_id}/latest` | Retrieve the latest persisted decision trace for a case |
+| `GET` | `/api/v1/sources` | List provenance source records |
+| `GET` | `/api/v1/sources/{source_id}` | Retrieve one provenance source record |
+| `GET` | `/api/v1/provisions` | List legal provisions |
+| `GET` | `/api/v1/provisions/{provision_id}` | Retrieve one legal provision |
+| `GET` | `/api/v1/intelligence/corridors/{exporter}/{importer}` | Retrieve an active corridor profile |
+| `GET` | `/api/v1/intelligence/alerts` | List alerts by status, severity, or entity scope |
 
 ## Architecture
 
 AIS uses a layered architecture: thin API handlers, business logic in services, SQL in repositories, and explicit database models and schemas underneath. Every operational layer resolves through a canonical HS6 product spine, which eliminates text-matching ambiguity across rules, tariffs, statuses, and evidence. The engine is deterministic boolean execution, not ML scoring, so the same inputs produce the same outputs.
 
 More detail: [docs/concepts/architecture-overview.md](docs/concepts/architecture-overview.md)
+
+For operator-facing parser promotion steps, see [docs/dev/parser_promotion_workflow.md](docs/dev/parser_promotion_workflow.md).
 
 ## Documentation
 

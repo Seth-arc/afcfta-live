@@ -270,6 +270,7 @@ Runs the full deterministic eligibility engine.
 - `year`
 - `persona_mode`
 - `production_facts`
+- optional `existing_documents`
 - optional `case_id`
 
 **curl**
@@ -326,9 +327,40 @@ curl -X POST http://localhost:8000/api/v1/assessments \
     "Certificate of Origin",
     "Supplier declaration"
   ],
+  "missing_evidence": [],
+  "readiness_score": 1.0,
+  "completeness_ratio": 1.0,
   "confidence_class": "complete"
 }
 ```
+
+## POST /api/v1/assessments/cases/{case_id}
+
+Runs the same assessment flow using facts already stored on a case.
+
+**Path parameters**
+
+- `case_id`: case UUID
+
+**Request body**
+
+- `year`
+- optional `existing_documents`
+
+**curl**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/assessments/cases/29dc2946-6ef0-46a0-b3eb-0f6a64e40db7 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "year": 2025,
+    "existing_documents": ["certificate_of_origin"]
+  }'
+```
+
+**Sample response**
+
+The response shape is the same as `POST /api/v1/assessments`.
 
 ## POST /api/v1/evidence/readiness
 
@@ -497,6 +529,72 @@ curl http://localhost:8000/api/v1/audit/cases/29dc2946-6ef0-46a0-b3eb-0f6a64e40d
   }
 ]
 ```
+
+## GET /api/v1/audit/cases/{case_id}/latest
+
+Returns the latest persisted audit trail for a case without requiring the caller to know the newest `evaluation_id`.
+
+**Path parameters**
+
+- `case_id`: case UUID
+
+**curl**
+
+```bash
+curl http://localhost:8000/api/v1/audit/cases/29dc2946-6ef0-46a0-b3eb-0f6a64e40db7/latest
+```
+
+**Sample response**
+
+The response shape is the same as `GET /api/v1/audit/evaluations/{evaluation_id}`.
+
+## GET /api/v1/sources
+
+Lists provenance source records.
+
+**Query parameters**
+
+- `source_type`
+- `authority_tier`
+- `status`
+- `limit`
+- `offset`
+
+## GET /api/v1/sources/{source_id}
+
+Returns one provenance source record by `source_id`.
+
+## GET /api/v1/provisions
+
+Lists legal provisions.
+
+**Query parameters**
+
+- `topic_primary`
+- `source_id`
+- `annex_ref`
+- `limit`
+- `offset`
+
+## GET /api/v1/provisions/{provision_id}
+
+Returns one legal provision by `provision_id`.
+
+## GET /api/v1/intelligence/corridors/{exporter}/{importer}
+
+Returns the active corridor profile for one supported corridor.
+
+## GET /api/v1/intelligence/alerts
+
+Lists alerts filtered by status, severity, and optional entity scope.
+
+**Query parameters**
+
+- `status`
+- `severity`
+- `entity_type`
+- `entity_key`
+- `limit`
 
 ## Error Shape
 

@@ -285,7 +285,12 @@ class ExpressionEvaluator:
             left_operand=left_operand,
             operator=node.operator,
             right_operand=right_operand,
-            check_code=TEXT_OPERATOR_MAP[node.operator],
+            check_code=self._resolve_check_code(
+                operator=node.operator,
+                left_source=left_operand.source_name,
+                right_source=right_operand.source_name,
+                default_code=TEXT_OPERATOR_MAP[node.operator],
+            ),
         )
 
     def _resolve_text_operand(self, node: OperandNode, facts: dict[str, Any]) -> ResolvedOperand:
@@ -438,7 +443,12 @@ class ExpressionEvaluator:
                     operator="!=",
                     ref_fact=node["ref_fact"],
                     facts=facts,
-                    check_code="FACT_NE",
+                    check_code=self._resolve_check_code(
+                        operator="!=",
+                        left_source=str(node["fact"]),
+                        right_source=str(node["ref_fact"]),
+                        default_code="FACT_NE",
+                    ),
                 )
             return self._evaluate_fact_value_comparison(
                 fact_name=node["fact"],
@@ -937,6 +947,28 @@ class ExpressionEvaluator:
         }:
             return "FAIL_CTSH_NOT_MET"
         return None
+
+    @staticmethod
+    def _resolve_check_code(
+        *,
+        operator: str,
+        left_source: str,
+        right_source: str,
+        default_code: str,
+    ) -> str:
+        """Map legacy comparison forms onto stable audit check codes."""
+
+        if operator == "!=" and {left_source, right_source} == {
+            "tariff_heading_input",
+            "tariff_heading_output",
+        }:
+            return "HEADING_NE_OUTPUT"
+        if operator == "!=" and {left_source, right_source} == {
+            "tariff_subheading_input",
+            "tariff_subheading_output",
+        }:
+            return "SUBHEADING_NE_OUTPUT"
+        return default_code
 
     @staticmethod
     def _build_non_originating_explanation(test_op: str, passed: bool) -> str:

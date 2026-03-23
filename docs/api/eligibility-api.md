@@ -30,7 +30,23 @@ Important trade terms:
 | `year` | integer | Yes | Year used for tariff lookup and date-scoped legal resolution. |
 | `persona_mode` | string | Yes | User perspective such as `exporter`, `officer`, or `analyst`. This affects evidence output. |
 | `production_facts` | array | Yes | Typed factual inputs used by pathway logic and general rules. |
+| `existing_documents` | array | No | Submitted document inventory used to compute readiness during the assessment. |
 | `case_id` | string or UUID | No | Existing case id. When supplied, the service can persist an evaluation trace against that case. |
+
+## Case-Backed Assessment Endpoint
+
+AIS also supports assessing facts already stored on an existing case:
+
+```text
+POST /api/v1/assessments/cases/{case_id}
+```
+
+That request only needs:
+
+- `year`
+- optional `existing_documents`
+
+The service loads stored case facts, normalizes them through the same path as direct assessments, and persists the resulting evaluation and audit trail against the case.
 
 ### `production_facts[]` Fields
 
@@ -68,6 +84,9 @@ Important trade terms:
     "Certificate of Origin",
     "Supplier declaration"
   ],
+  "missing_evidence": [],
+  "readiness_score": 1.0,
+  "completeness_ratio": 1.0,
   "confidence_class": "complete"
 }
 ```
@@ -87,6 +106,9 @@ Important trade terms:
 | `failures` | Machine-readable failure codes explaining why the product did not qualify or why the result is constrained. |
 | `missing_facts` | Facts required for deterministic evaluation but not supplied. AIS never silently defaults them. |
 | `evidence_required` | Human-readable evidence items that would normally be needed to support the claim. |
+| `missing_evidence` | Required evidence items not present in the submitted document inventory. |
+| `readiness_score` | Convenience readiness metric derived from the evidence service. |
+| `completeness_ratio` | Fraction of required evidence items already present. |
 
 ## Failure Codes
 

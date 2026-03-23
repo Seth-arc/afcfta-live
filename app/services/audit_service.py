@@ -174,13 +174,13 @@ class AuditService:
         if case_id is None:
             raise ValueError("Either evaluation_id or case_id is required")
 
-        latest_evaluation = await self.evaluations_repository.get_latest_evaluation_for_case(case_id)
-        if latest_evaluation is None:
+        evaluations = await self.evaluations_repository.get_evaluations_for_case(case_id)
+        if not evaluations:
             raise AuditTrailNotFoundError(
                 f"No persisted audit trail was found for case '{case_id}'",
                 detail={"case_id": case_id},
             )
-        return str(latest_evaluation["evaluation_id"])
+        return str(evaluations[0]["evaluation_id"])
 
     def _build_hs6_snapshot(
         self,

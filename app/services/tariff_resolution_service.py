@@ -61,14 +61,14 @@ class TariffResolutionService:
             schedule_id=tariff["schedule_id"],
             schedule_line_id=tariff["schedule_line_id"],
             year_rate_id=tariff["year_rate_id"],
-            schedule_source_id=tariff["schedule_source_id"],
-            rate_source_id=tariff["rate_source_id"],
+            schedule_source_id=tariff.get("schedule_source_id"),
+            rate_source_id=tariff.get("rate_source_id"),
             resolved_rate_year=tariff["resolved_rate_year"],
-            line_page_ref=tariff["line_page_ref"],
-            rate_page_ref=tariff["rate_page_ref"],
-            table_ref=tariff["table_ref"],
-            row_ref=tariff["row_ref"],
-            used_fallback_rate=tariff["used_fallback_rate"],
+            line_page_ref=tariff.get("line_page_ref"),
+            rate_page_ref=tariff.get("rate_page_ref"),
+            table_ref=tariff.get("table_ref"),
+            row_ref=tariff.get("row_ref"),
+            used_fallback_rate=tariff.get("used_fallback_rate", False),
         )
 
     async def resolve(

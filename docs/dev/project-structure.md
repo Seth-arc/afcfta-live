@@ -279,6 +279,28 @@ Important files:
 - `docs/v1_scope.md`
 - `docs/expression_grammar.md`
 
+## User-Facing Versus Internal Infrastructure
+
+User-facing layers:
+
+- `app/api/v1/`
+  HTTP routes and the stable API surface consumed by clients
+- `app/schemas/`
+  Request and response contracts exposed at runtime
+- `docs/api/` and `docs/user-guide/`
+  Public API and workflow documentation
+
+Internal infrastructure layers:
+
+- `app/repositories/`
+  SQL and data-access machinery that backs the API but is not itself a product surface
+- `app/db/models/` and `alembic/`
+  Persistence internals and schema migration history
+- `scripts/`
+  Seed-data, parser, and operator tooling such as `scripts/seed_data.py` and parser promotion helpers
+- `docs/dev/parser_promotion_workflow.md`
+  Operator runbook for parser promotion, intended for contributors and maintainers rather than API consumers
+
 These are not optional reading when you are making schema or engine changes.
 
 ## Where To Start As A New Contributor

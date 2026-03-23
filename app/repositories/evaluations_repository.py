@@ -144,3 +144,19 @@ class EvaluationsRepository:
         )
         result = await self.session.execute(statement)
         return list(result.mappings().all())
+
+    async def get_latest_evaluation_for_case(self, case_id: str) -> Mapping[str, Any] | None:
+        """Return the newest persisted evaluation for a case, or None when absent."""
+
+        evaluation_table = EligibilityEvaluation.__table__
+        statement = (
+            select(*evaluation_table.c)
+            .where(evaluation_table.c.case_id == case_id)
+            .order_by(
+                evaluation_table.c.evaluation_date.desc(),
+                evaluation_table.c.created_at.desc(),
+            )
+            .limit(1)
+        )
+        result = await self.session.execute(statement)
+        return result.mappings().first()

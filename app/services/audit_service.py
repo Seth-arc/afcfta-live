@@ -120,6 +120,11 @@ class AuditService:
             for evaluation in evaluations
         ]
 
+    async def get_latest_decision_trace(self, case_id: str) -> AuditTrail:
+        """Return the reconstructed audit trail for the newest stored evaluation on a case."""
+
+        return await self.get_decision_trace(case_id=case_id)
+
     def log_assessment(
         self,
         *,
@@ -165,13 +170,13 @@ class AuditService:
         if case_id is None:
             raise ValueError("Either evaluation_id or case_id is required")
 
-        evaluations = await self.evaluations_repository.get_evaluations_for_case(case_id)
-        if not evaluations:
+        latest_evaluation = await self.evaluations_repository.get_latest_evaluation_for_case(case_id)
+        if latest_evaluation is None:
             raise AuditTrailNotFoundError(
                 f"No persisted audit trail was found for case '{case_id}'",
                 detail={"case_id": case_id},
             )
-        return str(evaluations[0]["evaluation_id"])
+        return str(latest_evaluation["evaluation_id"])
 
     def _build_hs6_snapshot(
         self,

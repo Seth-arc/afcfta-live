@@ -68,7 +68,11 @@ class EligibilityService:
         case_id: str,
         request: CaseAssessmentRequest,
     ) -> EligibilityAssessmentResponse:
-        """Load one stored case, rehydrate its facts, and assess it through the direct path."""
+        """Load one stored case, rehydrate its facts, and assess it through the direct path.
+
+        Because the hydrated request carries the originating case_id, both successful and
+        failed engine outcomes follow the normal evaluation-persistence path.
+        """
 
         eligibility_request = await self._build_request_from_case(case_id=case_id, year=request.year)
         return await self.assess(eligibility_request)

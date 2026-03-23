@@ -223,6 +223,39 @@ async def test_get_evaluations_for_case_returns_newest_first(
 
 
 @pytest.mark.asyncio
+async def test_get_latest_evaluation_for_case_returns_newest_row(
+    repositories: tuple[AsyncSession, CasesRepository, EvaluationsRepository],
+) -> None:
+    """Latest-evaluation lookup should return only the newest stored row for a case."""
+
+    session, cases_repository, evaluations_repository = repositories
+    case_id = await _create_case(session, cases_repository)
+    await evaluations_repository.persist_evaluation(
+        _evaluation_payload(
+            case_id=case_id,
+            evaluation_date=date(2025, 1, 1),
+            overall_outcome="not_eligible",
+        ),
+        [],
+    )
+    newest = await evaluations_repository.persist_evaluation(
+        _evaluation_payload(
+            case_id=case_id,
+            evaluation_date=date(2025, 1, 7),
+            overall_outcome="eligible",
+        ),
+        [],
+    )
+    await session.commit()
+
+    latest = await evaluations_repository.get_latest_evaluation_for_case(case_id)
+
+    assert latest is not None
+    assert str(latest["evaluation_id"]) == str(newest["evaluation"]["evaluation_id"])
+    assert latest["evaluation_date"] == date(2025, 1, 7)
+
+
+@pytest.mark.asyncio
 async def test_get_evaluation_with_checks_returns_none_for_missing_id(
     repositories: tuple[AsyncSession, CasesRepository, EvaluationsRepository],
 ) -> None:
@@ -348,3 +381,30 @@ async def test_persist_evaluation_accepts_mixed_check_shapes_in_one_batch(
         "classification",
         "status",
     }
+
+
+@pytest.mark.asyncio
+async def test_persist_evaluation_rolls_back_header_when_check_batch_fails(
+    repositories: tuple[AsyncSession, CasesRepository, EvaluationsRepository],
+) -> None:
+    """Evaluation persistence should remain atomic when a later check row normalization fails."""
+
+    session, cases_repository, evaluations_repository = repositories
+    case_id = await _create_case(session, cases_repository)
+
+    with pytest.raises(KeyError):
+        await evaluations_repository.persist_evaluation(
+            _evaluation_payload(case_id=case_id, evaluation_date=date(2025, 1, 8)),
+            [
+                {
+                    "check_code": "BROKEN_ROW",
+                    "passed": False,
+                    "severity": "major",
+                    "explanation": "This malformed row should abort the transaction.",
+                }
+            ],
+        )
+
+    await session.rollback()
+    evaluations = await evaluations_repository.get_evaluations_for_case(case_id)
+    assert evaluations == []

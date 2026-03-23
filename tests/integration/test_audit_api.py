@@ -256,6 +256,61 @@ async def test_list_case_evaluations_returns_newest_first(async_client: AsyncCli
 
 
 @pytest.mark.asyncio
+async def test_get_latest_case_audit_trail_returns_newest_persisted_evaluation(
+    async_client: AsyncClient,
+) -> None:
+    """Latest-by-case replay should return the newest stored evaluation without requiring evaluation_id."""
+
+    facts = {
+        "tariff_heading_input": "9999",
+        "tariff_heading_output": "1103",
+        "non_originating_inputs": [{"hs4_code": "9999", "hs6_code": "999900"}],
+        "output_hs6_code": "110311",
+        "direct_transport": True,
+        "cumulation_claimed": False,
+    }
+    case_id = await _create_case_with_facts(
+        hs6_code="110311",
+        exporter="GHA",
+        importer="NGA",
+        facts=facts,
+    )
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        evaluations_repository = EvaluationsRepository(session)
+        older = await evaluations_repository.persist_evaluation(
+            _evaluation_payload(
+                case_id=case_id,
+                evaluation_date=date(2024, 1, 1),
+                overall_outcome="not_eligible",
+                confidence_class="incomplete",
+                pathway_used=None,
+            ),
+            [],
+        )
+        newer = await evaluations_repository.persist_evaluation(
+            _evaluation_payload(
+                case_id=case_id,
+                evaluation_date=date(2025, 1, 1),
+                overall_outcome="eligible",
+                confidence_class="complete",
+                pathway_used="CTH",
+            ),
+            [],
+        )
+        await session.commit()
+
+    response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["evaluation"]["evaluation_id"] == str(newer["evaluation"]["evaluation_id"])
+    assert body["evaluation"]["evaluation_id"] != str(older["evaluation"]["evaluation_id"])
+    assert body["evaluation"]["case_id"] == case_id
+
+
+@pytest.mark.asyncio
 async def test_special_cth_facts_round_trip_through_assessment_and_audit_replay(
     async_client: AsyncClient,
 ) -> None:
@@ -368,3 +423,35 @@ async def test_case_assessment_endpoint_matches_direct_assessment_response(
     history_body = history_response.json()
     assert len(history_body) >= 2
     assert all(item["case_id"] == case_id for item in history_body[:2])
+
+
+@pytest.mark.asyncio
+async def test_failed_case_backed_assessment_persists_and_replays_immediately(
+    async_client: AsyncClient,
+) -> None:
+    """A failed assess-by-case run should still persist evaluation and be replayable immediately."""
+
+    case_id = await _create_case_with_facts(
+        hs6_code="110311",
+        exporter="GHA",
+        importer="NGA",
+        facts={"direct_transport": True},
+    )
+
+    assessment_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": 2025},
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    assert assessment_body["eligible"] is False
+    assert "MISSING_CORE_FACTS" in assessment_body["failures"]
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+
+    assert latest_body["evaluation"]["case_id"] == case_id
+    assert latest_body["final_decision"]["eligible"] is False
+    assert "MISSING_CORE_FACTS" in latest_body["final_decision"]["failure_codes"]
+    assert latest_body["evaluation"]["overall_outcome"] == "insufficient_information"

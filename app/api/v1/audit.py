@@ -33,3 +33,13 @@ async def list_case_evaluations(
     """Return all persisted evaluations stored for one case id."""
 
     return await audit_service.get_evaluations_for_case(case_id)
+
+
+@router.get("/audit/cases/{case_id}/latest", response_model=AuditTrail)
+async def get_latest_case_audit_trail(
+    case_id: str,
+    audit_service: AuditService = Depends(get_audit_service),
+) -> AuditTrail:
+    """Return the latest persisted audit trail for one case id."""
+
+    return await audit_service.get_latest_decision_trace(case_id)

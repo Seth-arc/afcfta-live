@@ -5,6 +5,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from scripts.parsers.artifact_contracts import (
+    ArtifactValidationIssue,
+    ArtifactValidationResult,
+    normalize_text as normalize_contract_text,
+    parse_int,
+)
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 RULES_INPUT_PATH = ROOT_DIR / "data" / "processed" / "rules" / "appendix_iv_pathways.csv"
@@ -18,6 +25,13 @@ OUTPUT_FIELDNAMES = [
     "applicability_type",
     "priority_rank",
 ]
+
+VALID_APPLICABILITY_TYPES = {
+    "direct": 1,
+    "range": 1,
+    "inherited_heading": 2,
+    "inherited_chapter": 3,
+}
 
 
 @dataclass(slots=True)
@@ -192,6 +206,89 @@ def applicability_summary(rows: list[ApplicabilityRow]) -> dict[str, int]:
     for row in rows:
         counts[row.applicability_type] += 1
     return dict(counts)
+
+
+def _row_key(row: dict[str, str]) -> str:
+    return "|".join(
+        [
+            normalize_contract_text(row.get("hs6_code")),
+            normalize_contract_text(row.get("hs6_id")),
+            normalize_contract_text(row.get("psr_hs_code")),
+        ]
+    )
+
+
+def _issue(row_number: int, field: str, message: str, row: dict[str, str], value: object | None = None) -> ArtifactValidationIssue:
+    return ArtifactValidationIssue(
+        artifact_type="applicability",
+        row_number=row_number,
+        field=field,
+        message=message,
+        row_key=_row_key(row),
+        value=normalize_contract_text(value),
+    )
+
+
+def validate_output_rows(rows: list[dict[str, str]]) -> ArtifactValidationResult:
+    issues: list[ArtifactValidationIssue] = []
+    seen_hs6_ids: dict[str, int] = {}
+
+    for row_number, row in enumerate(rows, start=1):
+        hs6_code = normalize_contract_text(row.get("hs6_code"))
+        hs6_id = normalize_contract_text(row.get("hs6_id"))
+        psr_hs_code = normalize_contract_text(row.get("psr_hs_code"))
+        applicability_type = normalize_contract_text(row.get("applicability_type"))
+        priority_rank = parse_int(row.get("priority_rank"))
+
+        if len(hs6_code) != 6 or not hs6_code.isdigit():
+            issues.append(_issue(row_number, "hs6_code", "hs6_code must be a 6-digit HS6 code", row, hs6_code))
+        if not hs6_id:
+            issues.append(_issue(row_number, "hs6_id", "hs6_id is required", row))
+        if not psr_hs_code:
+            issues.append(_issue(row_number, "psr_hs_code", "psr_hs_code is required", row))
+        if applicability_type not in VALID_APPLICABILITY_TYPES:
+            issues.append(
+                _issue(
+                    row_number,
+                    "applicability_type",
+                    "applicability_type must match the staged promotion contract",
+                    row,
+                    applicability_type,
+                )
+            )
+        expected_priority = VALID_APPLICABILITY_TYPES.get(applicability_type)
+        if priority_rank is None or priority_rank < 1:
+            issues.append(_issue(row_number, "priority_rank", "priority_rank must be a positive integer", row, row.get("priority_rank")))
+        elif expected_priority is not None and priority_rank != expected_priority:
+            issues.append(
+                _issue(
+                    row_number,
+                    "priority_rank",
+                    "priority_rank must match applicability_type precedence",
+                    row,
+                    priority_rank,
+                )
+            )
+
+        previous_row_number = seen_hs6_ids.get(hs6_id)
+        if previous_row_number is not None:
+            issues.append(
+                _issue(
+                    row_number,
+                    "hs6_id",
+                    f"Each hs6_id must resolve to a single promoted applicability row; duplicate first seen at row {previous_row_number}",
+                    row,
+                    hs6_id,
+                )
+            )
+        else:
+            seen_hs6_ids[hs6_id] = row_number
+
+    return ArtifactValidationResult(
+        artifact_type="applicability",
+        total_rows=len(rows),
+        issues=tuple(issues),
+    )
 
 
 def validate_test_vector_8() -> bool:

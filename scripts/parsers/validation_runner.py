@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import text
 
 from app.core.enums import HsLevelEnum, RuleComponentTypeEnum, RuleStatusEnum
 from app.db.base import get_async_session_factory
+from scripts.parsers.applicability_builder import validate_output_rows as validate_applicability_output_rows
+from scripts.parsers.artifact_contracts import ArtifactValidationResult, ParserArtifactValidationError
+from scripts.parsers.pathway_builder import validate_output_rows as validate_pathway_output_rows
+from scripts.parsers.rule_decomposer import validate_output_rows as validate_decomposed_output_rows
 
 
 VALID_RULE_STATUSES = tuple(member.value for member in RuleStatusEnum)
 VALID_COMPONENT_TYPES = tuple(member.value for member in RuleComponentTypeEnum)
 VALID_HS_LEVELS = tuple(member.value for member in HsLevelEnum)
+ROOT_DIR = Path(__file__).resolve().parents[2]
+DECOMPOSED_INPUT_PATH = ROOT_DIR / "data" / "staged" / "raw_csv" / "appendix_iv_decomposed.csv"
+PATHWAYS_INPUT_PATH = ROOT_DIR / "data" / "processed" / "rules" / "appendix_iv_pathways.csv"
+APPLICABILITY_INPUT_PATH = ROOT_DIR / "data" / "processed" / "rules" / "appendix_iv_applicability.csv"
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,68 @@ def format_status(passed: bool) -> str:
 def sql_literal_list(values: tuple[str, ...]) -> str:
     quoted_values = ", ".join(f"'{value}'" for value in values)
     return f"({quoted_values})"
+
+
+def read_rows(input_path: Path) -> list[dict[str, str]]:
+    with input_path.open("r", newline="", encoding="utf-8") as csv_file:
+        return list(csv.DictReader(csv_file))
+
+
+def run_parser_artifact_checks(
+    decomposed_rows: list[dict[str, str]] | None = None,
+    pathway_rows: list[dict[str, str]] | None = None,
+    applicability_rows: list[dict[str, str]] | None = None,
+) -> list[ArtifactValidationResult]:
+    if decomposed_rows is None:
+        if not DECOMPOSED_INPUT_PATH.exists():
+            raise FileNotFoundError(f"Required input CSV not found: {DECOMPOSED_INPUT_PATH}")
+        decomposed_rows = read_rows(DECOMPOSED_INPUT_PATH)
+    if pathway_rows is None:
+        if not PATHWAYS_INPUT_PATH.exists():
+            raise FileNotFoundError(f"Required input CSV not found: {PATHWAYS_INPUT_PATH}")
+        pathway_rows = read_rows(PATHWAYS_INPUT_PATH)
+    if applicability_rows is None:
+        if not APPLICABILITY_INPUT_PATH.exists():
+            raise FileNotFoundError(f"Required input CSV not found: {APPLICABILITY_INPUT_PATH}")
+        applicability_rows = read_rows(APPLICABILITY_INPUT_PATH)
+
+    return [
+        validate_decomposed_output_rows(decomposed_rows),
+        validate_pathway_output_rows(pathway_rows),
+        validate_applicability_output_rows(applicability_rows),
+    ]
+
+
+def parser_artifact_check_results(results: list[ArtifactValidationResult]) -> list[CheckResult]:
+    check_results: list[CheckResult] = []
+    for result in results:
+        detail = f"rows={result.total_rows}, invalid_rows={result.invalid_rows}, issues={len(result.issues)}"
+        if result.issues:
+            detail = f"{detail}, sample={result.issues[0].render()}"
+        check_results.append(
+            CheckResult(
+                name=f"{result.artifact_type} contract validation",
+                passed=result.passed,
+                detail=detail,
+            )
+        )
+    return check_results
+
+
+def enforce_parser_artifact_contracts(
+    decomposed_rows: list[dict[str, str]] | None = None,
+    pathway_rows: list[dict[str, str]] | None = None,
+    applicability_rows: list[dict[str, str]] | None = None,
+) -> list[ArtifactValidationResult]:
+    results = run_parser_artifact_checks(
+        decomposed_rows=decomposed_rows,
+        pathway_rows=pathway_rows,
+        applicability_rows=applicability_rows,
+    )
+    failed_results = [result for result in results if not result.passed]
+    if failed_results:
+        raise ParserArtifactValidationError(failed_results)
+    return results
 
 
 async def scalar(session, sql: str, params: dict[str, object] | None = None):
@@ -269,7 +341,8 @@ async def run_checks() -> list[CheckResult]:
 
 
 async def main() -> int:
-    results = await run_checks()
+    results = parser_artifact_check_results(run_parser_artifact_checks())
+    results.extend(await run_checks())
     pass_count = sum(1 for result in results if result.passed)
     fail_count = len(results) - pass_count
 

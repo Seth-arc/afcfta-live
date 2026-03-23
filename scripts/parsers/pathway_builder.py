@@ -6,6 +6,16 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from app.core.enums import HsLevelEnum, RuleStatusEnum, ThresholdBasisEnum
+from scripts.parsers.artifact_contracts import (
+    ArtifactValidationIssue,
+    ArtifactValidationResult,
+    normalize_text as normalize_contract_text,
+    parse_bool_string,
+    parse_float,
+    parse_int,
+)
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 INPUT_PATH = ROOT_DIR / "data" / "staged" / "raw_csv" / "appendix_iv_decomposed.csv"
@@ -51,6 +61,16 @@ LEAF_LABELS = {
     "CC": "Change of Chapter",
     "PROCESS": "Specific Process",
     "NOTE": "Manual Review Required",
+}
+
+VALID_RULE_STATUSES = {member.value for member in RuleStatusEnum}
+VALID_HS_LEVELS = {member.value for member in HsLevelEnum}
+VALID_THRESHOLD_BASES = {member.value for member in ThresholdBasisEnum}
+VALID_PATHWAY_COMPONENT_CODES = {"WO", "CTH", "CTSH", "CC", "VNM", "VA", "PROCESS", "NOTE"}
+NULL_EXPRESSION_CODES = {"PROCESS", "NOTE"}
+VARIABLE_NAME_TO_FORMULA = {
+    definition["name"]: definition["formula"]
+    for definition in VARIABLE_DEFS.values()
 }
 
 
@@ -336,6 +356,280 @@ def pathway_summary(pathway_rows: list[PathwayRecord]) -> list[dict[str, object]
             }
         )
     return summaries
+
+
+def _row_key(row: dict[str, str]) -> str:
+    return "|".join(
+        [
+            normalize_contract_text(row.get("hs_code")),
+            normalize_contract_text(row.get("page_ref")),
+            normalize_contract_text(row.get("pathway_code")),
+        ]
+    )
+
+
+def _issue(row_number: int, field: str, message: str, row: dict[str, str], value: object | None = None) -> ArtifactValidationIssue:
+    return ArtifactValidationIssue(
+        artifact_type="pathways",
+        row_number=row_number,
+        field=field,
+        message=message,
+        row_key=_row_key(row),
+        value=normalize_contract_text(value),
+    )
+
+
+def _validate_expression_node(
+    node: object,
+    row_number: int,
+    row: dict[str, str],
+    field_prefix: str,
+) -> list[ArtifactValidationIssue]:
+    issues: list[ArtifactValidationIssue] = []
+    if not isinstance(node, dict):
+        return [_issue(row_number, field_prefix, "expression nodes must be JSON objects", row, node)]
+
+    op = node.get("op")
+    if not isinstance(op, str):
+        return [_issue(row_number, field_prefix, "expression nodes must include string op", row, op)]
+
+    if op in {"all", "any"}:
+        args = node.get("args")
+        if not isinstance(args, list) or not args:
+            issues.append(_issue(row_number, f"{field_prefix}.args", f"{op} requires a non-empty args list", row, args))
+            return issues
+        for index, child in enumerate(args):
+            issues.extend(_validate_expression_node(child, row_number, row, f"{field_prefix}.args[{index}]"))
+        return issues
+
+    if op == "formula_lte":
+        if node.get("formula") != "vnom_percent":
+            issues.append(_issue(row_number, f"{field_prefix}.formula", "formula_lte must target vnom_percent", row, node.get("formula")))
+        if not isinstance(node.get("value"), (int, float)):
+            issues.append(_issue(row_number, f"{field_prefix}.value", "formula_lte requires numeric value", row, node.get("value")))
+        return issues
+
+    if op == "formula_gte":
+        if node.get("formula") != "va_percent":
+            issues.append(_issue(row_number, f"{field_prefix}.formula", "formula_gte must target va_percent", row, node.get("formula")))
+        if not isinstance(node.get("value"), (int, float)):
+            issues.append(_issue(row_number, f"{field_prefix}.value", "formula_gte requires numeric value", row, node.get("value")))
+        return issues
+
+    if op == "fact_eq":
+        if not isinstance(node.get("fact"), str):
+            issues.append(_issue(row_number, f"{field_prefix}.fact", "fact_eq requires a fact name", row, node.get("fact")))
+        if "value" not in node:
+            issues.append(_issue(row_number, f"{field_prefix}.value", "fact_eq requires value", row))
+        return issues
+
+    if op == "fact_ne":
+        if not isinstance(node.get("fact"), str):
+            issues.append(_issue(row_number, f"{field_prefix}.fact", "fact_ne requires a fact name", row, node.get("fact")))
+        if "value" not in node and not isinstance(node.get("ref_fact"), str):
+            issues.append(
+                _issue(row_number, f"{field_prefix}.ref_fact", "fact_ne requires value or ref_fact", row, node.get("ref_fact"))
+            )
+        return issues
+
+    if op == "every_non_originating_input":
+        test = node.get("test")
+        if not isinstance(test, dict):
+            issues.append(_issue(row_number, f"{field_prefix}.test", "every_non_originating_input requires test object", row, test))
+            return issues
+        test_op = test.get("op")
+        if test_op not in {"heading_ne_output", "subheading_ne_output"}:
+            issues.append(
+                _issue(
+                    row_number,
+                    f"{field_prefix}.test.op",
+                    "every_non_originating_input test op must be runtime-supported",
+                    row,
+                    test_op,
+                )
+            )
+        exceptions = node.get("exceptions")
+        if exceptions is not None and not isinstance(exceptions, str):
+            issues.append(
+                _issue(row_number, f"{field_prefix}.exceptions", "exceptions must preserve verbatim text as a string", row, exceptions)
+            )
+        return issues
+
+    issues.append(_issue(row_number, field_prefix, "Unsupported expression op for the runtime contract", row, op))
+    return issues
+
+
+def validate_output_rows(rows: list[dict[str, str]]) -> ArtifactValidationResult:
+    issues: list[ArtifactValidationIssue] = []
+    priorities_by_rule: dict[tuple[str, str, str, str], list[tuple[int, int]]] = defaultdict(list)
+
+    for row_number, row in enumerate(rows, start=1):
+        hs_code = normalize_contract_text(row.get("hs_code"))
+        hs_level = normalize_contract_text(row.get("hs_level"))
+        legal_rule_text = normalize_contract_text(row.get("legal_rule_text_verbatim"))
+        rule_status = normalize_contract_text(row.get("rule_status"))
+        pathway_code = normalize_contract_text(row.get("pathway_code"))
+        pathway_label = normalize_contract_text(row.get("pathway_label"))
+        pathway_type = normalize_contract_text(row.get("pathway_type"))
+        threshold_percent = parse_float(row.get("threshold_percent"))
+        threshold_basis = normalize_contract_text(row.get("threshold_basis"))
+        tariff_shift_level = normalize_contract_text(row.get("tariff_shift_level"))
+        allows_cumulation = parse_bool_string(row.get("allows_cumulation"))
+        allows_tolerance = parse_bool_string(row.get("allows_tolerance"))
+        priority_rank = parse_int(row.get("priority_rank"))
+        confidence_score = parse_float(row.get("confidence_score"))
+        page_ref = parse_int(row.get("page_ref"))
+        expression_json = normalize_contract_text(row.get("expression_json"))
+
+        if not hs_code:
+            issues.append(_issue(row_number, "hs_code", "hs_code is required", row))
+        if hs_level not in VALID_HS_LEVELS:
+            issues.append(_issue(row_number, "hs_level", "hs_level must match the runtime enum", row, hs_level))
+        if not legal_rule_text:
+            issues.append(_issue(row_number, "legal_rule_text_verbatim", "Verbatim legal text is required", row))
+        if rule_status not in VALID_RULE_STATUSES:
+            issues.append(_issue(row_number, "rule_status", "rule_status must match the runtime enum", row, rule_status))
+        if not pathway_label:
+            issues.append(_issue(row_number, "pathway_label", "pathway_label is required", row))
+        if pathway_type != "specific":
+            issues.append(_issue(row_number, "pathway_type", "Only specific pathways are supported in v0.1 parser artifacts", row, pathway_type))
+        if allows_cumulation is None:
+            issues.append(_issue(row_number, "allows_cumulation", "allows_cumulation must be True or False", row, row.get("allows_cumulation")))
+        if allows_tolerance is None:
+            issues.append(_issue(row_number, "allows_tolerance", "allows_tolerance must be True or False", row, row.get("allows_tolerance")))
+        if priority_rank is None or priority_rank < 1:
+            issues.append(_issue(row_number, "priority_rank", "priority_rank must be a positive integer", row, row.get("priority_rank")))
+        if confidence_score is None or not 0.0 <= confidence_score <= 1.0:
+            issues.append(_issue(row_number, "confidence_score", "confidence_score must be between 0.0 and 1.0", row, row.get("confidence_score")))
+        if page_ref is None or page_ref < 1:
+            issues.append(_issue(row_number, "page_ref", "page_ref must be a positive integer", row, row.get("page_ref")))
+
+        pathway_codes = pathway_code.split("+") if pathway_code else []
+        if not pathway_codes:
+            issues.append(_issue(row_number, "pathway_code", "pathway_code is required", row))
+        for code in pathway_codes:
+            if code not in VALID_PATHWAY_COMPONENT_CODES:
+                issues.append(_issue(row_number, "pathway_code", "pathway_code contains unsupported component code", row, code))
+
+        if any(code == "WO" for code in pathway_codes):
+            if allows_cumulation is not False or allows_tolerance is not False:
+                issues.append(_issue(row_number, "allows_cumulation", "WO pathways must disable cumulation and tolerance", row))
+
+        if any(code in {"VNM", "VA"} for code in pathway_codes):
+            if threshold_percent is None:
+                issues.append(_issue(row_number, "threshold_percent", "Threshold pathways require threshold_percent", row))
+            if threshold_basis not in VALID_THRESHOLD_BASES:
+                issues.append(_issue(row_number, "threshold_basis", "Threshold pathways require runtime-supported threshold_basis", row, threshold_basis))
+        elif threshold_percent is not None or threshold_basis:
+            issues.append(_issue(row_number, "threshold_percent", "Non-threshold pathways must not declare threshold fields", row))
+
+        if any(code in {"CTH", "CTSH", "CC"} for code in pathway_codes) and not tariff_shift_level:
+            issues.append(_issue(row_number, "tariff_shift_level", "Tariff-shift pathways require tariff_shift_level", row))
+
+        try:
+            payload = json.loads(expression_json)
+        except json.JSONDecodeError as exc:
+            issues.append(_issue(row_number, "expression_json", f"expression_json must be valid JSON: {exc.msg}", row))
+            payload = None
+
+        if isinstance(payload, dict):
+            if payload.get("pathway_code") != pathway_code:
+                issues.append(
+                    _issue(row_number, "expression_json.pathway_code", "Wrapped payload pathway_code must match row pathway_code", row, payload.get("pathway_code"))
+                )
+
+            variables = payload.get("variables")
+            if not isinstance(variables, list):
+                issues.append(_issue(row_number, "expression_json.variables", "variables must be a list", row, variables))
+                variables = []
+
+            seen_variable_names: set[str] = set()
+            for index, variable in enumerate(variables):
+                if not isinstance(variable, dict):
+                    issues.append(_issue(row_number, f"expression_json.variables[{index}]", "Each variable must be an object", row, variable))
+                    continue
+                variable_name = variable.get("name")
+                variable_formula = variable.get("formula")
+                if variable_name not in VARIABLE_NAME_TO_FORMULA:
+                    issues.append(
+                        _issue(row_number, f"expression_json.variables[{index}].name", "Unsupported derived variable", row, variable_name)
+                    )
+                    continue
+                if VARIABLE_NAME_TO_FORMULA[variable_name] != variable_formula:
+                    issues.append(
+                        _issue(row_number, f"expression_json.variables[{index}].formula", "Derived variable formula must match the runtime contract", row, variable_formula)
+                    )
+                if variable_name in seen_variable_names:
+                    issues.append(
+                        _issue(row_number, f"expression_json.variables[{index}].name", "Derived variables must not be duplicated", row, variable_name)
+                    )
+                seen_variable_names.add(variable_name)
+
+            required_variables = set()
+            if "VNM" in pathway_codes:
+                required_variables.add("vnom_percent")
+            if "VA" in pathway_codes:
+                required_variables.add("va_percent")
+            if seen_variable_names != required_variables:
+                issues.append(
+                    _issue(
+                        row_number,
+                        "expression_json.variables",
+                        "Derived variables must exactly match the threshold components in the pathway",
+                        row,
+                        sorted(seen_variable_names),
+                    )
+                )
+
+            expression = payload.get("expression")
+            if expression is None:
+                if not pathway_codes or not all(code in NULL_EXPRESSION_CODES for code in pathway_codes):
+                    issues.append(
+                        _issue(row_number, "expression_json.expression", "Null expressions are only allowed for NOTE/PROCESS manual-review pathways", row)
+                    )
+            else:
+                issues.extend(_validate_expression_node(expression, row_number, row, "expression_json.expression"))
+                if "CC" in pathway_codes:
+                    issues.append(
+                        _issue(
+                            row_number,
+                            "expression_json.expression",
+                            "CC pathways are not executable in the v0.1 runtime because the grammar only supports heading/subheading tariff-shift tests",
+                            row,
+                            pathway_code,
+                        )
+                    )
+
+        rule_key = (
+            hs_code,
+            hs_level,
+            normalize_contract_text(row.get("product_description")),
+            legal_rule_text,
+        )
+        priorities_by_rule[rule_key].append((row_number, priority_rank or 0))
+
+    for entries in priorities_by_rule.values():
+        ordered = sorted(entries, key=lambda item: item[1])
+        expected = list(range(1, len(ordered) + 1))
+        actual = [priority for _, priority in ordered]
+        if actual != expected:
+            row_number = ordered[0][0]
+            row = rows[row_number - 1]
+            issues.append(
+                _issue(
+                    row_number,
+                    "priority_rank",
+                    "priority_rank values must be contiguous within each rule's OR alternatives",
+                    row,
+                    actual,
+                )
+            )
+
+    return ArtifactValidationResult(
+        artifact_type="pathways",
+        total_rows=len(rows),
+        issues=tuple(issues),
+    )
 
 
 def component_row(component_type: str, operator_type: str, component_order: int, **kwargs: object) -> dict[str, str]:

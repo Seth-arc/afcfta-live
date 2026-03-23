@@ -5,6 +5,15 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.enums import HsLevelEnum, OperatorTypeEnum, RuleComponentTypeEnum, ThresholdBasisEnum
+from scripts.parsers.artifact_contracts import (
+    ArtifactValidationIssue,
+    ArtifactValidationResult,
+    normalize_text as normalize_contract_text,
+    parse_float,
+    parse_int,
+)
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 INPUT_PATH = ROOT_DIR / "data" / "staged" / "raw_csv" / "appendix_iv_hs_normalized.csv"
@@ -58,6 +67,11 @@ RULE_START_RE = re.compile(
     r"Manufacture\s+(?:from|in\s+which)|Processing\s+from|Production\s+from|"
     r"Wholly\s+obtained|minimum\s+.*?value\s+added|value\s+of\s+.*?non[\s-]?originating)"
 )
+
+VALID_COMPONENT_TYPES = {member.value for member in RuleComponentTypeEnum}
+VALID_OPERATOR_TYPES = {member.value for member in OperatorTypeEnum}
+VALID_HS_LEVELS = {member.value for member in HsLevelEnum}
+VALID_THRESHOLD_BASES = {member.value for member in ThresholdBasisEnum}
 
 
 @dataclass(slots=True)
@@ -338,6 +352,174 @@ def _component_summary(components: list[RuleComponent]) -> list[dict[str, object
         }
         for component in components
     ]
+
+
+def _row_key(row: dict[str, str]) -> str:
+    return "|".join(
+        [
+            normalize_contract_text(row.get("hs_code")),
+            normalize_contract_text(row.get("page_num")),
+            normalize_contract_text(row.get("raw_rule_text"))[:80],
+        ]
+    )
+
+
+def _issue(row_number: int, field: str, message: str, row: dict[str, str], value: object | None = None) -> ArtifactValidationIssue:
+    return ArtifactValidationIssue(
+        artifact_type="decomposed",
+        row_number=row_number,
+        field=field,
+        message=message,
+        row_key=_row_key(row),
+        value=normalize_contract_text(value),
+    )
+
+
+def validate_output_rows(rows: list[dict[str, str]]) -> ArtifactValidationResult:
+    issues: list[ArtifactValidationIssue] = []
+    grouped_orders: dict[tuple[str, str, str, str], list[tuple[int, dict[str, str]]]] = {}
+
+    for row_number, row in enumerate(rows, start=1):
+        hs_code = normalize_contract_text(row.get("hs_code"))
+        hs_level = normalize_contract_text(row.get("hs_level"))
+        raw_rule_text = normalize_contract_text(row.get("raw_rule_text"))
+        component_type = normalize_contract_text(row.get("component_type"))
+        operator_type = normalize_contract_text(row.get("operator_type")) or OperatorTypeEnum.STANDALONE.value
+        component_order = parse_int(row.get("component_order"))
+        threshold_percent = parse_float(row.get("threshold_percent"))
+        threshold_basis = normalize_contract_text(row.get("threshold_basis"))
+        tariff_shift_level = normalize_contract_text(row.get("tariff_shift_level"))
+        specific_process_text = normalize_contract_text(row.get("specific_process_text"))
+        normalized_expression = normalize_contract_text(row.get("normalized_expression"))
+        confidence_score = parse_float(row.get("confidence_score"))
+        page_num = parse_int(row.get("page_num"))
+
+        if not raw_rule_text:
+            issues.append(_issue(row_number, "raw_rule_text", "Verbatim legal text is required", row))
+        if not hs_code:
+            issues.append(_issue(row_number, "hs_code", "HS code is required", row))
+        if hs_level not in VALID_HS_LEVELS:
+            issues.append(_issue(row_number, "hs_level", "HS level must match the runtime enum", row, hs_level))
+        if page_num is None or page_num < 1:
+            issues.append(_issue(row_number, "page_num", "page_num must be a positive integer", row, row.get("page_num")))
+        if component_type not in VALID_COMPONENT_TYPES:
+            issues.append(
+                _issue(row_number, "component_type", "component_type must match the runtime enum", row, component_type)
+            )
+        if operator_type not in VALID_OPERATOR_TYPES:
+            issues.append(
+                _issue(row_number, "operator_type", "operator_type must match the runtime enum", row, operator_type)
+            )
+        if component_order is None or component_order < 1:
+            issues.append(
+                _issue(row_number, "component_order", "component_order must be a positive integer", row, row.get("component_order"))
+            )
+        if confidence_score is None or not 0.0 <= confidence_score <= 1.0:
+            issues.append(
+                _issue(row_number, "confidence_score", "confidence_score must be between 0.0 and 1.0", row, row.get("confidence_score"))
+            )
+
+        if component_type == "WO":
+            if normalized_expression != "wholly_obtained == true":
+                issues.append(
+                    _issue(row_number, "normalized_expression", "WO rows must use the canonical wholly_obtained expression", row, normalized_expression)
+                )
+            if any(value is not None for value in (threshold_percent,)) or threshold_basis or tariff_shift_level:
+                issues.append(_issue(row_number, "threshold_percent", "WO rows must not define threshold or tariff-shift fields", row))
+        elif component_type == "CTH":
+            if tariff_shift_level != HsLevelEnum.HEADING.value:
+                issues.append(_issue(row_number, "tariff_shift_level", "CTH rows must use heading tariff_shift_level", row, tariff_shift_level))
+            if not normalized_expression.startswith("heading_ne_output"):
+                issues.append(
+                    _issue(row_number, "normalized_expression", "CTH rows must use the canonical heading_ne_output expression", row, normalized_expression)
+                )
+        elif component_type == "CTSH":
+            if tariff_shift_level != HsLevelEnum.SUBHEADING.value:
+                issues.append(_issue(row_number, "tariff_shift_level", "CTSH rows must use subheading tariff_shift_level", row, tariff_shift_level))
+            if normalized_expression != "subheading_ne_output":
+                issues.append(
+                    _issue(row_number, "normalized_expression", "CTSH rows must use the canonical subheading_ne_output expression", row, normalized_expression)
+                )
+        elif component_type == "CC":
+            if tariff_shift_level != HsLevelEnum.CHAPTER.value:
+                issues.append(_issue(row_number, "tariff_shift_level", "CC rows must use chapter tariff_shift_level", row, tariff_shift_level))
+            if normalized_expression != "chapter_ne_output":
+                issues.append(
+                    _issue(row_number, "normalized_expression", "CC rows must preserve the parser chapter_ne_output marker", row, normalized_expression)
+                )
+        elif component_type == "VNM":
+            if threshold_percent is None:
+                issues.append(_issue(row_number, "threshold_percent", "VNM rows require threshold_percent", row))
+            if threshold_basis not in VALID_THRESHOLD_BASES:
+                issues.append(
+                    _issue(row_number, "threshold_basis", "VNM rows require a runtime-supported threshold_basis", row, threshold_basis)
+                )
+            expected_expression = f"vnom_percent <= {threshold_percent:g}" if threshold_percent is not None else ""
+            if threshold_percent is not None and normalized_expression != expected_expression:
+                issues.append(
+                    _issue(row_number, "normalized_expression", "VNM normalized_expression must match threshold_percent", row, normalized_expression)
+                )
+        elif component_type == "VA":
+            if threshold_percent is None:
+                issues.append(_issue(row_number, "threshold_percent", "VA rows require threshold_percent", row))
+            if threshold_basis not in {ThresholdBasisEnum.EX_WORKS.value, ThresholdBasisEnum.FOB.value}:
+                issues.append(
+                    _issue(row_number, "threshold_basis", "VA rows require ex_works or fob threshold_basis", row, threshold_basis)
+                )
+            expected_expression = f"va_percent >= {threshold_percent:g}" if threshold_percent is not None else ""
+            if threshold_percent is not None and normalized_expression != expected_expression:
+                issues.append(
+                    _issue(row_number, "normalized_expression", "VA normalized_expression must match threshold_percent", row, normalized_expression)
+                )
+        elif component_type in {"PROCESS", "NOTE"}:
+            if normalized_expression:
+                issues.append(
+                    _issue(row_number, "normalized_expression", f"{component_type} rows must not declare normalized_expression", row, normalized_expression)
+                )
+            if not specific_process_text:
+                issues.append(
+                    _issue(row_number, "specific_process_text", f"{component_type} rows must preserve the verbatim legal text", row)
+                )
+
+        group_key = (
+            normalize_contract_text(row.get("page_num")),
+            hs_code,
+            normalize_contract_text(row.get("raw_description")),
+            raw_rule_text,
+        )
+        grouped_orders.setdefault(group_key, []).append((row_number, row))
+
+    for entries in grouped_orders.values():
+        ordered_entries = sorted(entries, key=lambda item: parse_int(item[1].get("component_order")) or 0)
+        component_orders = [parse_int(row.get("component_order")) or 0 for _, row in ordered_entries]
+        expected_orders = list(range(1, len(component_orders) + 1))
+        if component_orders != expected_orders:
+            issues.append(
+                _issue(
+                    ordered_entries[0][0],
+                    "component_order",
+                    "component_order values must be contiguous within each decomposed rule",
+                    ordered_entries[0][1],
+                    component_orders,
+                )
+            )
+
+        for index, (row_number, row) in enumerate(ordered_entries):
+            operator_type = normalize_contract_text(row.get("operator_type")) or OperatorTypeEnum.STANDALONE.value
+            if index == 0 and operator_type != OperatorTypeEnum.STANDALONE.value:
+                issues.append(
+                    _issue(row_number, "operator_type", "The first component in a decomposed rule must be standalone", row, operator_type)
+                )
+            if index > 0 and operator_type == OperatorTypeEnum.STANDALONE.value:
+                issues.append(
+                    _issue(row_number, "operator_type", "Subsequent components must use and/or connectors", row, operator_type)
+                )
+
+    return ArtifactValidationResult(
+        artifact_type="decomposed",
+        total_rows=len(rows),
+        issues=tuple(issues),
+    )
 
 
 def validate_test_vectors() -> list[tuple[str, bool]]:

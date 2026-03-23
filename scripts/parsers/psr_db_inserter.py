@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.enums import HsLevelEnum, OperatorTypeEnum, RuleComponentTypeEnum, RuleStatusEnum, ThresholdBasisEnum
 from app.db.base import get_async_session_factory
 from app.db.models.rules import EligibilityRulePathway, HS6PSRApplicability, PSRRule, PSRRuleComponent
+from scripts.parsers.validation_runner import enforce_parser_artifact_contracts
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -313,6 +314,12 @@ async def main() -> int:
     pathway_csv_rows = read_rows(PATHWAYS_INPUT_PATH)
     decomposed_csv_rows = read_rows(DECOMPOSED_INPUT_PATH)
     applicability_csv_rows = read_rows(APPLICABILITY_INPUT_PATH)
+
+    enforce_parser_artifact_contracts(
+        decomposed_rows=decomposed_csv_rows,
+        pathway_rows=pathway_csv_rows,
+        applicability_rows=applicability_csv_rows,
+    )
 
     psr_rule_rows, rule_id_map, first_psr_id_by_hs_code = build_psr_rule_rows(pathway_csv_rows)
     component_rows, missing_component_rule_keys = build_component_rows(decomposed_csv_rows, rule_id_map)

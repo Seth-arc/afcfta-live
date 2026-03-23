@@ -6,13 +6,22 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.enums import HsLevelEnum, OperatorTypeEnum, RuleComponentTypeEnum, ThresholdBasisEnum
-from scripts.parsers.artifact_contracts import (
-    ArtifactValidationIssue,
-    ArtifactValidationResult,
-    normalize_text as normalize_contract_text,
-    parse_float,
-    parse_int,
-)
+try:
+    from scripts.parsers.artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        normalize_text as normalize_contract_text,
+        parse_float,
+        parse_int,
+    )
+except ModuleNotFoundError:
+    from artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        normalize_text as normalize_contract_text,
+        parse_float,
+        parse_int,
+    )
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -305,7 +314,7 @@ def read_rows(input_path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(csv_file))
 
 
-def write_output(rows: list[dict[str, str]], output_path: Path) -> None:
+def write_output(rows: list[dict[str, object]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(rows[0].keys()) if rows else []
     with output_path.open("w", newline="", encoding="utf-8") as csv_file:
@@ -314,12 +323,12 @@ def write_output(rows: list[dict[str, str]], output_path: Path) -> None:
         writer.writerows(rows)
 
 
-def build_output_rows(input_rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    output_rows: list[dict[str, str]] = []
+def build_output_rows(input_rows: list[dict[str, str]]) -> list[dict[str, object]]:
+    output_rows: list[dict[str, object]] = []
     for row in input_rows:
         components = decompose_rule_text(row.get("raw_rule_text", ""))
         for component in components:
-            output_row = dict(row)
+            output_row: dict[str, object] = dict(row)
             output_row.update(
                 {
                     "component_order": component.component_order,
@@ -690,13 +699,13 @@ def main() -> None:
     zero_confidence = 0
 
     for row in output_rows:
-        component_type = row["component_type"]
+        component_type = str(row["component_type"])
         component_type_counts[component_type] = component_type_counts.get(component_type, 0) + 1
-        if row["operator_type"] == "or":
+        if str(row["operator_type"]) == "or":
             or_alternatives += 1
-        if row["operator_type"] == "and":
+        if str(row["operator_type"]) == "and":
             and_combinations += 1
-        confidence = float(row["confidence_score"])
+        confidence = float(str(row["confidence_score"]))
         if confidence < 1.0:
             low_confidence += 1
         if confidence == 0.0:

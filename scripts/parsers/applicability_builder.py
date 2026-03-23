@@ -5,12 +5,20 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.parsers.artifact_contracts import (
-    ArtifactValidationIssue,
-    ArtifactValidationResult,
-    normalize_text as normalize_contract_text,
-    parse_int,
-)
+try:
+    from scripts.parsers.artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        normalize_text as normalize_contract_text,
+        parse_int,
+    )
+except ModuleNotFoundError:
+    from artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        normalize_text as normalize_contract_text,
+        parse_int,
+    )
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]

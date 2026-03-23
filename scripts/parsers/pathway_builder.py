@@ -7,14 +7,24 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from app.core.enums import HsLevelEnum, RuleStatusEnum, ThresholdBasisEnum
-from scripts.parsers.artifact_contracts import (
-    ArtifactValidationIssue,
-    ArtifactValidationResult,
-    normalize_text as normalize_contract_text,
-    parse_bool_string,
-    parse_float,
-    parse_int,
-)
+try:
+    from scripts.parsers.artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        normalize_text as normalize_contract_text,
+        parse_bool_string,
+        parse_float,
+        parse_int,
+    )
+except ModuleNotFoundError:
+    from artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        normalize_text as normalize_contract_text,
+        parse_bool_string,
+        parse_float,
+        parse_int,
+    )
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]

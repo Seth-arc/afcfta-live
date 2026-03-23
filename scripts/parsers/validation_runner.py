@@ -1,24 +1,33 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import csv
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy import text
 
 from app.core.enums import HsLevelEnum, RuleComponentTypeEnum, RuleStatusEnum
 from app.db.base import get_async_session_factory
-from scripts.parsers.applicability_builder import validate_output_rows as validate_applicability_output_rows
-from scripts.parsers.artifact_contracts import ArtifactValidationResult, ParserArtifactValidationError
-from scripts.parsers.pathway_builder import validate_output_rows as validate_pathway_output_rows
-from scripts.parsers.rule_decomposer import validate_output_rows as validate_decomposed_output_rows
+try:
+    from scripts.parsers.applicability_builder import validate_output_rows as validate_applicability_output_rows
+    from scripts.parsers.artifact_contracts import ArtifactValidationResult, ParserArtifactValidationError
+    from scripts.parsers.pathway_builder import validate_output_rows as validate_pathway_output_rows
+    from scripts.parsers.rule_decomposer import validate_output_rows as validate_decomposed_output_rows
+except ModuleNotFoundError:
+    from applicability_builder import validate_output_rows as validate_applicability_output_rows
+    from artifact_contracts import ArtifactValidationResult, ParserArtifactValidationError
+    from pathway_builder import validate_output_rows as validate_pathway_output_rows
+    from rule_decomposer import validate_output_rows as validate_decomposed_output_rows
 
 
 VALID_RULE_STATUSES = tuple(member.value for member in RuleStatusEnum)
 VALID_COMPONENT_TYPES = tuple(member.value for member in RuleComponentTypeEnum)
 VALID_HS_LEVELS = tuple(member.value for member in HsLevelEnum)
+SOURCE_ID = UUID("a0000000-0000-0000-0000-000000000001")
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DECOMPOSED_INPUT_PATH = ROOT_DIR / "data" / "staged" / "raw_csv" / "appendix_iv_decomposed.csv"
 PATHWAYS_INPUT_PATH = ROOT_DIR / "data" / "processed" / "rules" / "appendix_iv_pathways.csv"
@@ -30,6 +39,24 @@ class CheckResult:
     name: str
     passed: bool
     detail: str
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Validate staged parser artifacts and/or promoted PSR database state."
+    )
+    parser.add_argument(
+        "--scope",
+        choices=("artifacts", "db", "all"),
+        default="all",
+        help="Which validation scope to run.",
+    )
+    parser.add_argument(
+        "--all-sources",
+        action="store_true",
+        help="When running DB validation, check all PSR sources instead of only Appendix IV.",
+    )
+    return parser.parse_args()
 
 
 def format_status(passed: bool) -> str:
@@ -103,6 +130,18 @@ def enforce_parser_artifact_contracts(
     return results
 
 
+def print_check_results(title: str, results: list[CheckResult]) -> None:
+    print(title)
+    for result in results:
+        print(f"- {format_status(result.passed)}: {result.name} ({result.detail})")
+
+
+def build_validation_summary(results: list[CheckResult]) -> tuple[int, int, int]:
+    pass_count = sum(1 for result in results if result.passed)
+    fail_count = len(results) - pass_count
+    return pass_count, fail_count, len(results)
+
+
 async def scalar(session, sql: str, params: dict[str, object] | None = None):
     return await session.scalar(text(sql), params or {})
 
@@ -117,18 +156,83 @@ async def fetch_all(session, sql: str, params: dict[str, object] | None = None):
     return result.all()
 
 
-async def run_checks() -> list[CheckResult]:
+def _db_scope_clause(alias: str, *, include_all_sources: bool) -> str:
+    if include_all_sources:
+        return ""
+    return f"WHERE {alias}.source_id = :source_id"
+
+
+def _db_scope_rule_join(
+    child_alias: str,
+    rule_alias: str,
+    *,
+    include_all_sources: bool,
+) -> str:
+    if include_all_sources:
+        return ""
+    return f" AND {rule_alias}.source_id = :source_id"
+
+
+def _db_scope_params(*, include_all_sources: bool) -> dict[str, object]:
+    return {} if include_all_sources else {"source_id": SOURCE_ID}
+
+
+async def run_checks(*, include_all_sources: bool = False) -> list[CheckResult]:
     session_factory = get_async_session_factory()
     results: list[CheckResult] = []
     valid_rule_statuses_sql = sql_literal_list(VALID_RULE_STATUSES)
     valid_component_types_sql = sql_literal_list(VALID_COMPONENT_TYPES)
     valid_hs_levels_sql = sql_literal_list(VALID_HS_LEVELS)
+    scope_params = _db_scope_params(include_all_sources=include_all_sources)
+    rule_scope_clause = _db_scope_clause("rule", include_all_sources=include_all_sources)
+    component_rule_scope = _db_scope_rule_join("component", "rule", include_all_sources=include_all_sources)
+    pathway_rule_scope = _db_scope_rule_join("pathway", "rule", include_all_sources=include_all_sources)
+    applicability_rule_scope = _db_scope_rule_join(
+        "applicability",
+        "rule",
+        include_all_sources=include_all_sources,
+    )
 
     async with session_factory() as session:
-        psr_rule_count = int(await scalar(session, "SELECT COUNT(*) FROM psr_rule") or 0)
-        component_count = int(await scalar(session, "SELECT COUNT(*) FROM psr_rule_component") or 0)
-        pathway_count = int(await scalar(session, "SELECT COUNT(*) FROM eligibility_rule_pathway") or 0)
-        applicability_count = int(await scalar(session, "SELECT COUNT(*) FROM hs6_psr_applicability") or 0)
+        psr_rule_count = int(
+            await scalar(session, f"SELECT COUNT(*) FROM psr_rule rule {rule_scope_clause}", scope_params) or 0
+        )
+        component_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(*)
+                FROM psr_rule_component component
+                JOIN psr_rule rule ON rule.psr_id = component.psr_id{component_rule_scope}
+                """,
+                scope_params,
+            )
+            or 0
+        )
+        pathway_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(*)
+                FROM eligibility_rule_pathway pathway
+                JOIN psr_rule rule ON rule.psr_id = pathway.psr_id{pathway_rule_scope}
+                """,
+                scope_params,
+            )
+            or 0
+        )
+        applicability_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(*)
+                FROM hs6_psr_applicability applicability
+                JOIN psr_rule rule ON rule.psr_id = applicability.psr_id{applicability_rule_scope}
+                """,
+                scope_params,
+            )
+            or 0
+        )
         hs6_count = int(await scalar(session, "SELECT COUNT(*) FROM hs6_product") or 0)
 
         results.append(CheckResult("psr_rule row count > 100", psr_rule_count > 100, f"count={psr_rule_count}"))
@@ -193,21 +297,29 @@ async def run_checks() -> list[CheckResult]:
         invalid_rule_status_count = int(
             await scalar(
                 session,
-                f"SELECT COUNT(*) FROM psr_rule WHERE rule_status::text NOT IN {valid_rule_statuses_sql}",
+                f"SELECT COUNT(*) FROM psr_rule rule {rule_scope_clause} AND rule.rule_status::text NOT IN {valid_rule_statuses_sql}" if rule_scope_clause else f"SELECT COUNT(*) FROM psr_rule rule WHERE rule.rule_status::text NOT IN {valid_rule_statuses_sql}",
+                scope_params,
             )
             or 0
         )
         invalid_component_type_count = int(
             await scalar(
                 session,
-                f"SELECT COUNT(*) FROM psr_rule_component WHERE component_type::text NOT IN {valid_component_types_sql}",
+                f"""
+                SELECT COUNT(*)
+                FROM psr_rule_component component
+                JOIN psr_rule rule ON rule.psr_id = component.psr_id{component_rule_scope}
+                WHERE component.component_type::text NOT IN {valid_component_types_sql}
+                """,
+                scope_params,
             )
             or 0
         )
         invalid_hs_level_count = int(
             await scalar(
                 session,
-                f"SELECT COUNT(*) FROM psr_rule WHERE hs_level::text NOT IN {valid_hs_levels_sql}",
+                f"SELECT COUNT(*) FROM psr_rule rule {rule_scope_clause} AND rule.hs_level::text NOT IN {valid_hs_levels_sql}" if rule_scope_clause else f"SELECT COUNT(*) FROM psr_rule rule WHERE rule.hs_level::text NOT IN {valid_hs_levels_sql}",
+                scope_params,
             )
             or 0
         )
@@ -221,10 +333,12 @@ async def run_checks() -> list[CheckResult]:
                 session,
                 """
                 SELECT COUNT(*)
-                FROM eligibility_rule_pathway
+                FROM eligibility_rule_pathway pathway
+                JOIN psr_rule rule ON rule.psr_id = pathway.psr_id
                 WHERE expression_json IS NULL
                    OR expression_json->>'expression' IS NULL
-                """,
+                """ + ("" if include_all_sources else " AND rule.source_id = :source_id"),
+                scope_params,
             )
             or 0
         )
@@ -233,10 +347,12 @@ async def run_checks() -> list[CheckResult]:
                 session,
                 """
                 SELECT COUNT(*)
-                FROM eligibility_rule_pathway
+                FROM eligibility_rule_pathway pathway
+                JOIN psr_rule rule ON rule.psr_id = pathway.psr_id
                 WHERE expression_json IS NOT NULL
                   AND expression_json->>'expression' IS NOT NULL
-                """,
+                """ + ("" if include_all_sources else " AND rule.source_id = :source_id"),
+                scope_params,
             )
             or 0
         )
@@ -253,6 +369,7 @@ async def run_checks() -> list[CheckResult]:
                     MIN(component.confidence_score) AS min_confidence_score
                 FROM psr_rule rule
                 JOIN psr_rule_component component ON component.psr_id = rule.psr_id
+                {scope_clause}
                 GROUP BY rule.psr_id
             )
             SELECT
@@ -261,7 +378,8 @@ async def run_checks() -> list[CheckResult]:
                 COUNT(*) FILTER (WHERE min_confidence_score > 0.000 AND min_confidence_score < 0.500) AS bucket_001_049,
                 COUNT(*) FILTER (WHERE min_confidence_score = 0.000) AS bucket_000
             FROM rule_confidence
-            """,
+            """.format(scope_clause=rule_scope_clause),
+            scope_params,
         )
         bucket_100, bucket_050_099, bucket_001_049, bucket_000 = confidence_rows[0]
         confidence_total = int(bucket_100 or 0) + int(bucket_050_099 or 0) + int(bucket_001_049 or 0) + int(bucket_000 or 0)
@@ -278,7 +396,18 @@ async def run_checks() -> list[CheckResult]:
             )
         )
 
-        covered_hs6_count = int(await scalar(session, "SELECT COUNT(DISTINCT hs6_id) FROM hs6_psr_applicability") or 0)
+        covered_hs6_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(DISTINCT applicability.hs6_id)
+                FROM hs6_psr_applicability applicability
+                JOIN psr_rule rule ON rule.psr_id = applicability.psr_id{applicability_rule_scope}
+                """,
+                scope_params,
+            )
+            or 0
+        )
         coverage_percent = Decimal("0.00")
         if hs6_count > 0:
             coverage_percent = (Decimal(covered_hs6_count) / Decimal(hs6_count)) * Decimal("100")
@@ -300,14 +429,17 @@ async def run_checks() -> list[CheckResult]:
                 WHERE rule.hs_code = '01'
                   AND rule.hs_level::text = 'chapter'
                   AND component.component_type::text = 'WO'
-                """,
+                """ + ("" if include_all_sources else " AND rule.source_id = :source_id"),
+                scope_params,
             )
             or 0
         )
         heading_1806_count = int(
             await scalar(
                 session,
-                "SELECT COUNT(*) FROM psr_rule WHERE hs_code = '1806' AND hs_level::text = 'heading'",
+                "SELECT COUNT(*) FROM psr_rule rule WHERE rule.hs_code = '1806' AND rule.hs_level::text = 'heading'"
+                + ("" if include_all_sources else " AND rule.source_id = :source_id"),
+                scope_params,
             )
             or 0
         )
@@ -318,13 +450,21 @@ async def run_checks() -> list[CheckResult]:
                 SELECT COUNT(DISTINCT product.hs6_id)
                 FROM hs6_product product
                 JOIN hs6_psr_applicability applicability ON applicability.hs6_id = product.hs6_id
+                JOIN psr_rule rule ON rule.psr_id = applicability.psr_id
                 WHERE product.heading = '1806'
-                """,
+                """ + ("" if include_all_sources else " AND rule.source_id = :source_id"),
+                scope_params,
             )
             or 0
         )
         pending_rule_count = int(
-            await scalar(session, "SELECT COUNT(*) FROM psr_rule WHERE rule_status::text = 'pending'") or 0
+            await scalar(
+                session,
+                "SELECT COUNT(*) FROM psr_rule rule WHERE rule.rule_status::text = 'pending'"
+                + ("" if include_all_sources else " AND rule.source_id = :source_id"),
+                scope_params,
+            )
+            or 0
         )
 
         results.append(CheckResult("Chapter 01 has a WO rule", chapter_01_wo_count > 0, f"matches={chapter_01_wo_count}"))
@@ -341,19 +481,24 @@ async def run_checks() -> list[CheckResult]:
 
 
 async def main() -> int:
-    results = parser_artifact_check_results(run_parser_artifact_checks())
-    results.extend(await run_checks())
-    pass_count = sum(1 for result in results if result.passed)
-    fail_count = len(results) - pass_count
+    args = parse_args()
+    all_results: list[CheckResult] = []
 
-    print("PSR validation checks")
-    for result in results:
-        print(f"- {format_status(result.passed)}: {result.name} ({result.detail})")
+    if args.scope in {"artifacts", "all"}:
+        artifact_results = parser_artifact_check_results(run_parser_artifact_checks())
+        print_check_results("Parser artifact validation", artifact_results)
+        all_results.extend(artifact_results)
 
+    if args.scope in {"db", "all"}:
+        db_results = await run_checks(include_all_sources=args.all_sources)
+        print_check_results("PSR database validation", db_results)
+        all_results.extend(db_results)
+
+    pass_count, fail_count, total_count = build_validation_summary(all_results)
     print("Validation summary")
     print(f"- PASS count: {pass_count}")
     print(f"- FAIL count: {fail_count}")
-    print(f"- Total checks: {len(results)}")
+    print(f"- Total checks: {total_count}")
 
     return 0 if fail_count == 0 else 1
 

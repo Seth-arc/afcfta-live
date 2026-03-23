@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import csv
 import hashlib
 import json
 from collections import OrderedDict
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -16,7 +18,10 @@ from sqlalchemy.exc import IntegrityError
 from app.core.enums import HsLevelEnum, OperatorTypeEnum, RuleComponentTypeEnum, RuleStatusEnum, ThresholdBasisEnum
 from app.db.base import get_async_session_factory
 from app.db.models.rules import EligibilityRulePathway, HS6PSRApplicability, PSRRule, PSRRuleComponent
-from scripts.parsers.validation_runner import enforce_parser_artifact_contracts
+try:
+    from scripts.parsers.validation_runner import enforce_parser_artifact_contracts, format_status, run_checks
+except ModuleNotFoundError:
+    from validation_runner import enforce_parser_artifact_contracts, format_status, run_checks
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -28,6 +33,42 @@ SOURCE_ID = UUID("a0000000-0000-0000-0000-000000000001")
 HS_VERSION = "HS2017"
 APPENDIX_VERSION = "December 2023 Compilation"
 INSERT_BATCH_SIZE = 500
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionPlan:
+    pathway_csv_rows: list[dict[str, str]]
+    decomposed_csv_rows: list[dict[str, str]]
+    applicability_csv_rows: list[dict[str, str]]
+    psr_rule_rows: list[dict[str, object]]
+    component_rows: list[dict[str, object]]
+    pathway_rows: list[dict[str, object]]
+    applicability_rows: list[dict[str, object]]
+    missing_component_rule_keys: list[str]
+    missing_pathway_rule_keys: list[str]
+    missing_psr_codes: list[str]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Promote staged Appendix IV parser artifacts into operational PSR tables."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build and validate the promotion plan without writing to the database.",
+    )
+    parser.add_argument(
+        "--allow-partial-mappings",
+        action="store_true",
+        help="Allow promotion even if cross-artifact mappings are missing. Not recommended for normal runs.",
+    )
+    parser.add_argument(
+        "--post-validate",
+        action="store_true",
+        help="Run database validation checks after a successful promotion.",
+    )
+    return parser.parse_args()
 
 
 def read_rows(input_path: Path) -> list[dict[str, str]]:
@@ -90,6 +131,12 @@ def parse_tariff_shift_level(value: str | None) -> HsLevelEnum | None:
     if not raw_value:
         return None
     return HsLevelEnum(raw_value)
+
+
+def ensure_input_files_exist() -> None:
+    for input_path in (PATHWAYS_INPUT_PATH, DECOMPOSED_INPUT_PATH, APPLICABILITY_INPUT_PATH):
+        if not input_path.exists():
+            raise FileNotFoundError(f"Required input CSV not found: {input_path}")
 
 
 def pathway_rule_key(row: dict[str, str]) -> tuple[str, str, str, str, str, str]:
@@ -268,6 +315,107 @@ def build_applicability_rows(
     return rows, missing_psr_codes
 
 
+def format_samples(values: list[str], *, limit: int = 3) -> str:
+    if not values:
+        return ""
+    sample = values[:limit]
+    suffix = "" if len(values) <= limit else f" ... (+{len(values) - limit} more)"
+    return ", ".join(sample) + suffix
+
+
+def ensure_mapping_consistency(
+    *,
+    missing_component_rule_keys: list[str],
+    missing_pathway_rule_keys: list[str],
+    missing_psr_codes: list[str],
+    allow_partial_mappings: bool,
+) -> None:
+    if allow_partial_mappings:
+        return
+
+    failures: list[str] = []
+    if missing_component_rule_keys:
+        failures.append(
+            "component-to-rule mappings missing: "
+            f"{len(missing_component_rule_keys)} rows ({format_samples(missing_component_rule_keys)})"
+        )
+    if missing_pathway_rule_keys:
+        failures.append(
+            "pathway-to-rule mappings missing: "
+            f"{len(missing_pathway_rule_keys)} rows ({format_samples(missing_pathway_rule_keys)})"
+        )
+    if missing_psr_codes:
+        failures.append(
+            "applicability-to-rule mappings missing: "
+            f"{len(missing_psr_codes)} rows ({format_samples(missing_psr_codes)})"
+        )
+
+    if failures:
+        raise RuntimeError(
+            "Promotion plan is incomplete. Resolve staged artifact mismatches before promotion, "
+            "or rerun with --allow-partial-mappings if you explicitly want to accept partial promotion.\n"
+            + "\n".join(f"- {failure}" for failure in failures)
+        )
+
+
+def build_promotion_plan(*, allow_partial_mappings: bool) -> PromotionPlan:
+    ensure_input_files_exist()
+
+    pathway_csv_rows = read_rows(PATHWAYS_INPUT_PATH)
+    decomposed_csv_rows = read_rows(DECOMPOSED_INPUT_PATH)
+    applicability_csv_rows = read_rows(APPLICABILITY_INPUT_PATH)
+
+    enforce_parser_artifact_contracts(
+        decomposed_rows=decomposed_csv_rows,
+        pathway_rows=pathway_csv_rows,
+        applicability_rows=applicability_csv_rows,
+    )
+
+    psr_rule_rows, rule_id_map, first_psr_id_by_hs_code = build_psr_rule_rows(pathway_csv_rows)
+    component_rows, missing_component_rule_keys = build_component_rows(decomposed_csv_rows, rule_id_map)
+    pathway_rows, missing_pathway_rule_keys = build_pathway_rows(pathway_csv_rows, rule_id_map)
+    applicability_rows, missing_psr_codes = build_applicability_rows(applicability_csv_rows, first_psr_id_by_hs_code)
+
+    ensure_mapping_consistency(
+        missing_component_rule_keys=missing_component_rule_keys,
+        missing_pathway_rule_keys=missing_pathway_rule_keys,
+        missing_psr_codes=missing_psr_codes,
+        allow_partial_mappings=allow_partial_mappings,
+    )
+
+    return PromotionPlan(
+        pathway_csv_rows=pathway_csv_rows,
+        decomposed_csv_rows=decomposed_csv_rows,
+        applicability_csv_rows=applicability_csv_rows,
+        psr_rule_rows=psr_rule_rows,
+        component_rows=component_rows,
+        pathway_rows=pathway_rows,
+        applicability_rows=applicability_rows,
+        missing_component_rule_keys=missing_component_rule_keys,
+        missing_pathway_rule_keys=missing_pathway_rule_keys,
+        missing_psr_codes=missing_psr_codes,
+    )
+
+
+def print_promotion_plan(plan: PromotionPlan, *, dry_run: bool) -> None:
+    print("PSR promotion plan")
+    print(f"- Mode: {'dry-run' if dry_run else 'promote'}")
+    print(f"- Input artifacts: {DECOMPOSED_INPUT_PATH.name}, {PATHWAYS_INPUT_PATH.name}, {APPLICABILITY_INPUT_PATH.name}")
+    print(f"- Decomposed rows: {len(plan.decomposed_csv_rows)}")
+    print(f"- Pathway rows: {len(plan.pathway_csv_rows)}")
+    print(f"- Applicability rows: {len(plan.applicability_csv_rows)}")
+    print(f"- Planned psr_rule rows: {len(plan.psr_rule_rows)}")
+    print(f"- Planned psr_rule_component rows: {len(plan.component_rows)}")
+    print(f"- Planned eligibility_rule_pathway rows: {len(plan.pathway_rows)}")
+    print(f"- Planned hs6_psr_applicability rows: {len(plan.applicability_rows)}")
+    print(
+        "- Cross-artifact mapping gaps: "
+        f"components={len(plan.missing_component_rule_keys)}, "
+        f"pathways={len(plan.missing_pathway_rule_keys)}, "
+        f"applicability={len(plan.missing_psr_codes)}"
+    )
+
+
 async def ensure_source_exists(session) -> None:
     source_exists = await session.scalar(
         text("SELECT 1 FROM source_registry WHERE source_id = :source_id LIMIT 1"),
@@ -306,26 +454,7 @@ async def insert_rows(session, model, rows: list[dict[str, object]], returning_c
     return inserted_count
 
 
-async def main() -> int:
-    for input_path in (PATHWAYS_INPUT_PATH, DECOMPOSED_INPUT_PATH, APPLICABILITY_INPUT_PATH):
-        if not input_path.exists():
-            raise FileNotFoundError(f"Required input CSV not found: {input_path}")
-
-    pathway_csv_rows = read_rows(PATHWAYS_INPUT_PATH)
-    decomposed_csv_rows = read_rows(DECOMPOSED_INPUT_PATH)
-    applicability_csv_rows = read_rows(APPLICABILITY_INPUT_PATH)
-
-    enforce_parser_artifact_contracts(
-        decomposed_rows=decomposed_csv_rows,
-        pathway_rows=pathway_csv_rows,
-        applicability_rows=applicability_csv_rows,
-    )
-
-    psr_rule_rows, rule_id_map, first_psr_id_by_hs_code = build_psr_rule_rows(pathway_csv_rows)
-    component_rows, missing_component_rule_keys = build_component_rows(decomposed_csv_rows, rule_id_map)
-    pathway_rows, missing_pathway_rule_keys = build_pathway_rows(pathway_csv_rows, rule_id_map)
-    applicability_rows, missing_psr_codes = build_applicability_rows(applicability_csv_rows, first_psr_id_by_hs_code)
-
+async def execute_promotion_plan(plan: PromotionPlan) -> tuple[int, int, int, int]:
     session_factory = get_async_session_factory()
     inserted_rules = 0
     inserted_components = 0
@@ -338,25 +467,46 @@ async def main() -> int:
                 await ensure_source_exists(session)
                 await clear_existing_rows(session)
 
-                inserted_rules = await insert_rows(session, PSRRule, psr_rule_rows, PSRRule.psr_id)
-                inserted_components = await insert_rows(session, PSRRuleComponent, component_rows, PSRRuleComponent.component_id)
-                inserted_pathways = await insert_rows(session, EligibilityRulePathway, pathway_rows, EligibilityRulePathway.pathway_id)
-                inserted_applicability = await insert_rows(session, HS6PSRApplicability, applicability_rows, HS6PSRApplicability.applicability_id)
+                inserted_rules = await insert_rows(session, PSRRule, plan.psr_rule_rows, PSRRule.psr_id)
+                inserted_components = await insert_rows(session, PSRRuleComponent, plan.component_rows, PSRRuleComponent.component_id)
+                inserted_pathways = await insert_rows(session, EligibilityRulePathway, plan.pathway_rows, EligibilityRulePathway.pathway_id)
+                inserted_applicability = await insert_rows(session, HS6PSRApplicability, plan.applicability_rows, HS6PSRApplicability.applicability_id)
     except IntegrityError as exc:
         print(f"FK/constraint error during insert: {exc}")
         raise
 
-    print("PSR parser insert summary")
+    return inserted_rules, inserted_components, inserted_pathways, inserted_applicability
+
+
+async def run_post_validation() -> int:
+    db_results = await run_checks()
+    print("Post-promotion database validation")
+    for result in db_results:
+        print(f"- {format_status(result.passed)}: {result.name} ({result.detail})")
+    return sum(1 for result in db_results if not result.passed)
+
+
+async def main() -> int:
+    args = parse_args()
+    plan = build_promotion_plan(allow_partial_mappings=args.allow_partial_mappings)
+    print_promotion_plan(plan, dry_run=args.dry_run)
+
+    if args.dry_run:
+        print("Promotion dry-run completed. No database changes were made.")
+        return 0
+
+    inserted_rules, inserted_components, inserted_pathways, inserted_applicability = await execute_promotion_plan(plan)
+
+    print("PSR parser promotion summary")
     print(f"- Rules inserted: {inserted_rules}")
     print(f"- Components inserted: {inserted_components}")
     print(f"- Pathways inserted: {inserted_pathways}")
     print(f"- Applicability rows inserted: {inserted_applicability}")
-    if missing_component_rule_keys:
-        print(f"- Component rows skipped due to missing rule mapping: {len(missing_component_rule_keys)}")
-    if missing_pathway_rule_keys:
-        print(f"- Pathway rows skipped due to missing rule mapping: {len(missing_pathway_rule_keys)}")
-    if missing_psr_codes:
-        print(f"- Applicability rows skipped due to unmapped psr_hs_code: {len(missing_psr_codes)}")
+    print("- Existing Appendix IV source rows were cleared and replaced atomically inside one transaction")
+
+    if args.post_validate:
+        fail_count = await run_post_validation()
+        return 0 if fail_count == 0 else 1
 
     return 0
 

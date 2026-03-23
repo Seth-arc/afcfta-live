@@ -46,6 +46,12 @@ class AuditTrailNotFoundError(AISBaseException):
     code = "AUDIT_TRAIL_NOT_FOUND"
 
 
+class CaseNotFoundError(AISBaseException):
+    """Raised when a referenced case_id cannot be resolved to a stored case."""
+
+    code = "CASE_NOT_FOUND"
+
+
 class ExpressionEvaluationError(AISBaseException):
     """Raised when the safe expression evaluator cannot evaluate a rule expression."""
 

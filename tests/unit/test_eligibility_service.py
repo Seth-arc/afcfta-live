@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, Mock, call
 import pytest
 
 from app.core.enums import HsLevelEnum, RuleStatusEnum, ScheduleStatusEnum, TariffCategoryEnum
-from app.core.exceptions import TariffNotFoundError
+from app.core.exceptions import CaseNotFoundError, TariffNotFoundError
 from app.core.failure_codes import FAILURE_CODES
-from app.schemas.assessments import EligibilityRequest
+from app.schemas.assessments import CaseAssessmentRequest, EligibilityRequest
 from app.schemas.cases import CaseFactIn
 from app.schemas.evidence import EvidenceReadinessResult
 from app.schemas.hs import HS6ProductResponse
@@ -247,6 +247,7 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
         "fact_normalization_service": Mock(),
         "expression_evaluator": Mock(),
         "general_origin_rules_service": Mock(),
+        "cases_repository": AsyncMock(),
         "evaluations_repository": AsyncMock(),
     }
     return EligibilityService(**deps), deps
@@ -589,3 +590,87 @@ async def test_tariff_not_found_still_returns_assessment() -> None:
 
     assert result.eligible is True
     assert result.tariff_outcome is None
+
+
+@pytest.mark.asyncio
+async def test_assess_case_loads_stored_facts_and_reuses_direct_path() -> None:
+    """Stored case facts should be rehydrated into the same direct assessment request shape."""
+
+    service, deps = _service()
+    case_id = str(_uuid(300))
+    deps["cases_repository"].get_case_with_facts.return_value = {
+        "case": {
+            "case_id": case_id,
+            "hs_code": "110311",
+            "hs_version": "HS2017",
+            "exporter_state": "GHA",
+            "importer_state": "NGA",
+            "persona_mode": "exporter",
+        },
+        "facts": [
+            {
+                "fact_type": "tariff_heading_input",
+                "fact_key": "tariff_heading_input",
+                "fact_value_type": "text",
+                "fact_value_text": "1001",
+                "source_reference": None,
+            },
+            {
+                "fact_type": "tariff_heading_output",
+                "fact_key": "tariff_heading_output",
+                "fact_value_type": "text",
+                "fact_value_text": "1103",
+                "source_reference": None,
+            },
+            {
+                "fact_type": "direct_transport",
+                "fact_key": "direct_transport",
+                "fact_value_type": "boolean",
+                "fact_value_boolean": True,
+                "source_reference": None,
+            },
+        ],
+    }
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    result = await service.assess_case(case_id, CaseAssessmentRequest(year=2025))
+
+    assert result.eligible is True
+    deps["cases_repository"].get_case_with_facts.assert_awaited_once_with(case_id)
+    deps["classification_service"].resolve_hs6.assert_awaited_once_with("110311", "HS2017")
+    normalized_facts = deps["fact_normalization_service"].normalize_facts.call_args.args[0]
+    assert [fact.fact_key for fact in normalized_facts] == [
+        "tariff_heading_input",
+        "tariff_heading_output",
+        "direct_transport",
+    ]
+    persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
+    assert persisted_evaluation["case_id"] == case_id
+
+
+@pytest.mark.asyncio
+async def test_assess_case_raises_when_case_is_missing() -> None:
+    """Case-backed assessment should surface a domain 404 when the case does not exist."""
+
+    service, deps = _service()
+    deps["cases_repository"].get_case_with_facts.return_value = None
+
+    with pytest.raises(CaseNotFoundError):
+        await service.assess_case(str(_uuid(301)), CaseAssessmentRequest(year=2025))

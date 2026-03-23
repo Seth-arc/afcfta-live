@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.core.exceptions import (
     AISBaseException,
     AuditTrailNotFoundError,
+    CaseNotFoundError,
     ClassificationError,
     CorridorNotSupportedError,
     ExpressionEvaluationError,
@@ -35,6 +36,7 @@ DOMAIN_STATUS_CODES: dict[type[AISBaseException], int] = {
     TariffNotFoundError: 404,
     StatusUnknownError: 404,
     AuditTrailNotFoundError: 404,
+    CaseNotFoundError: 404,
     CorridorNotSupportedError: 422,
     InsufficientFactsError: 422,
     ExpressionEvaluationError: 500,

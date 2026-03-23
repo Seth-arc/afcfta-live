@@ -40,6 +40,7 @@ def _build_eligibility_service(session: AsyncSession) -> EligibilityService:
         fact_normalization_service=FactNormalizationService(),
         expression_evaluator=ExpressionEvaluator(),
         general_origin_rules_service=GeneralOriginRulesService(),
+        cases_repository=CasesRepository(session),
         evaluations_repository=EvaluationsRepository(session),
         audit_service=AuditService(
             evaluations_repository=EvaluationsRepository(session),

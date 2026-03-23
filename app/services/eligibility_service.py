@@ -7,9 +7,11 @@ from datetime import date
 from time import perf_counter
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.core.entity_keys import make_entity_key
 from app.core.enums import LegalOutcome
-from app.core.exceptions import TariffNotFoundError
+from app.core.exceptions import CaseNotFoundError, InsufficientFactsError, TariffNotFoundError
 from app.core.failure_codes import FAILURE_CODES
 from app.core.fact_keys import (
     DERIVED_VARIABLES,
@@ -17,6 +19,7 @@ from app.core.fact_keys import (
     PRODUCTION_FACTS,
 )
 from app.schemas.assessments import (
+    CaseAssessmentRequest,
     EligibilityAssessmentResponse,
     EligibilityRequest,
     TariffOutcomeResponse,
@@ -44,6 +47,7 @@ class EligibilityService:
         fact_normalization_service: Any,
         expression_evaluator: Any,
         general_origin_rules_service: Any,
+        cases_repository: Any | None,
         evaluations_repository: Any | None,
         audit_service: Any | None = None,
     ) -> None:
@@ -55,8 +59,19 @@ class EligibilityService:
         self.fact_normalization_service = fact_normalization_service
         self.expression_evaluator = expression_evaluator
         self.general_origin_rules_service = general_origin_rules_service
+        self.cases_repository = cases_repository
         self.evaluations_repository = evaluations_repository
         self.audit_service = audit_service
+
+    async def assess_case(
+        self,
+        case_id: str,
+        request: CaseAssessmentRequest,
+    ) -> EligibilityAssessmentResponse:
+        """Load one stored case, rehydrate its facts, and assess it through the direct path."""
+
+        eligibility_request = await self._build_request_from_case(case_id=case_id, year=request.year)
+        return await self.assess(eligibility_request)
 
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
         """Execute one full assessment inside the caller's request-scoped DB snapshot."""
@@ -277,6 +292,68 @@ class EligibilityService:
             started_at=started_at,
         )
         return response
+
+    async def _build_request_from_case(self, *, case_id: str, year: int) -> EligibilityRequest:
+        """Convert one stored case header plus facts into a standard assessment request."""
+
+        if self.cases_repository is None:
+            raise CaseNotFoundError(
+                "Case-backed assessment is unavailable because no cases repository is configured",
+                detail={"case_id": case_id},
+            )
+
+        case_bundle = await self.cases_repository.get_case_with_facts(case_id)
+        if case_bundle is None:
+            raise CaseNotFoundError(
+                f"Case '{case_id}' was not found",
+                detail={"case_id": case_id},
+            )
+
+        case_row = dict(case_bundle["case"])
+        facts = [self._case_fact_to_request_fact(fact) for fact in case_bundle["facts"]]
+        request_payload = {
+            "hs6_code": case_row.get("hs_code"),
+            "hs_version": case_row.get("hs_version") or "HS2017",
+            "exporter": case_row.get("exporter_state"),
+            "importer": case_row.get("importer_state"),
+            "year": year,
+            "persona_mode": case_row.get("persona_mode"),
+            "production_facts": facts,
+            "case_id": case_id,
+        }
+
+        missing_fields = [
+            field_name
+            for field_name, value in {
+                "hs6_code": request_payload["hs6_code"],
+                "exporter": request_payload["exporter"],
+                "importer": request_payload["importer"],
+                "persona_mode": request_payload["persona_mode"],
+            }.items()
+            if value in {None, ""}
+        ]
+        if missing_fields:
+            raise InsufficientFactsError(
+                "Stored case is missing required assessment header fields",
+                detail={"case_id": case_id, "missing_fields": missing_fields},
+            )
+
+        try:
+            return EligibilityRequest.model_validate(request_payload)
+        except ValidationError as exc:
+            raise InsufficientFactsError(
+                "Stored case could not be converted into a valid assessment request",
+                detail={"case_id": case_id, "errors": exc.errors()},
+            ) from exc
+
+    @staticmethod
+    def _case_fact_to_request_fact(fact: Any) -> Any:
+        """Normalize one persisted case fact into the shared assessment fact schema."""
+
+        payload = dict(fact)
+        if "source_reference" in payload and "source_ref" not in payload:
+            payload["source_ref"] = payload.pop("source_reference")
+        return payload
 
     def _run_blocker_checks(
         self,

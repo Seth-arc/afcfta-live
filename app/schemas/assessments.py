@@ -47,6 +47,12 @@ class EligibilityRequest(BaseModel):
         return normalized
 
 
+class CaseAssessmentRequest(BaseModel):
+    """Request payload for assessing a previously stored case."""
+
+    year: int = Field(ge=2020, le=2040)
+
+
 class TariffOutcomeResponse(BaseModel):
     """Tariff outcome embedded in the final eligibility response."""
 

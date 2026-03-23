@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
@@ -10,10 +9,22 @@ from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
-from app.core.enums import HsLevelEnum, RuleStatusEnum, ScheduleStatusEnum, TariffCategoryEnum
+from app.core.enums import (
+    AlertSeverityEnum,
+    AlertStatusEnum,
+    AlertTypeEnum,
+    HsLevelEnum,
+    RuleStatusEnum,
+    ScheduleStatusEnum,
+    TariffCategoryEnum,
+)
 from app.core.exceptions import CaseNotFoundError, TariffNotFoundError
 from app.core.failure_codes import FAILURE_CODES
-from app.schemas.assessments import CaseAssessmentRequest, EligibilityRequest
+from app.schemas.assessments import (
+    CaseAssessmentRequest,
+    EligibilityAssessmentResponse,
+    EligibilityRequest,
+)
 from app.schemas.cases import CaseFactIn
 from app.schemas.evidence import EvidenceReadinessResult
 from app.schemas.hs import HS6ProductResponse
@@ -24,6 +35,7 @@ from app.db import session as session_module
 from app.services.eligibility_service import EligibilityService
 from app.services.expression_evaluator import AtomicCheck, ExpressionResult
 from app.services.general_origin_rules_service import GeneralRulesResult
+from app.services.intelligence_service import IntelligenceService
 
 
 def _uuid(value: int) -> UUID:
@@ -249,6 +261,7 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
         "general_origin_rules_service": Mock(),
         "cases_repository": AsyncMock(),
         "evaluations_repository": AsyncMock(),
+        "intelligence_service": AsyncMock(),
     }
     return EligibilityService(**deps), deps
 
@@ -371,6 +384,8 @@ async def test_blocker_short_circuits_on_pending_rule_status() -> None:
 
     assert result.eligible is False
     assert "RULE_STATUS_PENDING" in result.failures
+    assert result.confidence_class == "provisional"
+    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
     deps["fact_normalization_service"].normalize_facts.assert_not_called()
     deps["expression_evaluator"].evaluate.assert_not_called()
 
@@ -600,6 +615,154 @@ async def test_tariff_not_found_still_returns_assessment() -> None:
 
     assert result.eligible is True
     assert result.tariff_outcome is None
+    assert result.confidence_class == "complete"
+    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_not_yet_operational_corridor_emits_advisory_alert_without_mutating_failures() -> None:
+    """Corridor alerts should be advisory-only and should not add extra failure codes."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.return_value = _status_overlay(
+        "not_yet_operational",
+        "incomplete",
+        "Corridor is not yet operational.",
+    )
+
+    result = await service.assess(request)
+
+    assert result.eligible is False
+    assert result.failures == ["NOT_OPERATIONAL"]
+    assert result.confidence_class == "incomplete"
+    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_intelligence_service_emits_expected_alert_types_for_supported_conditions() -> None:
+    """The intelligence service should create advisory alerts for the initial trigger set."""
+
+    repository = AsyncMock()
+    repository.get_active_alerts.side_effect = [[], [], []]
+    repository.create_alert.side_effect = [
+        {"alert_type": "rule_status_changed"},
+        {"alert_type": "data_quality_issue"},
+        {"alert_type": "corridor_risk_changed"},
+    ]
+    service = IntelligenceService(repository)
+    request = EligibilityRequest(
+        hs6_code="110311",
+        hs_version="HS2017",
+        exporter="GHA",
+        importer="NGA",
+        year=2025,
+        persona_mode="exporter",
+        production_facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+        case_id=str(_uuid(500)),
+    )
+    assessment_response = EligibilityAssessmentResponse(
+        hs6_code="110311",
+        eligible=False,
+        pathway_used=None,
+        rule_status=RuleStatusEnum.PENDING,
+        tariff_outcome=None,
+        failures=["RULE_STATUS_PENDING", "NOT_OPERATIONAL"],
+        missing_facts=[],
+        evidence_required=[],
+        missing_evidence=[],
+        readiness_score=None,
+        completeness_ratio=None,
+        confidence_class="incomplete",
+    )
+
+    created = await service.emit_assessment_alerts(
+        request=request,
+        rule_bundle=_rule_bundle(hs6_code="110311", rule_status=RuleStatusEnum.PENDING),
+        tariff_result=None,
+        corridor_overlay=_status_overlay(
+            "not_yet_operational",
+            "incomplete",
+            "Corridor is not yet operational.",
+        ),
+        response=assessment_response,
+    )
+
+    assert len(created) == 3
+    assert repository.get_active_alerts.await_count == 3
+    created_specs = [call.args[0] for call in repository.create_alert.await_args_list]
+    assert [spec["alert_type"] for spec in created_specs] == [
+        AlertTypeEnum.RULE_STATUS_CHANGED,
+        AlertTypeEnum.DATA_QUALITY_ISSUE,
+        AlertTypeEnum.CORRIDOR_RISK_CHANGED,
+    ]
+    assert [spec["severity"] for spec in created_specs] == [
+        AlertSeverityEnum.HIGH,
+        AlertSeverityEnum.MEDIUM,
+        AlertSeverityEnum.CRITICAL,
+    ]
+    assert all(spec["alert_status"] == AlertStatusEnum.OPEN for spec in created_specs)
+    assert all(spec["alert_payload"]["advisory_only"] is True for spec in created_specs)
+
+
+@pytest.mark.asyncio
+async def test_intelligence_service_skips_duplicate_open_alert_types_for_same_entity() -> None:
+    """Open alerts of the same type should not be duplicated for the same entity."""
+
+    repository = AsyncMock()
+    repository.get_active_alerts.return_value = [
+        {
+            "alert_id": _uuid(700),
+            "alert_type": AlertTypeEnum.RULE_STATUS_CHANGED.value,
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(10)}",
+        }
+    ]
+    service = IntelligenceService(repository)
+    request = EligibilityRequest(
+        hs6_code="110311",
+        hs_version="HS2017",
+        exporter="GHA",
+        importer="NGA",
+        year=2025,
+        persona_mode="exporter",
+        production_facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+    )
+    assessment_response = EligibilityAssessmentResponse(
+        hs6_code="110311",
+        eligible=False,
+        pathway_used=None,
+        rule_status=RuleStatusEnum.PENDING,
+        tariff_outcome=None,
+        failures=["RULE_STATUS_PENDING"],
+        missing_facts=[],
+        evidence_required=[],
+        missing_evidence=[],
+        readiness_score=None,
+        completeness_ratio=None,
+        confidence_class="provisional",
+    )
+
+    created = await service.emit_assessment_alerts(
+        request=request,
+        rule_bundle=_rule_bundle(hs6_code="110311", rule_status=RuleStatusEnum.PENDING),
+        tariff_result=_tariff_result(),
+        corridor_overlay=_status_overlay("in_force", "complete", "Corridor is operational."),
+        response=assessment_response,
+    )
+
+    assert created == []
+    repository.create_alert.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,7 @@ class EligibilityService:
         general_origin_rules_service: Any,
         cases_repository: Any | None,
         evaluations_repository: Any | None,
+        intelligence_service: Any | None = None,
         audit_service: Any | None = None,
     ) -> None:
         self.classification_service = classification_service
@@ -61,6 +62,7 @@ class EligibilityService:
         self.general_origin_rules_service = general_origin_rules_service
         self.cases_repository = cases_repository
         self.evaluations_repository = evaluations_repository
+        self.intelligence_service = intelligence_service
         self.audit_service = audit_service
 
     async def assess_case(
@@ -203,6 +205,13 @@ class EligibilityService:
                 pathway_used=None,
                 audit_checks=audit_checks,
             )
+            await self._emit_alerts_if_possible(
+                request=request,
+                rule_bundle=rule_bundle,
+                tariff_result=tariff_result,
+                corridor_overlay=corridor_overlay,
+                response=response,
+            )
             self._log_assessment(
                 request=request,
                 response=response,
@@ -294,6 +303,13 @@ class EligibilityService:
             response=response,
             pathway_used=response.pathway_used,
             audit_checks=audit_checks,
+        )
+        await self._emit_alerts_if_possible(
+            request=request,
+            rule_bundle=rule_bundle,
+            tariff_result=tariff_result,
+            corridor_overlay=corridor_overlay,
+            response=response,
         )
         self._log_assessment(
             request=request,
@@ -824,6 +840,28 @@ class EligibilityService:
             ),
         }
         await self.evaluations_repository.persist_evaluation(evaluation_data, list(audit_checks))
+
+    async def _emit_alerts_if_possible(
+        self,
+        *,
+        request: EligibilityRequest,
+        rule_bundle: RuleResolutionResult,
+        tariff_result: TariffResolutionResult | None,
+        corridor_overlay: StatusOverlay,
+        response: EligibilityAssessmentResponse,
+    ) -> None:
+        """Persist advisory intelligence alerts without altering the assessment result."""
+
+        if self.intelligence_service is None:
+            return
+
+        await self.intelligence_service.emit_assessment_alerts(
+            request=request,
+            rule_bundle=rule_bundle,
+            tariff_result=tariff_result,
+            corridor_overlay=corridor_overlay,
+            response=response,
+        )
 
     @staticmethod
     def _overall_outcome(response: EligibilityAssessmentResponse) -> LegalOutcome:

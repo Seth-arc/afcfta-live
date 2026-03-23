@@ -6,8 +6,10 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models.intelligence import AlertEvent
 
 
 class IntelligenceRepository:
@@ -110,6 +112,19 @@ class IntelligenceRepository:
             },
         )
         return list(result.mappings().all())
+
+    async def create_alert(self, values: Mapping[str, Any]) -> Mapping[str, Any]:
+        """Insert one alert row and return the persisted record."""
+
+        alert_table = AlertEvent.__table__
+        payload = {
+            key: value
+            for key, value in dict(values).items()
+            if key in alert_table.c and value is not None
+        }
+        statement = insert(alert_table).values(**payload).returning(*alert_table.c)
+        result = await self.session.execute(statement)
+        return result.mappings().one()
 
     async def list_alerts(
         self,

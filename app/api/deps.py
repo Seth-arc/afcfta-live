@@ -22,6 +22,7 @@ from app.services.evidence_service import EvidenceService
 from app.services.expression_evaluator import ExpressionEvaluator
 from app.services.fact_normalization_service import FactNormalizationService
 from app.services.general_origin_rules_service import GeneralOriginRulesService
+from app.services.intelligence_service import IntelligenceService
 from app.services.rule_resolution_service import RuleResolutionService
 from app.services.status_service import StatusService
 from app.services.tariff_resolution_service import TariffResolutionService
@@ -44,6 +45,7 @@ def _build_eligibility_service(session: AsyncSession) -> EligibilityService:
         general_origin_rules_service=GeneralOriginRulesService(),
         cases_repository=CasesRepository(session),
         evaluations_repository=EvaluationsRepository(session),
+        intelligence_service=IntelligenceService(IntelligenceRepository(session)),
         audit_service=AuditService(
             evaluations_repository=EvaluationsRepository(session),
             cases_repository=CasesRepository(session),

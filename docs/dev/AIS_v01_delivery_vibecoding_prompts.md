@@ -343,7 +343,7 @@ When done, summarize the new endpoints and supported query filters.
 ```bash
 python -m pytest tests/integration/test_sources_api.py -v
 ```
-
+# Completed 23 March
 ---
 
 ## Prompt 11 — Add legal provision API endpoints
@@ -373,7 +373,7 @@ When done, summarize the new provision endpoints and filters.
 ```bash
 python -m pytest tests/integration/test_sources_api.py -v
 ```
-
+# Completed 23 March
 ---
 
 ## Prompt 12 — Surface provenance in rule and tariff responses

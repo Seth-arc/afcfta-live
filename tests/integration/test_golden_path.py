@@ -5,14 +5,31 @@ from __future__ import annotations
 from datetime import date
 from collections.abc import Mapping
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
 from app.api import deps as api_deps
+from app.core.enums import (
+    AuthorityTierEnum,
+    HsLevelEnum,
+    RateStatusEnum,
+    RuleStatusEnum,
+    ScheduleStatusEnum,
+    SourceTypeEnum,
+    StagingTypeEnum,
+    StatusTypeEnum,
+    TariffCategoryEnum,
+)
 from app.db.base import get_async_session_factory
+from app.db.models.hs import HS6Product
+from app.db.models.rules import EligibilityRulePathway, HS6PSRApplicability, PSRRule
+from app.db.models.sources import SourceRegistry
+from app.db.models.status import StatusAssertion
 from app.db.session import assessment_session_context
+from app.db.models.tariffs import TariffScheduleHeader, TariffScheduleLine, TariffScheduleRateByYear
 from tests.fixtures.golden_cases import GOLDEN_CASES
 
 pytestmark = pytest.mark.integration
@@ -54,6 +71,158 @@ def _fact_payload(fact_key: str, value: Any) -> dict[str, Any]:
     payload["fact_value_type"] = "text"
     payload["fact_value_text"] = value
     return payload
+
+
+def _build_source(tag: str, *, source_type: SourceTypeEnum) -> SourceRegistry:
+    """Create a minimal source row for deterministic snapshot-fixture data."""
+
+    checksum = uuid4().hex + uuid4().hex
+    return SourceRegistry(
+        title=f"Golden snapshot fixture {tag}",
+        short_title=f"GSF-{tag}",
+        source_group="pytest",
+        source_type=source_type,
+        authority_tier=AuthorityTierEnum.BINDING,
+        issuing_body="pytest",
+        jurisdiction_scope="test",
+        publication_date=date(2025, 1, 1),
+        effective_date=date(2025, 1, 1),
+        status="current",
+        language="en",
+        hs_version="HS2017",
+        file_path=f"tests/{tag}.txt",
+        mime_type="text/plain",
+        checksum_sha256=checksum,
+    )
+
+
+async def _seed_snapshot_alignment_candidate() -> dict[str, str]:
+    """Insert one deterministic two-year candidate with date-sensitive rule status overlays."""
+
+    hs6_code = f"97{int(uuid4().hex[:4], 16) % 10000:04d}"
+    rule_source = _build_source("snapshot-rule", source_type=SourceTypeEnum.APPENDIX)
+    tariff_source = _build_source("snapshot-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
+    status_source = _build_source("snapshot-status", source_type=SourceTypeEnum.STATUS_NOTICE)
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} golden snapshot fixture",
+            chapter=hs6_code[:2],
+            heading=hs6_code[:4],
+            description="Synthetic golden snapshot fixture",
+            section="XXI",
+            section_name="Miscellaneous",
+        )
+        session.add_all([rule_source, tariff_source, status_source, product])
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description="Synthetic snapshot rule",
+            legal_rule_text_verbatim="Wholly obtained only.",
+            legal_rule_text_normalized="WO",
+            rule_status=RuleStatusEnum.AGREED,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"snapshot-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                EligibilityRulePathway(
+                    psr_id=rule.psr_id,
+                    pathway_code="WO",
+                    pathway_label="WO",
+                    pathway_type="specific",
+                    expression_json={"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+                    tariff_shift_level=HsLevelEnum.SUBHEADING,
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                StatusAssertion(
+                    source_id=status_source.source_id,
+                    entity_type="psr_rule",
+                    entity_key=f"PSR:{rule.psr_id}",
+                    status_type=StatusTypeEnum.PROVISIONAL,
+                    status_text_verbatim="Provisional through 2025.",
+                    effective_from=date(2025, 1, 1),
+                    effective_to=date(2025, 12, 31),
+                ),
+                StatusAssertion(
+                    source_id=status_source.source_id,
+                    entity_type="psr_rule",
+                    entity_key=f"PSR:{rule.psr_id}",
+                    status_type=StatusTypeEnum.AGREED,
+                    status_text_verbatim="Agreed from 2026 onward.",
+                    effective_from=date(2026, 1, 1),
+                    effective_to=None,
+                ),
+            ]
+        )
+
+        schedule_header = TariffScheduleHeader(
+            source_id=tariff_source.source_id,
+            importing_state="NGA",
+            exporting_scope="GHA",
+            schedule_status=ScheduleStatusEnum.OFFICIAL,
+            publication_date=date(2025, 1, 1),
+            effective_date=date(2025, 1, 1),
+            hs_version="HS2017",
+            category_system="pytest",
+        )
+        session.add(schedule_header)
+        await session.flush()
+
+        schedule_line = TariffScheduleLine(
+            schedule_id=schedule_header.schedule_id,
+            hs_code=hs6_code,
+            product_description="Synthetic snapshot tariff line",
+            tariff_category=TariffCategoryEnum.LIBERALISED,
+            mfn_base_rate=15,
+            base_year=2025,
+            target_rate=0,
+            target_year=2026,
+            staging_type=StagingTypeEnum.IMMEDIATE,
+            row_ref=f"snapshot-{hs6_code}",
+        )
+        session.add(schedule_line)
+        await session.flush()
+        session.add_all(
+            [
+                TariffScheduleRateByYear(
+                    schedule_line_id=schedule_line.schedule_line_id,
+                    calendar_year=2025,
+                    preferential_rate=5,
+                    rate_status=RateStatusEnum.PROVISIONAL,
+                    source_id=tariff_source.source_id,
+                ),
+                TariffScheduleRateByYear(
+                    schedule_line_id=schedule_line.schedule_line_id,
+                    calendar_year=2026,
+                    preferential_rate=0,
+                    rate_status=RateStatusEnum.IN_FORCE,
+                    source_id=tariff_source.source_id,
+                ),
+            ]
+        )
+        await session.commit()
+
+    return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
 
 
 def _assessment_payload(
@@ -438,3 +607,44 @@ async def test_assessments_route_uses_assessment_scoped_db(
 
     assert response.status_code == 200
     assert calls["assessment_db"] == 1
+
+
+@pytest.mark.asyncio
+async def test_snapshot_year_changes_tariff_status_and_confidence(async_client: AsyncClient) -> None:
+    """A fixed synthetic candidate should resolve tariff and status overlays against the request year."""
+
+    candidate = await _seed_snapshot_alignment_candidate()
+    base_payload = {
+        "hs6_code": candidate["hs6_code"],
+        "hs_version": "HS2017",
+        "exporter": candidate["exporter"],
+        "importer": candidate["importer"],
+        "persona_mode": "exporter",
+        "production_facts": [_fact_payload("wholly_obtained", True), _fact_payload("direct_transport", True)],
+    }
+
+    response_2025 = await async_client.post(
+        "/api/v1/assessments",
+        json={**base_payload, "year": 2025},
+    )
+    response_2026 = await async_client.post(
+        "/api/v1/assessments",
+        json={**base_payload, "year": 2026},
+    )
+
+    assert response_2025.status_code == 200
+    assert response_2026.status_code == 200
+
+    body_2025 = response_2025.json()
+    body_2026 = response_2026.json()
+    _assert_response_shape(body_2025)
+    _assert_response_shape(body_2026)
+
+    assert body_2025["rule_status"] == "agreed"
+    assert body_2026["rule_status"] == "agreed"
+    assert body_2025["tariff_outcome"]["status"] == "provisional"
+    assert body_2026["tariff_outcome"]["status"] == "in_force"
+    assert body_2025["confidence_class"] == "provisional"
+    assert body_2026["confidence_class"] == "complete"
+    assert body_2025["eligible"] is True
+    assert body_2026["eligible"] is True

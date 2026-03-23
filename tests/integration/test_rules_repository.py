@@ -5,13 +5,18 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from datetime import date
 from typing import Any
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import AuthorityTierEnum, HsLevelEnum, RuleStatusEnum, SourceTypeEnum
 from app.db.base import get_async_session_factory
+from app.db.models.hs import HS6Product
+from app.db.models.rules import HS6PSRApplicability, PSRRule
+from app.db.models.sources import SourceRegistry
 from app.repositories.rules_repository import RulesRepository
 
 
@@ -95,6 +100,90 @@ def _pathway_codes(rows: list[Mapping[str, Any]]) -> list[str]:
     return [str(row["pathway_code"]) for row in rows]
 
 
+def _build_source(tag: str) -> SourceRegistry:
+    """Create a minimal provenance row for seeded repository fixtures."""
+
+    checksum = (uuid4().hex + uuid4().hex)
+    return SourceRegistry(
+        title=f"Rules fixture {tag}",
+        short_title=f"RF-{tag}",
+        source_group="pytest",
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        issuing_body="pytest",
+        jurisdiction_scope="test",
+        publication_date=ASSESSMENT_DATE,
+        effective_date=ASSESSMENT_DATE,
+        status="current",
+        language="en",
+        hs_version="HS2017",
+        file_path=f"tests/{tag}.txt",
+        mime_type="text/plain",
+        checksum_sha256=checksum,
+    )
+
+
+async def _seed_precedence_fixture(
+    session: AsyncSession,
+    *,
+    hs6_code: str,
+    applicability_rows: list[tuple[str, int]],
+) -> dict[str, Any]:
+    """Insert a synthetic HS6 product plus applicability rows for precedence tests."""
+
+    source = _build_source(f"precedence-{hs6_code}")
+    product = HS6Product(
+        hs_version="HS2017",
+        hs6_code=hs6_code,
+        hs6_display=f"{hs6_code} precedence fixture",
+        chapter=hs6_code[:2],
+        heading=hs6_code[:4],
+        description="Synthetic precedence fixture",
+        section="XXI",
+        section_name="Miscellaneous",
+    )
+    session.add_all([source, product])
+    await session.flush()
+
+    seeded_rules: list[PSRRule] = []
+    for index, (applicability_type, priority_rank) in enumerate(applicability_rows, start=1):
+        rule = PSRRule(
+            source_id=source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description="Synthetic precedence fixture",
+            legal_rule_text_verbatim=f"{applicability_type} rule",
+            legal_rule_text_normalized=applicability_type,
+            rule_status=RuleStatusEnum.AGREED,
+            effective_date=ASSESSMENT_DATE,
+            row_ref=f"{hs6_code}-{applicability_type}-{index}",
+        )
+        session.add(rule)
+        await session.flush()
+        session.add(
+            HS6PSRApplicability(
+                hs6_id=product.hs6_id,
+                psr_id=rule.psr_id,
+                applicability_type=applicability_type,
+                priority_rank=priority_rank,
+                effective_date=ASSESSMENT_DATE,
+            )
+        )
+        seeded_rules.append(rule)
+
+    await session.flush()
+    expected_type, expected_priority = min(applicability_rows, key=lambda item: item[1])
+    expected_rule = seeded_rules[[row[0] for row in applicability_rows].index(expected_type)]
+    return {
+        "hs6_id": product.hs6_id,
+        "expected_psr_id": expected_rule.psr_id,
+        "expected_type": expected_type,
+        "expected_priority": expected_priority,
+    }
+
+
 @pytest.mark.asyncio
 async def test_resolve_applicable_psr_prefers_direct_applicability_row_when_broader_rows_exist(
     rules_repository: tuple[AsyncSession, RulesRepository],
@@ -102,50 +191,24 @@ async def test_resolve_applicable_psr_prefers_direct_applicability_row_when_broa
     """The repository should resolve the active winner from hs6_psr_applicability."""
 
     session, repository = rules_repository
-    candidate = _require_candidate(
-        await _fetch_one(
-            session,
-            """
-            SELECT hp.hs6_id, hp.hs6_code
-            FROM hs6_product hp
-            JOIN hs6_psr_applicability pa ON pa.hs6_id = hp.hs6_id
-            WHERE hp.hs_version = 'HS2017'
-              AND (pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)
-              AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
-            GROUP BY hp.hs6_id, hp.hs6_code
-            HAVING BOOL_OR(pa.applicability_type = 'direct')
-               AND BOOL_OR(pa.applicability_type IN ('range', 'inherited_heading', 'inherited_chapter'))
-            ORDER BY hp.hs6_code ASC
-            LIMIT 1
-            """,
-            {"assessment_date": ASSESSMENT_DATE},
-        ),
-        "No HS6 code with both direct and broader applicability rows is loaded in the test database.",
-    )
-    expected = await _fetch_one(
+    candidate = await _seed_precedence_fixture(
         session,
-        """
-        SELECT pa.psr_id, pa.applicability_type, pa.priority_rank, pr.rule_status::text AS rule_status
-        FROM hs6_psr_applicability pa
-        JOIN psr_rule pr ON pr.psr_id = pa.psr_id
-        WHERE pa.hs6_id = :hs6_id
-          AND (pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)
-          AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
-        ORDER BY pa.priority_rank ASC, pr.updated_at DESC
-        LIMIT 1
-        """,
-        {"hs6_id": candidate["hs6_id"], "assessment_date": ASSESSMENT_DATE},
+        hs6_code="990101",
+        applicability_rows=[
+            ("direct", 1),
+            ("range", 2),
+            ("inherited_heading", 3),
+        ],
     )
 
     resolved = await repository.resolve_applicable_psr(str(candidate["hs6_id"]), ASSESSMENT_DATE)
 
-    assert expected is not None
     assert resolved is not None
-    assert expected["applicability_type"] == "direct"
-    assert str(resolved["psr_id"]) == str(expected["psr_id"])
-    assert resolved["applicability_type"] == expected["applicability_type"]
-    assert resolved["priority_rank"] == expected["priority_rank"]
-    assert str(resolved["rule_status"]) == str(expected["rule_status"])
+    assert candidate["expected_type"] == "direct"
+    assert str(resolved["psr_id"]) == str(candidate["expected_psr_id"])
+    assert resolved["applicability_type"] == candidate["expected_type"]
+    assert resolved["priority_rank"] == candidate["expected_priority"]
+    assert str(resolved["rule_status"]) == RuleStatusEnum.AGREED.value
 
 
 @pytest.mark.asyncio
@@ -155,50 +218,23 @@ async def test_resolve_applicable_psr_prefers_range_over_heading_and_chapter_whe
     """Range applicability should outrank inherited heading and chapter rows."""
 
     session, repository = rules_repository
-    candidate = _require_candidate(
-        await _fetch_one(
-            session,
-            """
-            SELECT hp.hs6_id, hp.hs6_code
-            FROM hs6_product hp
-            JOIN hs6_psr_applicability pa ON pa.hs6_id = hp.hs6_id
-            WHERE hp.hs_version = 'HS2017'
-              AND (pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)
-              AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
-            GROUP BY hp.hs6_id, hp.hs6_code
-            HAVING BOOL_OR(pa.applicability_type = 'range')
-               AND NOT BOOL_OR(pa.applicability_type = 'direct')
-               AND BOOL_OR(pa.applicability_type IN ('inherited_heading', 'inherited_chapter'))
-            ORDER BY hp.hs6_code ASC
-            LIMIT 1
-            """,
-            {"assessment_date": ASSESSMENT_DATE},
-        ),
-        "No HS6 code with range plus inherited heading or chapter applicability is loaded in the test database.",
-    )
-    expected = await _fetch_one(
+    candidate = await _seed_precedence_fixture(
         session,
-        """
-        SELECT pa.psr_id, pa.applicability_type, pa.priority_rank
-        FROM hs6_psr_applicability pa
-        JOIN psr_rule pr ON pr.psr_id = pa.psr_id
-        WHERE pa.hs6_id = :hs6_id
-          AND (pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)
-          AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
-        ORDER BY pa.priority_rank ASC, pr.updated_at DESC
-        LIMIT 1
-        """,
-        {"hs6_id": candidate["hs6_id"], "assessment_date": ASSESSMENT_DATE},
+        hs6_code="990102",
+        applicability_rows=[
+            ("range", 1),
+            ("inherited_heading", 2),
+            ("inherited_chapter", 3),
+        ],
     )
 
     resolved = await repository.resolve_applicable_psr(str(candidate["hs6_id"]), ASSESSMENT_DATE)
 
-    assert expected is not None
     assert resolved is not None
-    assert expected["applicability_type"] == "range"
-    assert str(resolved["psr_id"]) == str(expected["psr_id"])
+    assert candidate["expected_type"] == "range"
+    assert str(resolved["psr_id"]) == str(candidate["expected_psr_id"])
     assert resolved["applicability_type"] == "range"
-    assert resolved["priority_rank"] == expected["priority_rank"]
+    assert resolved["priority_rank"] == candidate["expected_priority"]
 
 
 @pytest.mark.asyncio
@@ -208,50 +244,22 @@ async def test_resolve_applicable_psr_prefers_heading_over_chapter_when_more_spe
     """Inherited heading applicability should beat inherited chapter applicability."""
 
     session, repository = rules_repository
-    candidate = _require_candidate(
-        await _fetch_one(
-            session,
-            """
-            SELECT hp.hs6_id, hp.hs6_code
-            FROM hs6_product hp
-            JOIN hs6_psr_applicability pa ON pa.hs6_id = hp.hs6_id
-            WHERE hp.hs_version = 'HS2017'
-              AND (pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)
-              AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
-            GROUP BY hp.hs6_id, hp.hs6_code
-            HAVING BOOL_OR(pa.applicability_type = 'inherited_heading')
-               AND BOOL_OR(pa.applicability_type = 'inherited_chapter')
-               AND NOT BOOL_OR(pa.applicability_type IN ('direct', 'range'))
-            ORDER BY hp.hs6_code ASC
-            LIMIT 1
-            """,
-            {"assessment_date": ASSESSMENT_DATE},
-        ),
-        "No HS6 code with inherited heading and chapter applicability rows is loaded in the test database.",
-    )
-    expected = await _fetch_one(
+    candidate = await _seed_precedence_fixture(
         session,
-        """
-        SELECT pa.psr_id, pa.applicability_type, pa.priority_rank
-        FROM hs6_psr_applicability pa
-        JOIN psr_rule pr ON pr.psr_id = pa.psr_id
-        WHERE pa.hs6_id = :hs6_id
-          AND (pa.effective_date IS NULL OR pa.effective_date <= :assessment_date)
-          AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
-        ORDER BY pa.priority_rank ASC, pr.updated_at DESC
-        LIMIT 1
-        """,
-        {"hs6_id": candidate["hs6_id"], "assessment_date": ASSESSMENT_DATE},
+        hs6_code="990103",
+        applicability_rows=[
+            ("inherited_heading", 1),
+            ("inherited_chapter", 2),
+        ],
     )
 
     resolved = await repository.resolve_applicable_psr(str(candidate["hs6_id"]), ASSESSMENT_DATE)
 
-    assert expected is not None
     assert resolved is not None
-    assert expected["applicability_type"] == "inherited_heading"
-    assert str(resolved["psr_id"]) == str(expected["psr_id"])
+    assert candidate["expected_type"] == "inherited_heading"
+    assert str(resolved["psr_id"]) == str(candidate["expected_psr_id"])
     assert resolved["applicability_type"] == "inherited_heading"
-    assert resolved["priority_rank"] == expected["priority_rank"]
+    assert resolved["priority_rank"] == candidate["expected_priority"]
 
 
 @pytest.mark.asyncio

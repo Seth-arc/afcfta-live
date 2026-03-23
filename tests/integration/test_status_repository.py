@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import AuthorityTierEnum, SourceTypeEnum, StatusTypeEnum
 from app.db.base import get_async_session_factory
+from app.db.models.sources import SourceRegistry
+from app.db.models.status import StatusAssertion, TransitionClause
 from app.repositories.status_repository import StatusRepository
 
 
@@ -60,6 +64,103 @@ def _require_candidate(
     if candidate is None:
         pytest.skip(reason)
     return candidate
+
+
+def _build_source(tag: str) -> SourceRegistry:
+    """Create a minimal source row for seeded status fixtures."""
+
+    checksum = uuid4().hex + uuid4().hex
+    return SourceRegistry(
+        title=f"Status fixture {tag}",
+        short_title=f"SF-{tag}",
+        source_group="pytest",
+        source_type=SourceTypeEnum.STATUS_NOTICE,
+        authority_tier=AuthorityTierEnum.OFFICIAL_OPERATIONAL,
+        issuing_body="pytest",
+        jurisdiction_scope="test",
+        publication_date=AS_OF_DATE,
+        effective_date=AS_OF_DATE,
+        status="current",
+        language="en",
+        file_path=f"tests/{tag}.txt",
+        mime_type="text/plain",
+        checksum_sha256=checksum,
+    )
+
+
+async def _seed_out_of_window_status_fixture(session: AsyncSession) -> dict[str, str]:
+    """Insert expired and future-only assertions for a synthetic entity."""
+
+    entity = {"entity_type": "corridor", "entity_key": "CORRIDOR:PYTEST:WINDOW:990001"}
+    source = _build_source("status-window")
+    session.add(source)
+    await session.flush()
+    session.add_all(
+        [
+            StatusAssertion(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                status_type=StatusTypeEnum.PENDING,
+                status_text_verbatim="Expired fixture",
+                effective_from=AS_OF_DATE - timedelta(days=365),
+                effective_to=AS_OF_DATE - timedelta(days=30),
+            ),
+            StatusAssertion(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                status_type=StatusTypeEnum.PROVISIONAL,
+                status_text_verbatim="Future fixture",
+                effective_from=AS_OF_DATE + timedelta(days=30),
+                effective_to=AS_OF_DATE + timedelta(days=365),
+            ),
+        ]
+    )
+    await session.flush()
+    return entity
+
+
+async def _seed_active_transition_fixture(session: AsyncSession) -> dict[str, str]:
+    """Insert active transition rows with deterministic repository ordering."""
+
+    entity = {"entity_type": "corridor", "entity_key": "CORRIDOR:PYTEST:TRANSITION:990002"}
+    source = _build_source("status-transition")
+    session.add(source)
+    await session.flush()
+    session.add_all(
+        [
+            TransitionClause(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                transition_type="short_window",
+                transition_text_verbatim="Ends first",
+                start_date=AS_OF_DATE - timedelta(days=5),
+                end_date=AS_OF_DATE + timedelta(days=5),
+            ),
+            TransitionClause(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                transition_type="medium_window",
+                transition_text_verbatim="Ends second",
+                start_date=AS_OF_DATE - timedelta(days=5),
+                end_date=AS_OF_DATE + timedelta(days=10),
+            ),
+            TransitionClause(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                transition_type="open_window",
+                transition_text_verbatim="No end date",
+                start_date=AS_OF_DATE - timedelta(days=5),
+                end_date=None,
+            ),
+        ]
+    )
+    await session.flush()
+    return entity
 
 
 @pytest.mark.asyncio
@@ -203,25 +304,7 @@ async def test_get_status_ignores_out_of_window_assertions(
     """Entities with only expired or future assertions should resolve to no current status."""
 
     session, repository = status_repository
-    candidate = _require_candidate(
-        await _fetch_one(
-            session,
-            """
-            SELECT sa.entity_type, sa.entity_key
-            FROM status_assertion sa
-            GROUP BY sa.entity_type, sa.entity_key
-            HAVING COUNT(*) > 0
-               AND NOT BOOL_OR(
-                   (sa.effective_from IS NULL OR sa.effective_from <= :as_of_date)
-                   AND (sa.effective_to IS NULL OR sa.effective_to >= :as_of_date)
-               )
-            ORDER BY sa.entity_type ASC, sa.entity_key ASC
-            LIMIT 1
-            """,
-            {"as_of_date": AS_OF_DATE},
-        ),
-        "No entity with only out-of-window status assertions is loaded in the test database.",
-    )
+    candidate = await _seed_out_of_window_status_fixture(session)
 
     resolved = await repository.get_status(
         str(candidate["entity_type"]),
@@ -238,22 +321,7 @@ async def test_get_active_transitions_returns_only_current_rows_in_repository_or
     """Transition lookup should filter to current rows and preserve the SQL order."""
 
     session, repository = status_repository
-    candidate = _require_candidate(
-        await _fetch_one(
-            session,
-            """
-            SELECT tc.entity_type, tc.entity_key
-            FROM transition_clause tc
-            WHERE (tc.start_date IS NULL OR tc.start_date <= :as_of_date)
-              AND (tc.end_date IS NULL OR tc.end_date >= :as_of_date)
-            GROUP BY tc.entity_type, tc.entity_key
-            ORDER BY COUNT(*) DESC, tc.entity_type ASC, tc.entity_key ASC
-            LIMIT 1
-            """,
-            {"as_of_date": AS_OF_DATE},
-        ),
-        "No active transition clause is loaded in the test database.",
-    )
+    candidate = await _seed_active_transition_fixture(session)
     expected = await _fetch_all(
         session,
         """

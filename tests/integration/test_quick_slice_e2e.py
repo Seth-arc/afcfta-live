@@ -3,14 +3,30 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from app.core.enums import (
+    AuthorityTierEnum,
+    HsLevelEnum,
+    RateStatusEnum,
+    RuleStatusEnum,
+    ScheduleStatusEnum,
+    SourceTypeEnum,
+    StagingTypeEnum,
+    TariffCategoryEnum,
+)
 from app.core.countries import V01_CORRIDORS
 from app.db.base import get_async_session_factory
+from app.db.models.hs import HS6Product
+from app.db.models.rules import EligibilityRulePathway, HS6PSRApplicability, PSRRule
+from app.db.models.sources import SourceRegistry
+from app.db.models.tariffs import TariffScheduleHeader, TariffScheduleLine, TariffScheduleRateByYear
 
 
 pytestmark = pytest.mark.integration
@@ -18,6 +34,129 @@ pytestmark = pytest.mark.integration
 
 def _sql_tuple(values: tuple[str, ...]) -> str:
     return "(" + ", ".join(f"'{value}'" for value in values) + ")"
+
+
+def _build_source(tag: str, *, source_type: SourceTypeEnum) -> SourceRegistry:
+    """Create a minimal source row for seeded quick-slice fixtures."""
+
+    checksum = uuid4().hex + uuid4().hex
+    return SourceRegistry(
+        title=f"Quick slice fixture {tag}",
+        short_title=f"QSF-{tag}",
+        source_group="pytest",
+        source_type=source_type,
+        authority_tier=AuthorityTierEnum.BINDING,
+        issuing_body="pytest",
+        jurisdiction_scope="test",
+        publication_date=date(2025, 1, 1),
+        effective_date=date(2025, 1, 1),
+        status="current",
+        language="en",
+        hs_version="HS2017",
+        file_path=f"tests/{tag}.txt",
+        mime_type="text/plain",
+        checksum_sha256=checksum,
+    )
+
+
+async def _seed_pending_quick_slice_candidate() -> dict[str, str]:
+    """Insert one isolated pending-rule candidate for deterministic blocker coverage."""
+
+    hs6_code = f"98{int(uuid4().hex[:4], 16) % 10000:04d}"
+    rule_source = _build_source("pending-rule", source_type=SourceTypeEnum.APPENDIX)
+    tariff_source = _build_source("pending-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} pending quick-slice fixture",
+            chapter=hs6_code[:2],
+            heading=hs6_code[:4],
+            description="Synthetic pending-rule quick-slice fixture",
+            section="XXI",
+            section_name="Miscellaneous",
+        )
+        session.add_all([rule_source, tariff_source, product])
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description="Synthetic pending fixture",
+            legal_rule_text_verbatim="Wholly obtained only.",
+            legal_rule_text_normalized="WO",
+            rule_status=RuleStatusEnum.PENDING,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"pending-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                EligibilityRulePathway(
+                    psr_id=rule.psr_id,
+                    pathway_code="WO",
+                    pathway_label="WO",
+                    pathway_type="specific",
+                    expression_json={"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+                    tariff_shift_level=HsLevelEnum.SUBHEADING,
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+            ]
+        )
+
+        schedule_header = TariffScheduleHeader(
+            source_id=tariff_source.source_id,
+            importing_state="NGA",
+            exporting_scope="GHA",
+            schedule_status=ScheduleStatusEnum.OFFICIAL,
+            publication_date=date(2025, 1, 1),
+            effective_date=date(2025, 1, 1),
+            hs_version="HS2017",
+            category_system="pytest",
+        )
+        session.add(schedule_header)
+        await session.flush()
+
+        schedule_line = TariffScheduleLine(
+            schedule_id=schedule_header.schedule_id,
+            hs_code=hs6_code,
+            product_description="Synthetic pending fixture tariff line",
+            tariff_category=TariffCategoryEnum.LIBERALISED,
+            mfn_base_rate=Decimal("15.0000"),
+            base_year=2025,
+            target_rate=Decimal("0.0000"),
+            target_year=2025,
+            staging_type=StagingTypeEnum.IMMEDIATE,
+            row_ref=f"pending-{hs6_code}",
+        )
+        session.add(schedule_line)
+        await session.flush()
+        session.add(
+            TariffScheduleRateByYear(
+                schedule_line_id=schedule_line.schedule_line_id,
+                calendar_year=2025,
+                preferential_rate=Decimal("0.0000"),
+                rate_status=RateStatusEnum.IN_FORCE,
+                source_id=tariff_source.source_id,
+            )
+        )
+        await session.commit()
+
+    return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
 
 
 async def _select_supported_candidate(
@@ -603,20 +742,13 @@ async def test_parser_generated_supported_corridor_candidate(async_client: Async
 async def test_pending_rule_blocks_before_pathway_evaluation(async_client: AsyncClient) -> None:
     """Pending parser-era rules should hard block before any pathway can be selected."""
 
-    candidate = _require_candidate(
-        await _select_supported_candidate(
-            require_rule_statuses=("pending",),
-            require_component_types=("WO", "CTH", "VNM", "VA"),
-            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA"), ("CIV", "NGA"), ("SEN", "NGA")),
-        ),
-        "No pending parser-era candidate with an otherwise executable pathway is loaded in the test database.",
-    )
+    candidate = await _seed_pending_quick_slice_candidate()
 
     payload = _assessment_payload(
         hs6_code=candidate["hs6_code"],
         exporter=candidate["exporter"],
         importer=candidate["importer"],
-        facts=_best_effort_pass_facts(candidate),
+        facts=_wo_pass_facts(),
     )
 
     response = await async_client.post("/api/v1/assessments", json=payload)

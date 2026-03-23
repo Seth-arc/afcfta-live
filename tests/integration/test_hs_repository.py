@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_async_session_factory
+from app.db.models.hs import HS6Product
 from app.repositories.hs_repository import HSRepository
 
 
@@ -69,6 +70,38 @@ def _extract_search_term(description: str) -> str:
     return tokens[0].lower()
 
 
+async def _seed_multi_version_fixture(session: AsyncSession) -> str:
+    """Insert the same HS6 code across two versions for deterministic scope assertions."""
+
+    hs6_code = "990401"
+    session.add_all(
+        [
+            HS6Product(
+                hs_version="HS2017",
+                hs6_code=hs6_code,
+                hs6_display=f"{hs6_code} test product 2017",
+                chapter=hs6_code[:2],
+                heading=hs6_code[:4],
+                description="Synthetic multi-version fixture 2017",
+                section="XXI",
+                section_name="Miscellaneous",
+            ),
+            HS6Product(
+                hs_version="HS2022",
+                hs6_code=hs6_code,
+                hs6_display=f"{hs6_code} test product 2022",
+                chapter=hs6_code[:2],
+                heading=hs6_code[:4],
+                description="Synthetic multi-version fixture 2022",
+                section="XXI",
+                section_name="Miscellaneous",
+            ),
+        ]
+    )
+    await session.flush()
+    return hs6_code
+
+
 @pytest.mark.asyncio
 async def test_get_by_code_returns_canonical_hs2017_product(
     hs_repository: tuple[AsyncSession, HSRepository],
@@ -120,20 +153,7 @@ async def test_get_by_code_respects_hs_version_scope_when_same_code_exists_acros
     """The repository should scope canonical resolution by hs_version plus hs6_code."""
 
     session, repository = hs_repository
-    candidate = _require_candidate(
-        await _fetch_one(
-            session,
-            """
-            SELECT hp.hs6_code
-            FROM hs6_product hp
-            GROUP BY hp.hs6_code
-            HAVING COUNT(DISTINCT hp.hs_version) > 1
-            ORDER BY hp.hs6_code ASC
-            LIMIT 1
-            """,
-        ),
-        "No HS6 code with rows in multiple HS versions is loaded in the test database.",
-    )
+    seeded_hs6_code = await _seed_multi_version_fixture(session)
     expected_rows = await _fetch_all(
         session,
         """
@@ -142,15 +162,15 @@ async def test_get_by_code_respects_hs_version_scope_when_same_code_exists_acros
         WHERE hs6_code = :hs6_code
         ORDER BY hs_version ASC
         """,
-        {"hs6_code": candidate["hs6_code"]},
+        {"hs6_code": seeded_hs6_code},
     )
 
     assert len(expected_rows) >= 2
 
     first_version = str(expected_rows[0]["hs_version"])
     second_version = str(expected_rows[1]["hs_version"])
-    first_result = await repository.get_by_code(first_version, str(candidate["hs6_code"]))
-    second_result = await repository.get_by_code(second_version, str(candidate["hs6_code"]))
+    first_result = await repository.get_by_code(first_version, seeded_hs6_code)
+    second_result = await repository.get_by_code(second_version, seeded_hs6_code)
 
     assert first_result is not None
     assert second_result is not None

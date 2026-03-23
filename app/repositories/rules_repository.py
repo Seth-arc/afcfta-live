@@ -70,6 +70,7 @@ class RulesRepository:
               pr.legal_rule_text_normalized,
               pr.rule_status,
               pr.page_ref,
+              pr.table_ref,
               pr.row_ref,
               pr.source_id
             FROM hs6_product hp

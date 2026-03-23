@@ -58,6 +58,17 @@ class TariffResolutionService:
             tariff_status=tariff_status,
             tariff_category=tariff["tariff_category"],
             schedule_status=tariff["schedule_status"],
+            schedule_id=tariff["schedule_id"],
+            schedule_line_id=tariff["schedule_line_id"],
+            year_rate_id=tariff["year_rate_id"],
+            schedule_source_id=tariff["schedule_source_id"],
+            rate_source_id=tariff["rate_source_id"],
+            resolved_rate_year=tariff["resolved_rate_year"],
+            line_page_ref=tariff["line_page_ref"],
+            rate_page_ref=tariff["rate_page_ref"],
+            table_ref=tariff["table_ref"],
+            row_ref=tariff["row_ref"],
+            used_fallback_rate=tariff["used_fallback_rate"],
         )
 
     async def resolve(

@@ -520,6 +520,62 @@ async def test_get_tariff_falls_back_to_latest_prior_rate_when_requested_year_mi
 
 
 @pytest.mark.asyncio
+async def test_get_tariff_returns_source_and_reference_provenance_fields(
+    tariffs_repository: tuple[AsyncSession, TariffsRepository],
+) -> None:
+    """Resolved tariff bundles should expose schedule/rate source ids and line/rate references."""
+
+    session, repository = tariffs_repository
+    candidate = _require_candidate(
+        await _fetch_one(
+            session,
+            """
+            SELECT DISTINCT
+              tsh.exporting_scope AS exporter,
+              tsh.importing_state AS importer,
+              hp.hs_version,
+              hp.hs6_code
+            FROM tariff_schedule_header tsh
+            JOIN tariff_schedule_line tsl ON tsl.schedule_id = tsh.schedule_id
+            JOIN hs6_product hp
+              ON hp.hs_version = tsh.hs_version
+             AND hp.hs6_code = LEFT(tsl.hs_code, 6)
+            WHERE tsh.source_id IS NOT NULL
+            ORDER BY hp.hs6_code ASC, tsh.exporting_scope ASC, tsh.importing_state ASC
+            LIMIT 1
+            """,
+        ),
+        "No tariff-backed candidate with provenance source ids is loaded in the test database.",
+    )
+    expected = await _expected_tariff_bundle(
+        session,
+        exporter=str(candidate["exporter"]),
+        importer=str(candidate["importer"]),
+        hs_version=str(candidate["hs_version"]),
+        hs6_code=str(candidate["hs6_code"]),
+        year=DEFAULT_YEAR,
+        prefix_match=True,
+    )
+
+    resolved = await repository.get_tariff(
+        exporter=str(candidate["exporter"]),
+        importer=str(candidate["importer"]),
+        hs_version=str(candidate["hs_version"]),
+        hs6_code=str(candidate["hs6_code"]),
+        year=DEFAULT_YEAR,
+    )
+
+    assert expected is not None
+    assert resolved is not None
+    assert str(resolved["schedule_source_id"]) == str(expected["schedule_source_id"])
+    assert str(resolved["rate_source_id"]) == str(expected["rate_source_id"])
+    assert resolved["line_page_ref"] == expected["line_page_ref"]
+    assert resolved["rate_page_ref"] == expected["rate_page_ref"]
+    assert resolved["table_ref"] == expected["table_ref"]
+    assert resolved["row_ref"] == expected["row_ref"]
+
+
+@pytest.mark.asyncio
 async def test_get_tariff_prefers_highest_priority_schedule_status(
     tariffs_repository: tuple[AsyncSession, TariffsRepository],
 ) -> None:

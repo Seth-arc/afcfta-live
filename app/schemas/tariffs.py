@@ -90,7 +90,13 @@ class TariffResolutionResult(BaseModel):
     schedule_id: UUID | None = None
     schedule_line_id: UUID | None = None
     year_rate_id: UUID | None = None
+    schedule_source_id: UUID | None = None
+    rate_source_id: UUID | None = None
     resolved_rate_year: int | None = None
+    line_page_ref: int | None = None
+    rate_page_ref: int | None = None
+    table_ref: str | None = None
+    row_ref: str | None = None
     used_fallback_rate: bool = False
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")

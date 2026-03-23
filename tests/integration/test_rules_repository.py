@@ -435,3 +435,51 @@ async def test_get_rules_by_hs6_preserves_process_pathways(
     assert [pathway["expression_json"] for pathway in actual_process_pathways] == [
         row["expression_json"] for row in expected_process_pathways
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_rules_by_hs6_returns_rule_provenance_fields(
+    rules_repository: tuple[AsyncSession, RulesRepository],
+) -> None:
+    """Resolved rule bundles should expose the PSR's provenance identifiers and row references."""
+
+    session, repository = rules_repository
+    candidate = _require_candidate(
+        await _fetch_one(
+            session,
+            _WINNER_CTE
+            + """
+            SELECT resolved.hs_version, resolved.hs6_code, resolved.psr_id
+            FROM resolved
+            JOIN psr_rule pr ON pr.psr_id = resolved.psr_id
+            WHERE resolved.winner_rank = 1
+              AND pr.source_id IS NOT NULL
+            ORDER BY resolved.hs6_code ASC
+            LIMIT 1
+            """,
+            {"assessment_date": ASSESSMENT_DATE},
+        ),
+        "No resolved PSR with source provenance is loaded in the test database.",
+    )
+    expected_rule = await _fetch_one(
+        session,
+        """
+        SELECT pr.source_id, pr.page_ref, pr.table_ref, pr.row_ref
+        FROM psr_rule pr
+        WHERE pr.psr_id = :psr_id
+        """,
+        {"psr_id": candidate["psr_id"]},
+    )
+
+    bundle = await repository.get_rules_by_hs6(
+        str(candidate["hs_version"]),
+        str(candidate["hs6_code"]),
+        ASSESSMENT_DATE,
+    )
+
+    assert bundle is not None
+    assert expected_rule is not None
+    assert str(bundle["psr"]["source_id"]) == str(expected_rule["source_id"])
+    assert bundle["psr"]["page_ref"] == expected_rule["page_ref"]
+    assert bundle["psr"]["table_ref"] == expected_rule["table_ref"]
+    assert bundle["psr"]["row_ref"] == expected_rule["row_ref"]

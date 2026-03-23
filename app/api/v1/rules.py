@@ -38,5 +38,6 @@ async def get_rules_for_hs6(
         pathways=rule_bundle.pathways,
         source_id=rule_bundle.psr_rule.source_id,
         page_ref=rule_bundle.psr_rule.page_ref,
+        table_ref=rule_bundle.psr_rule.table_ref,
         row_ref=rule_bundle.psr_rule.row_ref,
     )

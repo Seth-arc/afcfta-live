@@ -19,7 +19,12 @@ class EvidenceService:
         persona_mode: str,
         existing_documents: list[str],
     ) -> EvidenceReadinessResult:
-        """Return required, missing, and verification items for a persona/entity pair."""
+        """Return required, missing, and verification items for a persona/entity pair.
+
+        The current evidence tables are not date-windowed, so readiness remains
+        assessment-snapshot consistent by running inside the same repeatable-read
+        transaction as the rest of the assessment.
+        """
 
         resolved_persona = self._normalize_persona_mode(persona_mode)
         requirements = await self.evidence_repository.get_requirements(

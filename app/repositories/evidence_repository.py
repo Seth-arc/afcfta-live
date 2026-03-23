@@ -21,7 +21,12 @@ class EvidenceRepository:
         entity_key: str,
         persona_mode: str,
     ) -> list[Mapping[str, Any]]:
-        """Return evidence requirements for one entity key, including system requirements."""
+        """Return evidence requirements for one entity key, including system requirements.
+
+        Evidence requirements are non-temporal in the current schema, so assessment
+        snapshot alignment comes from the surrounding repeatable-read transaction
+        rather than an explicit as-of-date filter.
+        """
 
         statement = text(
             """
@@ -61,7 +66,12 @@ class EvidenceRepository:
         entity_key: str,
         risk_category: str | None,
     ) -> list[Mapping[str, Any]]:
-        """Return active verification questions for an entity key, optionally filtered by risk."""
+        """Return active verification questions for an entity key, optionally filtered by risk.
+
+        Verification questions likewise have no effective/expiry window columns in
+        v0.1, so transaction snapshot isolation is the only date-alignment mechanism
+        available here.
+        """
 
         params: dict[str, Any] = {
             "entity_type": entity_type,

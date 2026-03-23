@@ -194,3 +194,31 @@ async def test_build_readiness_with_no_requirements_returns_empty_and_complete()
     assert result.verification_questions == []
     assert result.readiness_score == 1.0
     assert result.completeness_ratio == 1.0
+
+
+@pytest.mark.asyncio
+async def test_build_readiness_uses_non_temporal_repository_contract() -> None:
+    """Evidence readiness should stay date-agnostic until the schema adds date windows."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    repository.get_verification_questions.return_value = []
+    service = EvidenceService(repository)
+
+    await service.build_readiness(
+        entity_type="pathway",
+        entity_key="PATHWAY:pathway-999",
+        persona_mode="exporter",
+        existing_documents=[],
+    )
+
+    repository.get_requirements.assert_awaited_once_with(
+        entity_type="pathway",
+        entity_key="PATHWAY:pathway-999",
+        persona_mode="exporter",
+    )
+    repository.get_verification_questions.assert_awaited_once_with(
+        entity_type="pathway",
+        entity_key="PATHWAY:pathway-999",
+        risk_category=None,
+    )

@@ -162,6 +162,42 @@ def test_json_fact_ne_supports_ref_fact() -> None:
     assert result.checks[0].passed is True
 
 
+def test_every_non_originating_input_passes_when_all_inputs_differ_from_output() -> None:
+    evaluator = ExpressionEvaluator()
+    expression = {
+        "op": "every_non_originating_input",
+        "test": {"op": "heading_ne_output"},
+    }
+
+    result = evaluator.evaluate(
+        expression,
+        {
+            "non_originating_inputs": [{"hs4_code": "1001", "hs6_code": "100190"}],
+            "output_hs6_code": "110311",
+        },
+    )
+
+    assert result.result is True
+    assert result.missing_variables == []
+    assert result.checks[0].check_code == "HEADING_NE_OUTPUT"
+    assert result.checks[0].passed is True
+
+
+def test_every_non_originating_input_tracks_missing_registered_special_facts() -> None:
+    evaluator = ExpressionEvaluator()
+    expression = {
+        "op": "every_non_originating_input",
+        "test": {"op": "subheading_ne_output"},
+    }
+
+    result = evaluator.evaluate(expression, {})
+
+    assert result.result is None
+    assert result.missing_variables == ["non_originating_inputs", "output_hs6_code"]
+    assert result.checks[0].passed is None
+    assert result.checks[0].check_code == "SUBHEADING_NE_OUTPUT"
+
+
 def test_expression_too_long_raises_error() -> None:
     evaluator = ExpressionEvaluator()
     expression = "vnom_percent <= 60 " * 30

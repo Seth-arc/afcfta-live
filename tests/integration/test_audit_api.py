@@ -14,6 +14,7 @@ from app.repositories.evaluations_repository import EvaluationsRepository
 from tests.integration.test_quick_slice_e2e import (
     _assessment_payload,
     _best_effort_pass_facts,
+    _cth_pass_facts,
     _fact_payload,
     _require_candidate,
     _select_supported_candidate,
@@ -207,3 +208,64 @@ async def test_list_case_evaluations_returns_newest_first(async_client: AsyncCli
     ]
     assert [item["evaluation_date"] for item in body[:2]] == ["2025-01-01", "2024-01-01"]
     assert all(item["case_id"] == case_id for item in body[:2])
+
+
+@pytest.mark.asyncio
+async def test_special_cth_facts_round_trip_through_assessment_and_audit_replay(
+    async_client: AsyncClient,
+) -> None:
+    """List-based CTH inputs should persist from assessment submission through audit replay."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("CTH",),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "CMR"),),
+            require_corridors=(("GHA", "CMR"),),
+        ),
+        "No stable CTH audit replay candidate was found for special fact coverage.",
+    )
+    facts = _cth_pass_facts(candidate["hs6_code"], candidate["heading"])
+    case_id = await _create_case_with_facts(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=facts,
+    )
+
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json={
+            **_assessment_payload(
+                hs6_code=candidate["hs6_code"],
+                exporter=candidate["exporter"],
+                importer=candidate["importer"],
+                facts=facts,
+            ),
+            "case_id": case_id,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    history_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/evaluations")
+    assert history_response.status_code == 200, history_response.text
+    evaluation_id = history_response.json()[0]["evaluation_id"]
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    trail_body = trail_response.json()
+
+    facts_by_key = {
+        item["fact_key"]: item
+        for item in trail_body["original_input_facts"]
+    }
+    assert facts_by_key["non_originating_inputs"]["fact_value_type"] == "list"
+    assert facts_by_key["non_originating_inputs"]["fact_value_json"] == facts[
+        "non_originating_inputs"
+    ]
+    assert facts_by_key["output_hs6_code"]["fact_value_type"] == "text"
+    assert facts_by_key["output_hs6_code"]["fact_value_text"] == facts["output_hs6_code"]
+    assert any(
+        check["check_code"] in {"HEADING_NE_OUTPUT", "SUBHEADING_NE_OUTPUT"}
+        for check in trail_body["atomic_checks"]
+    )

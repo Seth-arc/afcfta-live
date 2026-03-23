@@ -84,6 +84,37 @@ def test_normalize_facts_accepts_unknown_key_and_logs_warning(caplog: pytest.Log
     assert "Unknown fact key encountered during normalization: warehouse_code" in caplog.text
 
 
+def test_normalize_facts_treats_non_originating_inputs_and_output_hs6_code_as_known_types(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service = FactNormalizationService()
+    facts = [
+        build_fact(
+            "non_originating_inputs",
+            "list",
+            fact_value_json=[{"hs4_code": "1001", "hs6_code": "100190"}],
+        ),
+        build_fact("output_hs6_code", "text", fact_value_text="110311"),
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        result = service.normalize_facts(facts)
+
+    assert result["non_originating_inputs"] == [{"hs4_code": "1001", "hs6_code": "100190"}]
+    assert result["output_hs6_code"] == "110311"
+    assert "Unknown fact key encountered during normalization" not in caplog.text
+
+
+def test_normalize_facts_raises_when_known_fact_value_type_mismatches_registry() -> None:
+    service = FactNormalizationService()
+    facts = [build_fact("output_hs6_code", "list", fact_value_json=["110311"])]
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        service.normalize_facts(facts)
+
+    assert exc_info.value.message == "Fact 'output_hs6_code' must use fact_value_type 'text'"
+
+
 def test_normalize_facts_handles_mixed_types_from_object_records() -> None:
     service = FactNormalizationService()
     facts = [

@@ -10,6 +10,8 @@ PRODUCTION_FACTS = {
     "fob_value": {"type": "number", "unit": "currency", "required_for": []},
     "customs_value": {"type": "number", "unit": "currency", "required_for": []},
     "originating_materials_value": {"type": "number", "unit": "currency", "required_for": []},
+    "non_originating_inputs": {"type": "list", "required_for": []},
+    "output_hs6_code": {"type": "text", "required_for": []},
     "tariff_heading_input": {"type": "text", "required_for": ["CTH", "CTSH"]},
     "tariff_heading_output": {"type": "text", "required_for": ["CTH", "CTSH"]},
     "tariff_subheading_input": {"type": "text", "required_for": ["CTSH"]},
@@ -22,6 +24,11 @@ PRODUCTION_FACTS = {
     "cumulation_claimed": {"type": "boolean", "required_for": ["general"]},
     "cumulation_partner_states": {"type": "list", "required_for": []},
 }
+
+EVERY_NON_ORIGINATING_INPUT_FACTS = (
+    "non_originating_inputs",
+    "output_hs6_code",
+)
 
 DERIVED_VARIABLES = {
     "vnom_percent": "non_originating / ex_works * 100",

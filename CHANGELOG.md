@@ -28,8 +28,10 @@ Fixed repository and persistence defects uncovered by the new suites:
 - request-scoped DB commit behavior for persisted evaluations
 - persisted audit `check_type` schema alignment for full logical audit stages via Alembic revision `0011_expand_checktype`
 - Alembic migration environment fallback to async `DATABASE_URL` when sync PostgreSQL drivers are unavailable
+- first-class fact contract hardening for `non_originating_inputs` and `output_hs6_code`, including typed normalization, executable-pathway required-fact inference, and audit replay coverage
 
 Final handbook validation pass completed successfully across repository, parser, assessment, and audit suites (79 passed, 8 skipped, 0 failed).
+Targeted fact-contract validation completed successfully (`test_fact_normalization_service`, `test_expression_evaluator`, `test_eligibility_service`, `test_audit_api`).
 
 ### Scope
 

@@ -388,6 +388,41 @@ async def test_missing_facts_returns_incomplete_confidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_missing_every_non_originating_input_facts_block_before_normalization() -> None:
+    """CTH/CTSH list-input pathways should declare the special facts as core requirements."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(
+        hs6_code="110311",
+        pathway_code="CTH",
+        expression_json={
+            "op": "every_non_originating_input",
+            "test": {"op": "heading_ne_output"},
+        },
+    )
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.return_value = _status_overlay(
+        "in_force",
+        "complete",
+        "Corridor is operational.",
+    )
+
+    result = await service.assess(request)
+
+    assert result.eligible is False
+    assert result.confidence_class == "incomplete"
+    assert result.missing_facts == ["non_originating_inputs", "output_hs6_code"]
+    assert "MISSING_CORE_FACTS" in result.failures
+    deps["fact_normalization_service"].normalize_facts.assert_not_called()
+    deps["expression_evaluator"].evaluate.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_general_rules_fail_after_passing_psr() -> None:
     """A passing pathway can still fail the general rules layer."""
 

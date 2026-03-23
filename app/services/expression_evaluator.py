@@ -8,13 +8,16 @@ import re
 from typing import Any
 
 from app.core.exceptions import ExpressionEvaluationError
-from app.core.fact_keys import DERIVED_VARIABLES, PRODUCTION_FACTS
+from app.core.fact_keys import (
+    DERIVED_VARIABLES,
+    EVERY_NON_ORIGINATING_INPUT_FACTS,
+    PRODUCTION_FACTS,
+)
 from app.core.failure_codes import FAILURE_CODES
 
 MAX_EXPRESSION_DEPTH = 10
 MAX_TEXT_EXPRESSION_LENGTH = 500
 ALLOWED_VARIABLES = set(PRODUCTION_FACTS) | set(DERIVED_VARIABLES)
-SPECIAL_VARIABLES = {"non_originating_inputs", "output_hs6_code"}
 TEXT_OPERATOR_MAP = {
     "<=": "FORMULA_LTE",
     "<": "FORMULA_LT",
@@ -549,12 +552,13 @@ class ExpressionEvaluator:
         """Evaluate the list-based CTH or CTSH check against the output HS code."""
 
         missing_variables: list[str] = []
-        inputs = facts.get("non_originating_inputs")
+        inputs_key, output_key = EVERY_NON_ORIGINATING_INPUT_FACTS
+        inputs = facts.get(inputs_key)
         if inputs is None:
-            missing_variables.append("non_originating_inputs")
-        output_hs6_code = facts.get("output_hs6_code")
+            missing_variables.append(inputs_key)
+        output_hs6_code = facts.get(output_key)
         if output_hs6_code is None:
-            missing_variables.append("output_hs6_code")
+            missing_variables.append(output_key)
 
         if missing_variables:
             return ExpressionResult(
@@ -761,7 +765,7 @@ class ExpressionEvaluator:
     def _ensure_allowed_variable(self, variable_name: str, *, allow_special: bool) -> None:
         """Reject variable names outside the contract-defined whitelist."""
 
-        allowed_variables = ALLOWED_VARIABLES | (SPECIAL_VARIABLES if allow_special else set())
+        allowed_variables = ALLOWED_VARIABLES
         if variable_name not in allowed_variables:
             raise ExpressionEvaluationError(
                 f"Variable '{variable_name}' is not allowed in expressions",

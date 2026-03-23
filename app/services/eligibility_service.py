@@ -11,7 +11,11 @@ from app.core.entity_keys import make_entity_key
 from app.core.enums import LegalOutcome
 from app.core.exceptions import TariffNotFoundError
 from app.core.failure_codes import FAILURE_CODES
-from app.core.fact_keys import DERIVED_VARIABLES, PRODUCTION_FACTS
+from app.core.fact_keys import (
+    DERIVED_VARIABLES,
+    EVERY_NON_ORIGINATING_INPUT_FACTS,
+    PRODUCTION_FACTS,
+)
 from app.schemas.assessments import (
     EligibilityAssessmentResponse,
     EligibilityRequest,
@@ -387,6 +391,11 @@ class EligibilityService:
     def _required_facts_for_pathway(self, pathway: RulePathwayOut) -> list[str]:
         """Infer required facts from pathway labels plus expression_json structure."""
 
+        expression = self._extract_pathway_expression(pathway.expression_json)
+        expression_required = self._required_facts_from_expression(expression)
+        if self._is_executable_expression(expression) and expression_required:
+            return expression_required
+
         required: list[str] = []
         pathway_markers = {
             marker
@@ -398,8 +407,7 @@ class EligibilityService:
             if rule_types.intersection(pathway_markers):
                 required = self._merge_unique(required, [fact_key])
 
-        expression = self._extract_pathway_expression(pathway.expression_json)
-        return self._merge_unique(required, self._required_facts_from_expression(expression))
+        return required
 
     def _required_facts_from_expression(self, expression: Any) -> list[str]:
         """Walk the supported expression tree to extract referenced facts."""
@@ -435,7 +443,7 @@ class EligibilityService:
             return required
 
         if op == "every_non_originating_input":
-            return ["non_originating_inputs", "output_hs6_code"]
+            return list(EVERY_NON_ORIGINATING_INPUT_FACTS)
 
         return []
 

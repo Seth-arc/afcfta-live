@@ -31,6 +31,7 @@ class FactNormalizationService:
                 self._get_field(fact, "fact_value_type"),
                 fact_key,
             )
+            self._validate_declared_value_type(fact_key, fact_value_type)
             normalized_facts[fact_key] = self._extract_typed_value(
                 fact,
                 fact_key,
@@ -59,6 +60,24 @@ class FactNormalizationService:
                 detail={"fact_key": fact_key},
             )
         return str(normalized_value).lower()
+
+    @staticmethod
+    def _validate_declared_value_type(fact_key: str, fact_value_type: str) -> None:
+        """Enforce registry-defined value types for known fact keys."""
+
+        expected_value_type = PRODUCTION_FACTS.get(fact_key, {}).get("type")
+        if expected_value_type is None:
+            return
+        if fact_value_type == str(expected_value_type).lower():
+            return
+        raise ExpressionEvaluationError(
+            f"Fact '{fact_key}' must use fact_value_type '{expected_value_type}'",
+            detail={
+                "fact_key": fact_key,
+                "fact_value_type": fact_value_type,
+                "expected_fact_value_type": expected_value_type,
+            },
+        )
 
     def _extract_typed_value(self, fact: Any, fact_key: str, fact_value_type: str) -> Any:
         """Return the populated typed value for the declared fact_value_type."""

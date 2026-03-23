@@ -16,10 +16,15 @@ class StatusRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get_status(self, entity_type: str, entity_key: str) -> Mapping[str, Any] | None:
-        """Return the highest-confidence current status assertion for an entity key."""
+    async def get_status(
+      self,
+      entity_type: str,
+      entity_key: str,
+      as_of_date: date | None = None,
+    ) -> Mapping[str, Any] | None:
+      """Return the highest-confidence status assertion active on the requested date."""
 
-        as_of_date = date.today()
+      resolved_date = as_of_date or date.today()
         statement = text(
             """
             SELECT
@@ -50,7 +55,7 @@ class StatusRepository:
             {
                 "entity_type": entity_type,
                 "entity_key": entity_key,
-                "as_of_date": as_of_date,
+                "as_of_date": resolved_date,
             },
         )
         return result.mappings().first()
@@ -59,10 +64,11 @@ class StatusRepository:
         self,
         entity_type: str,
         entity_key: str,
+      as_of_date: date | None = None,
     ) -> list[Mapping[str, Any]]:
-        """Return active, non-expired transition clauses for an entity key."""
+      """Return transition clauses active on the requested date for an entity key."""
 
-        as_of_date = date.today()
+      resolved_date = as_of_date or date.today()
         statement = text(
             """
             SELECT
@@ -94,7 +100,7 @@ class StatusRepository:
             {
                 "entity_type": entity_type,
                 "entity_key": entity_key,
-                "as_of_date": as_of_date,
+                "as_of_date": resolved_date,
             },
         )
         return list(result.mappings().all())

@@ -128,3 +128,23 @@ async def test_active_transition_is_included_in_overlay() -> None:
 
     assert result.active_transitions[0].description == "Transitional quota applies through 2026."
     assert "Transitional quota applies through 2026." in result.constraints
+
+
+@pytest.mark.asyncio
+async def test_get_status_overlay_passes_as_of_date_to_repository() -> None:
+    """The service should forward the requested assessment date to repository lookups."""
+
+    repository = AsyncMock()
+    repository.get_status.return_value = _status_row("agreed")
+    repository.get_active_transitions.return_value = []
+    service = StatusService(repository)
+    as_of_date = date(2025, 1, 1)
+
+    await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}", as_of_date)
+
+    repository.get_status.assert_awaited_once_with("psr_rule", f"PSR:{_uuid(3)}", as_of_date)
+    repository.get_active_transitions.assert_awaited_once_with(
+        "psr_rule",
+        f"PSR:{_uuid(3)}",
+        as_of_date,
+    )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import get_db
+from app.db.session import get_assessment_db, get_db
 from app.repositories.cases_repository import CasesRepository
 from app.repositories.evidence_repository import EvidenceRepository
 from app.repositories.evaluations_repository import EvaluationsRepository
@@ -23,6 +23,29 @@ from app.services.general_origin_rules_service import GeneralOriginRulesService
 from app.services.rule_resolution_service import RuleResolutionService
 from app.services.status_service import StatusService
 from app.services.tariff_resolution_service import TariffResolutionService
+
+
+def _build_eligibility_service(session: AsyncSession) -> EligibilityService:
+    """Create the assessment orchestrator bound to one database session."""
+
+    return EligibilityService(
+        classification_service=ClassificationService(HSRepository(session)),
+        rule_resolution_service=RuleResolutionService(
+            hs_repository=HSRepository(session),
+            rules_repository=RulesRepository(session),
+        ),
+        tariff_resolution_service=TariffResolutionService(TariffsRepository(session)),
+        status_service=StatusService(StatusRepository(session)),
+        evidence_service=EvidenceService(EvidenceRepository(session)),
+        fact_normalization_service=FactNormalizationService(),
+        expression_evaluator=ExpressionEvaluator(),
+        general_origin_rules_service=GeneralOriginRulesService(),
+        evaluations_repository=EvaluationsRepository(session),
+        audit_service=AuditService(
+            evaluations_repository=EvaluationsRepository(session),
+            cases_repository=CasesRepository(session),
+        ),
+    )
 
 
 async def get_cases_repository(
@@ -116,21 +139,12 @@ async def get_eligibility_service(
 ) -> EligibilityService:
     """Return the orchestration service with all dependencies bound to one session."""
 
-    return EligibilityService(
-        classification_service=ClassificationService(HSRepository(session)),
-        rule_resolution_service=RuleResolutionService(
-            hs_repository=HSRepository(session),
-            rules_repository=RulesRepository(session),
-        ),
-        tariff_resolution_service=TariffResolutionService(TariffsRepository(session)),
-        status_service=StatusService(StatusRepository(session)),
-        evidence_service=EvidenceService(EvidenceRepository(session)),
-        fact_normalization_service=FactNormalizationService(),
-        expression_evaluator=ExpressionEvaluator(),
-        general_origin_rules_service=GeneralOriginRulesService(),
-        evaluations_repository=EvaluationsRepository(session),
-        audit_service=AuditService(
-            evaluations_repository=EvaluationsRepository(session),
-            cases_repository=CasesRepository(session),
-        ),
-    )
+    return _build_eligibility_service(session)
+
+
+async def get_assessment_eligibility_service(
+    session: AsyncSession = Depends(get_assessment_db),
+) -> EligibilityService:
+    """Return the assessment orchestrator bound to a repeatable-read session."""
+
+    return _build_eligibility_service(session)

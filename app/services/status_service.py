@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from app.repositories.status_repository import StatusRepository
 from app.schemas.status import ActiveTransitionOverlay, StatusOverlay
 
@@ -12,11 +14,20 @@ class StatusService:
     def __init__(self, status_repository: StatusRepository) -> None:
         self.status_repository = status_repository
 
-    async def get_status_overlay(self, entity_type: str, entity_key: str) -> StatusOverlay:
-        """Fetch current status plus active transitions and derive confidence/constraints."""
+    async def get_status_overlay(
+        self,
+        entity_type: str,
+        entity_key: str,
+        as_of_date: date | None = None,
+    ) -> StatusOverlay:
+        """Fetch status plus transitions active on the requested date and derive overlays."""
 
-        status = await self.status_repository.get_status(entity_type, entity_key)
-        transitions = await self.status_repository.get_active_transitions(entity_type, entity_key)
+        status = await self.status_repository.get_status(entity_type, entity_key, as_of_date)
+        transitions = await self.status_repository.get_active_transitions(
+            entity_type,
+            entity_key,
+            as_of_date,
+        )
 
         active_transitions = [
             ActiveTransitionOverlay(

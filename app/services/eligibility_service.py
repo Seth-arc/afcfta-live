@@ -59,7 +59,7 @@ class EligibilityService:
         self.audit_service = audit_service
 
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
-        """Execute the full assessment pipeline and persist audit rows when possible."""
+        """Execute one full assessment inside the caller's request-scoped DB snapshot."""
 
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
@@ -138,7 +138,11 @@ class EligibilityService:
             importer=request.importer,
             hs6_code=product.hs6_code,
         )
-        corridor_overlay = await self.status_service.get_status_overlay("corridor", corridor_key)
+        corridor_overlay = await self.status_service.get_status_overlay(
+            "corridor",
+            corridor_key,
+            assessment_date,
+        )
 
         blocker_checks, blocker_failure_codes, blocker_missing_facts = self._run_blocker_checks(
             rule_bundle=rule_bundle,
@@ -216,7 +220,11 @@ class EligibilityService:
                 missing_facts = self._merge_unique(missing_facts, ["direct_transport"])
 
         rule_key = make_entity_key("psr_rule", psr_id=rule_bundle.psr_rule.psr_id)
-        rule_overlay = await self.status_service.get_status_overlay("psr_rule", rule_key)
+        rule_overlay = await self.status_service.get_status_overlay(
+            "psr_rule",
+            rule_key,
+            assessment_date,
+        )
         audit_checks.extend(self._serialize_status_overlay(rule_overlay))
 
         evidence_entity_type, evidence_entity_key = self._resolve_evidence_target(

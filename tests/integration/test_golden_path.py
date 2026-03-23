@@ -10,7 +10,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from app.api import deps as api_deps
 from app.db.base import get_async_session_factory
+from app.db.session import assessment_session_context
 from tests.fixtures.golden_cases import GOLDEN_CASES
 
 pytestmark = pytest.mark.integration
@@ -404,3 +406,35 @@ async def test_parser_era_or_alternative_golden_shape(async_client: AsyncClient)
     assert body["eligible"] is True
     assert body["pathway_used"] is not None and "VNM" in body["pathway_used"]
     assert set(candidate["pathway_codes"]).issuperset({"CTH", "VNM"})
+
+
+@pytest.mark.asyncio
+async def test_assessments_route_uses_assessment_scoped_db(
+    app,
+    async_client: AsyncClient,
+) -> None:
+    """The assessment endpoint should resolve through the assessment-specific DB dependency."""
+
+    case = _golden_case("groats CTH pass")
+    payload = _assessment_payload(case, await _prepared_case_facts(case))
+    calls = {"assessment_db": 0}
+
+    async def tracked_assessment_db() -> AsyncIterator[Any]:
+        calls["assessment_db"] += 1
+        async with assessment_session_context() as session:
+            yield session
+
+    async def forbidden_general_db() -> AsyncIterator[Any]:
+        raise AssertionError("Assessment route should not depend on get_db().")
+        yield
+
+    app.dependency_overrides[api_deps.get_assessment_db] = tracked_assessment_db
+    app.dependency_overrides[api_deps.get_db] = forbidden_general_db
+
+    try:
+        response = await async_client.post("/api/v1/assessments", json=payload)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert calls["assessment_db"] == 1

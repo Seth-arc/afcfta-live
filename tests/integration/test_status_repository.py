@@ -22,6 +22,8 @@ from app.repositories.status_repository import StatusRepository
 pytestmark = pytest.mark.integration
 
 AS_OF_DATE = date.today()
+EARLY_AS_OF_DATE = date(2025, 1, 1)
+LATE_AS_OF_DATE = date(2026, 1, 1)
 
 
 @pytest_asyncio.fixture
@@ -156,6 +158,41 @@ async def _seed_active_transition_fixture(session: AsyncSession) -> dict[str, st
                 transition_text_verbatim="No end date",
                 start_date=AS_OF_DATE - timedelta(days=5),
                 end_date=None,
+            ),
+        ]
+    )
+    await session.flush()
+    return entity
+
+
+async def _seed_date_sensitive_status_fixture(session: AsyncSession) -> dict[str, str]:
+    """Insert date-sliced assertions so lookup changes when as_of_date changes."""
+
+    entity = {"entity_type": "psr_rule", "entity_key": "PSR:PYTEST:DATE-SLICE:990003"}
+    source = _build_source("status-date-slice")
+    session.add(source)
+    await session.flush()
+    session.add_all(
+        [
+            StatusAssertion(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                status_type=StatusTypeEnum.PENDING,
+                status_text_verbatim="Pending in 2025",
+                effective_from=date(2025, 1, 1),
+                effective_to=date(2025, 12, 31),
+                confidence_score=1,
+            ),
+            StatusAssertion(
+                source_id=source.source_id,
+                entity_type=entity["entity_type"],
+                entity_key=entity["entity_key"],
+                status_type=StatusTypeEnum.AGREED,
+                status_text_verbatim="Agreed in 2026",
+                effective_from=date(2026, 1, 1),
+                effective_to=None,
+                confidence_score=1,
             ),
         ]
     )
@@ -312,6 +349,33 @@ async def test_get_status_ignores_out_of_window_assertions(
     )
 
     assert resolved is None
+
+
+@pytest.mark.asyncio
+async def test_get_status_changes_when_as_of_date_changes(
+    status_repository: tuple[AsyncSession, StatusRepository],
+) -> None:
+    """Different as-of dates should resolve different active status assertions."""
+
+    session, repository = status_repository
+    candidate = await _seed_date_sensitive_status_fixture(session)
+
+    early = await repository.get_status(
+        str(candidate["entity_type"]),
+        str(candidate["entity_key"]),
+        EARLY_AS_OF_DATE,
+    )
+    late = await repository.get_status(
+        str(candidate["entity_type"]),
+        str(candidate["entity_key"]),
+        LATE_AS_OF_DATE,
+    )
+
+    assert early is not None
+    assert late is not None
+    assert str(early["status_type"]) == "pending"
+    assert str(late["status_type"]) == "agreed"
+    assert str(early["status_assertion_id"]) != str(late["status_assertion_id"])
 
 
 @pytest.mark.asyncio

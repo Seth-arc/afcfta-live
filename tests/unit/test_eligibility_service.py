@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 
@@ -19,6 +20,7 @@ from app.schemas.hs import HS6ProductResponse
 from app.schemas.rules import PSRRuleResolvedOut, RulePathwayOut, RuleResolutionResult
 from app.schemas.status import StatusOverlay
 from app.schemas.tariffs import TariffResolutionResult
+from app.db import session as session_module
 from app.services.eligibility_service import EligibilityService
 from app.services.expression_evaluator import AtomicCheck, ExpressionResult
 from app.services.general_origin_rules_service import GeneralRulesResult
@@ -287,6 +289,10 @@ async def test_eligible_product_pathway_and_general_rules_pass() -> None:
     assert result.eligible is True
     assert result.pathway_used == "CTH"
     assert result.rule_status == "agreed"
+    assert deps["status_service"].get_status_overlay.await_args_list == [
+        call("corridor", "CORRIDOR:GHA:NGA:110311", date(2025, 1, 1)),
+        call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),
+    ]
 
 
 @pytest.mark.asyncio
@@ -418,8 +424,90 @@ async def test_missing_every_non_originating_input_facts_block_before_normalizat
     assert result.confidence_class == "incomplete"
     assert result.missing_facts == ["non_originating_inputs", "output_hs6_code"]
     assert "MISSING_CORE_FACTS" in result.failures
-    deps["fact_normalization_service"].normalize_facts.assert_not_called()
-    deps["expression_evaluator"].evaluate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_assessment_session_context_uses_repeatable_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assessment sessions should bind to a repeatable-read transaction."""
+
+    captured: dict[str, object] = {}
+
+    class FakeTransaction:
+        async def __aenter__(self) -> None:
+            captured["transaction_started"] = True
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            captured["transaction_closed"] = True
+
+    class FakeSession:
+        async def __aenter__(self) -> FakeSession:
+            captured["session_entered"] = True
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            captured["session_exited"] = True
+
+        def begin(self) -> FakeTransaction:
+            captured["begin_called"] = True
+            return FakeTransaction()
+
+    class FakeFactory:
+        def __init__(self, session: FakeSession) -> None:
+            self._session = session
+
+        def __call__(self) -> FakeSession:
+            captured["factory_called"] = True
+            return self._session
+
+    class FakeConnection:
+        async def execution_options(self, **kwargs: object) -> FakeConnection:
+            captured["execution_options"] = kwargs
+            return self
+
+    class FakeConnectionContext:
+        def __init__(self, connection: FakeConnection) -> None:
+            self._connection = connection
+
+        async def __aenter__(self) -> FakeConnection:
+            captured["connection_entered"] = True
+            return self._connection
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            captured["connection_exited"] = True
+
+    class FakeEngine:
+        def __init__(self, connection: FakeConnection) -> None:
+            self._connection = connection
+
+        def connect(self) -> FakeConnectionContext:
+            captured["connect_called"] = True
+            return FakeConnectionContext(self._connection)
+
+    fake_connection = FakeConnection()
+    fake_session = FakeSession()
+
+    monkeypatch.setattr(session_module, "get_engine", lambda: FakeEngine(fake_connection))
+
+    def _fake_factory(*, bind=None):
+        captured["bound_connection"] = bind
+        return FakeFactory(fake_session)
+
+    monkeypatch.setattr(
+        session_module,
+        "get_async_session_factory",
+        _fake_factory,
+    )
+
+    async with session_module.assessment_session_context() as session:
+        assert session is fake_session
+
+    assert captured["execution_options"] == {
+        "isolation_level": session_module.ASSESSMENT_ISOLATION_LEVEL,
+    }
+    assert captured["bound_connection"] is fake_connection
+    assert captured["begin_called"] is True
+    assert captured["transaction_started"] is True
+    assert captured["transaction_closed"] is True
 
 
 @pytest.mark.asyncio

@@ -74,6 +74,9 @@ class FinalDecisionTrace(BaseModel):
     confidence_class: str
     failure_codes: list[str] = Field(default_factory=list)
     missing_facts: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    readiness_score: float | None = None
+    completeness_ratio: float | None = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 

@@ -11,6 +11,8 @@ from httpx import AsyncClient
 from app.db.base import get_async_session_factory
 from app.repositories.cases_repository import CasesRepository
 from app.repositories.evaluations_repository import EvaluationsRepository
+from tests.fixtures.golden_cases import GOLDEN_CASES
+from tests.integration.test_golden_path import _prepared_case_facts
 from tests.integration.test_quick_slice_e2e import (
     _assessment_payload,
     _best_effort_pass_facts,
@@ -22,6 +24,21 @@ from tests.integration.test_quick_slice_e2e import (
 
 
 pytestmark = pytest.mark.integration
+
+CTH_COMPLETE_DOCUMENT_PACK = [
+    "certificate_of_origin",
+    "bill_of_materials",
+    "invoice",
+]
+
+
+def _golden_case(name_fragment: str) -> dict[str, object]:
+    """Return one locked golden case by stable name fragment."""
+
+    for case in GOLDEN_CASES:
+        if name_fragment in str(case["name"]):
+            return case
+    raise AssertionError(f"Golden case not found for fragment: {name_fragment}")
 
 
 async def _create_case_with_facts(
@@ -455,3 +472,97 @@ async def test_failed_case_backed_assessment_persists_and_replays_immediately(
     assert latest_body["final_decision"]["eligible"] is False
     assert "MISSING_CORE_FACTS" in latest_body["final_decision"]["failure_codes"]
     assert latest_body["evaluation"]["overall_outcome"] == "insufficient_information"
+
+
+@pytest.mark.asyncio
+async def test_audit_replay_surfaces_incomplete_document_pack_readiness(
+    async_client: AsyncClient,
+) -> None:
+    """Audit replay should include missing evidence and zero readiness for an empty document pack."""
+
+    case = _golden_case("groats CTH pass")
+    case_input = case["input"]
+    facts = await _prepared_case_facts(case)
+    case_id = await _create_case_with_facts(
+        hs6_code=str(case_input["hs6_code"]),
+        exporter=str(case_input["exporter"]),
+        importer=str(case_input["importer"]),
+        facts=facts,
+    )
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json={
+            **_assessment_payload(
+                hs6_code=str(case_input["hs6_code"]),
+                exporter=str(case_input["exporter"]),
+                importer=str(case_input["importer"]),
+                facts=facts,
+                year=int(case_input["year"]),
+            ),
+            "case_id": case_id,
+            "existing_documents": [],
+        },
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    assert assessment_body["readiness_score"] == 0.0
+    assert assessment_body["missing_evidence"]
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+
+    assert latest_body["evidence_readiness"] is not None
+    assert latest_body["evidence_readiness"]["readiness_score"] == 0.0
+    assert latest_body["evidence_readiness"]["missing_items"]
+    assert latest_body["final_decision"]["missing_evidence"] == latest_body["evidence_readiness"]["missing_items"]
+    assert latest_body["final_decision"]["readiness_score"] == 0.0
+    assert latest_body["final_decision"]["completeness_ratio"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_audit_replay_surfaces_complete_document_pack_readiness(
+    async_client: AsyncClient,
+) -> None:
+    """Audit replay should include zero missing evidence for a complete document pack."""
+
+    case = _golden_case("groats CTH pass")
+    case_input = case["input"]
+    facts = await _prepared_case_facts(case)
+    case_id = await _create_case_with_facts(
+        hs6_code=str(case_input["hs6_code"]),
+        exporter=str(case_input["exporter"]),
+        importer=str(case_input["importer"]),
+        facts=facts,
+    )
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json={
+            **_assessment_payload(
+                hs6_code=str(case_input["hs6_code"]),
+                exporter=str(case_input["exporter"]),
+                importer=str(case_input["importer"]),
+                facts=facts,
+                year=int(case_input["year"]),
+            ),
+            "case_id": case_id,
+            "existing_documents": CTH_COMPLETE_DOCUMENT_PACK,
+        },
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    assert assessment_body["readiness_score"] == 1.0
+    assert assessment_body["missing_evidence"] == []
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+
+    assert latest_body["evidence_readiness"] is not None
+    assert latest_body["evidence_readiness"]["missing_items"] == []
+    assert latest_body["evidence_readiness"]["readiness_score"] == 1.0
+    assert latest_body["final_decision"]["missing_evidence"] == []
+    assert latest_body["final_decision"]["readiness_score"] == 1.0
+    assert latest_body["final_decision"]["completeness_ratio"] == 1.0

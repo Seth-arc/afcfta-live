@@ -253,15 +253,11 @@ class EligibilityService:
         )
         audit_checks.extend(self._serialize_status_overlay(rule_overlay))
 
-        evidence_entity_type, evidence_entity_key = self._resolve_evidence_target(
+        evidence_result = await self._build_evidence_readiness(
             rule_bundle=rule_bundle,
             selected_pathway=selected_pathway,
-        )
-        evidence_result = await self.evidence_service.build_readiness(
-            evidence_entity_type,
-            evidence_entity_key,
-            request.persona_mode,
-            request.existing_documents,
+            persona_mode=request.persona_mode,
+            existing_documents=request.existing_documents,
         )
         audit_checks.append(self._make_evidence_trace_check(evidence_result))
 
@@ -747,17 +743,57 @@ class EligibilityService:
             return "provisional"
         return corridor_overlay.confidence_class
 
-    def _resolve_evidence_target(
+    async def _build_evidence_readiness(
         self,
         *,
         rule_bundle: RuleResolutionResult,
         selected_pathway: RulePathwayOut | None,
-    ) -> tuple[str, str]:
-        """Choose the evidence entity key for pathway-specific or rule-level lookups."""
+        persona_mode: str,
+        existing_documents: Sequence[str],
+    ) -> Any:
+        """Resolve readiness from the most specific evidence target with compatibility fallbacks."""
+
+        fallback_result: Any | None = None
+        for entity_type, entity_key in self._resolve_evidence_targets(
+            rule_bundle=rule_bundle,
+            selected_pathway=selected_pathway,
+        ):
+            result = await self.evidence_service.build_readiness(
+                entity_type,
+                entity_key,
+                persona_mode,
+                list(existing_documents),
+            )
+            if fallback_result is None:
+                fallback_result = result
+            if self._evidence_result_has_content(result):
+                return result
+
+        return fallback_result
+
+    def _resolve_evidence_targets(
+        self,
+        *,
+        rule_bundle: RuleResolutionResult,
+        selected_pathway: RulePathwayOut | None,
+    ) -> list[tuple[str, str]]:
+        """Choose evidence lookup targets from most specific to compatibility fallback."""
 
         if selected_pathway is not None:
-            return "pathway", make_entity_key("pathway", pathway_id=selected_pathway.pathway_id)
-        return "hs6_rule", make_entity_key("hs6_rule", psr_id=rule_bundle.psr_rule.psr_id)
+            return [
+                ("pathway", make_entity_key("pathway", pathway_id=selected_pathway.pathway_id)),
+                ("hs6_rule", make_entity_key("hs6_rule", psr_id=rule_bundle.psr_rule.psr_id)),
+                ("rule_type", selected_pathway.pathway_code),
+            ]
+        return [("hs6_rule", make_entity_key("hs6_rule", psr_id=rule_bundle.psr_rule.psr_id))]
+
+    @staticmethod
+    def _evidence_result_has_content(result: Any) -> bool:
+        """Return True when a readiness result includes actual requirements or questions."""
+
+        required_items = getattr(result, "required_items", None)
+        verification_questions = getattr(result, "verification_questions", None)
+        return bool(required_items or verification_questions)
 
     async def _persist_evaluation_if_possible(
         self,
@@ -949,6 +985,9 @@ class EligibilityService:
                     "confidence_class": response.confidence_class,
                     "failure_codes": response.failures,
                     "missing_facts": response.missing_facts,
+                    "missing_evidence": response.missing_evidence,
+                    "readiness_score": response.readiness_score,
+                    "completeness_ratio": response.completeness_ratio,
                 }
             },
         )

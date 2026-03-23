@@ -34,6 +34,12 @@ from tests.fixtures.golden_cases import GOLDEN_CASES
 
 pytestmark = pytest.mark.integration
 
+CTH_COMPLETE_DOCUMENT_PACK = [
+    "certificate_of_origin",
+    "bill_of_materials",
+    "invoice",
+]
+
 
 def _golden_case(name_fragment: str) -> dict[str, Any]:
     """Return one golden case by a stable name fragment."""
@@ -353,6 +359,9 @@ def _assert_response_shape(body: Mapping[str, Any]) -> None:
             "failures",
             "missing_facts",
             "evidence_required",
+            "missing_evidence",
+            "readiness_score",
+            "completeness_ratio",
             "confidence_class",
         }
     )
@@ -648,3 +657,38 @@ async def test_snapshot_year_changes_tariff_status_and_confidence(async_client: 
     assert body_2026["confidence_class"] == "complete"
     assert body_2025["eligible"] is True
     assert body_2026["eligible"] is True
+
+
+@pytest.mark.asyncio
+async def test_assessment_response_changes_for_complete_vs_incomplete_document_packs(
+    async_client: AsyncClient,
+) -> None:
+    """The live assessment response should expose different readiness outcomes for complete and incomplete document inventories."""
+
+    case = _golden_case("groats CTH pass")
+    base_payload = _assessment_payload(case, await _prepared_case_facts(case))
+
+    incomplete_response = await async_client.post(
+        "/api/v1/assessments",
+        json={**base_payload, "existing_documents": []},
+    )
+    complete_response = await async_client.post(
+        "/api/v1/assessments",
+        json={**base_payload, "existing_documents": CTH_COMPLETE_DOCUMENT_PACK},
+    )
+
+    assert incomplete_response.status_code == 200
+    assert complete_response.status_code == 200
+
+    incomplete_body = incomplete_response.json()
+    complete_body = complete_response.json()
+    _assert_response_shape(incomplete_body)
+    _assert_response_shape(complete_body)
+
+    assert incomplete_body["missing_evidence"]
+    assert incomplete_body["readiness_score"] == 0.0
+    assert incomplete_body["completeness_ratio"] == 0.0
+
+    assert complete_body["missing_evidence"] == []
+    assert complete_body["readiness_score"] == 1.0
+    assert complete_body["completeness_ratio"] == 1.0

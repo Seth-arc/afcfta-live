@@ -357,6 +357,24 @@ class AuditService:
         missing_facts = payload.get("missing_facts")
         if not isinstance(missing_facts, list):
             missing_facts = self._missing_facts_from_checks(checks)
+        evidence_readiness = self._decode_summary_model(
+            checks,
+            check_type="evidence",
+            check_code="EVIDENCE_READINESS",
+            payload_key="evidence_readiness",
+            model_cls=EvidenceReadinessResult,
+        )
+        missing_evidence = payload.get("missing_evidence")
+        if not isinstance(missing_evidence, list):
+            missing_evidence = (
+                list(evidence_readiness.missing_items) if evidence_readiness is not None else []
+            )
+        readiness_score = payload.get("readiness_score")
+        if readiness_score is None and evidence_readiness is not None:
+            readiness_score = evidence_readiness.readiness_score
+        completeness_ratio = payload.get("completeness_ratio")
+        if completeness_ratio is None and evidence_readiness is not None:
+            completeness_ratio = evidence_readiness.completeness_ratio
         return FinalDecisionTrace(
             eligible=bool(eligible),
             overall_outcome=evaluation.overall_outcome,
@@ -366,6 +384,9 @@ class AuditService:
             confidence_class=payload.get("confidence_class", evaluation.confidence_class),
             failure_codes=list(failure_codes),
             missing_facts=list(missing_facts),
+            missing_evidence=list(missing_evidence),
+            readiness_score=readiness_score,
+            completeness_ratio=completeness_ratio,
         )
 
     def _decode_summary_model(

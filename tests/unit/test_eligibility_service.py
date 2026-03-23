@@ -792,3 +792,76 @@ async def test_assessment_response_exposes_readiness_fields_from_evidence_servic
     assert result.missing_evidence == ["Supplier declaration"]
     assert result.readiness_score == 0.5
     assert result.completeness_ratio == 0.5
+
+
+@pytest.mark.asyncio
+async def test_assessment_falls_back_to_rule_type_evidence_when_specific_targets_are_empty() -> None:
+    """Readiness should fall back to rule-type templates when pathway and rule-level rows are absent."""
+
+    service, deps = _service()
+    request = EligibilityRequest(
+        hs6_code="110311",
+        hs_version="HS2017",
+        exporter="GHA",
+        importer="NGA",
+        year=2025,
+        persona_mode="exporter",
+        production_facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+        existing_documents=[],
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.side_effect = [
+        EvidenceReadinessResult(
+            required_items=[],
+            missing_items=[],
+            verification_questions=[],
+            readiness_score=1.0,
+            completeness_ratio=1.0,
+        ),
+        EvidenceReadinessResult(
+            required_items=[],
+            missing_items=[],
+            verification_questions=[],
+            readiness_score=1.0,
+            completeness_ratio=1.0,
+        ),
+        EvidenceReadinessResult(
+            required_items=["Certificate of origin", "Bill of materials"],
+            missing_items=["Certificate of origin", "Bill of materials"],
+            verification_questions=["Do the documents support CTH?"],
+            readiness_score=0.0,
+            completeness_ratio=0.0,
+        ),
+    ]
+
+    result = await service.assess(request)
+
+    assert result.evidence_required == ["Certificate of origin", "Bill of materials"]
+    assert result.missing_evidence == ["Certificate of origin", "Bill of materials"]
+    assert result.readiness_score == 0.0
+    assert result.completeness_ratio == 0.0
+    assert deps["evidence_service"].build_readiness.await_args_list == [
+        call("pathway", f"PATHWAY:{_uuid(12)}", "exporter", []),
+        call("hs6_rule", f"HS6_RULE:{_uuid(10)}", "exporter", []),
+        call("rule_type", "CTH", "exporter", []),
+    ]

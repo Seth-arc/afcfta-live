@@ -329,17 +329,19 @@ async def _select_supported_candidate(
         ]
         where_clauses.append("(" + " OR ".join(corridor_predicates) + ")")
 
-    preferred_order_sql = "hp.hs6_code ASC"
+    preferred_order_sql = "resolved.hs6_code ASC"
     if preferred_hs6_codes:
         preferred_cases = " ".join(
             f"WHEN '{hs6_code}' THEN {index}"
             for index, hs6_code in enumerate(preferred_hs6_codes)
         )
-        preferred_order_sql = f"CASE hp.hs6_code {preferred_cases} ELSE 999 END, hp.hs6_code ASC"
+        preferred_order_sql = (
+            f"CASE resolved.hs6_code {preferred_cases} ELSE 999 END, resolved.hs6_code ASC"
+        )
 
     if preferred_corridors:
         corridor_cases = " ".join(
-            f"WHEN sh.exporting_scope = '{exporter}' AND sh.importing_state = '{importer}' THEN {index}"
+            f"WHEN resolved.exporter = '{exporter}' AND resolved.importer = '{importer}' THEN {index}"
             for index, (exporter, importer) in enumerate(preferred_corridors)
         )
         preferred_order_sql = f"CASE {corridor_cases} ELSE 999 END, {preferred_order_sql}"
@@ -372,33 +374,52 @@ async def _select_supported_candidate(
 
     statement = text(
         f"""
+        WITH resolved AS (
+            SELECT DISTINCT ON (hp.hs6_code, sh.exporting_scope, sh.importing_state)
+                hp.hs6_code,
+                hp.heading,
+                hp.chapter,
+                sh.exporting_scope AS exporter,
+                sh.importing_state AS importer,
+                pr.psr_id,
+                pr.rule_status::text AS rule_status,
+                pa.priority_rank,
+                pr.updated_at
+            FROM hs6_product hp
+            JOIN hs6_psr_applicability pa ON pa.hs6_id = hp.hs6_id
+            JOIN psr_rule pr ON pr.psr_id = pa.psr_id
+            JOIN tariff_schedule_line sl ON LEFT(sl.hs_code, 6) = hp.hs6_code
+            JOIN tariff_schedule_header sh ON sh.schedule_id = sl.schedule_id
+            JOIN tariff_schedule_rate_by_year ry ON ry.schedule_line_id = sl.schedule_line_id
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY
+                hp.hs6_code,
+                sh.exporting_scope,
+                sh.importing_state,
+                pa.priority_rank ASC,
+                pr.updated_at DESC
+        )
         SELECT
-            hp.hs6_code,
-            hp.heading,
-            hp.chapter,
-            sh.exporting_scope AS exporter,
-            sh.importing_state AS importer,
-            pr.rule_status::text AS rule_status,
+            resolved.hs6_code,
+            resolved.heading,
+            resolved.chapter,
+            resolved.exporter,
+            resolved.importer,
+            resolved.rule_status,
             ARRAY_REMOVE(ARRAY_AGG(DISTINCT prc.component_type::text), NULL) AS component_types,
             ARRAY_REMOVE(ARRAY_AGG(DISTINCT erp.pathway_code), NULL) AS pathway_codes
-        FROM hs6_product hp
-        JOIN hs6_psr_applicability pa ON pa.hs6_id = hp.hs6_id
-        JOIN psr_rule pr ON pr.psr_id = pa.psr_id
-        LEFT JOIN psr_rule_component prc ON prc.psr_id = pr.psr_id
-        LEFT JOIN eligibility_rule_pathway erp ON erp.psr_id = pr.psr_id
-        JOIN tariff_schedule_line sl ON LEFT(sl.hs_code, 6) = hp.hs6_code
-        JOIN tariff_schedule_header sh ON sh.schedule_id = sl.schedule_id
-        JOIN tariff_schedule_rate_by_year ry ON ry.schedule_line_id = sl.schedule_line_id
-        WHERE {' AND '.join(where_clauses)}
+        FROM resolved
+        LEFT JOIN psr_rule_component prc ON prc.psr_id = resolved.psr_id
+        LEFT JOIN eligibility_rule_pathway erp ON erp.psr_id = resolved.psr_id
         GROUP BY
-            hp.hs6_code,
-            hp.heading,
-            hp.chapter,
-            sh.exporting_scope,
-            sh.importing_state,
-            pr.rule_status
+            resolved.hs6_code,
+            resolved.heading,
+            resolved.chapter,
+            resolved.exporter,
+            resolved.importer,
+            resolved.rule_status
         {having_sql}
-        ORDER BY {preferred_order_sql}, sh.exporting_scope ASC, sh.importing_state ASC
+        ORDER BY {preferred_order_sql}, resolved.exporter ASC, resolved.importer ASC
         LIMIT 1
         """
     )
@@ -833,6 +854,75 @@ async def test_parser_generated_agricultural_wo_rule(async_client: AsyncClient) 
     _assert_response_shape(body)
     assert body["eligible"] is True
     assert body["pathway_used"] is not None and "WO" in body["pathway_used"]
+
+
+@pytest.mark.asyncio
+async def test_seeded_agricultural_wo_civ_to_nga(async_client: AsyncClient) -> None:
+    """The bounded seed slice should expose a fixed agricultural WO case on CIV->NGA."""
+
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code="080111",
+            exporter="CIV",
+            importer="NGA",
+            facts=_wo_pass_facts(),
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is True
+    assert body["pathway_used"] == "WO"
+    assert body["rule_status"] == "agreed"
+    assert body["confidence_class"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_seeded_chemical_vnm_sen_to_nga(async_client: AsyncClient) -> None:
+    """The bounded seed slice should expose a fixed chemical VNM case on SEN->NGA."""
+
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code="290110",
+            exporter="SEN",
+            importer="NGA",
+            facts=_vnm_pass_facts("290110", "2901"),
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is True
+    assert body["pathway_used"] == "VNM"
+    assert body["rule_status"] == "agreed"
+    assert body["confidence_class"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_seeded_machinery_vnm_civ_to_nga(async_client: AsyncClient) -> None:
+    """The bounded seed slice should expose a fixed machinery VNM-only case on CIV->NGA."""
+
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code="840820",
+            exporter="CIV",
+            importer="NGA",
+            facts=_vnm_pass_facts("840820", "8408"),
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is True
+    assert body["pathway_used"] == "VNM"
+    assert body["rule_status"] == "agreed"
+    assert body["confidence_class"] == "complete"
 
 
 @pytest.mark.asyncio

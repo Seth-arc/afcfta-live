@@ -280,8 +280,8 @@ async def _live_case_context(case: Mapping[str, Any]) -> dict[str, Any] | None:
           AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
           AND (sh.effective_date IS NULL OR sh.effective_date <= :assessment_date)
           AND (sh.expiry_date IS NULL OR sh.expiry_date >= :assessment_date)
-        GROUP BY hp.heading, pr.rule_status
-        ORDER BY pr.rule_status ASC
+                GROUP BY hp.heading, pr.rule_status, pa.priority_rank, pr.updated_at
+                ORDER BY pa.priority_rank ASC, pr.updated_at DESC
         LIMIT 1
         """
     )
@@ -553,6 +553,33 @@ async def test_provisional_status(async_client: AsyncClient) -> None:
     _assert_response_shape(body)
     assert body["confidence_class"] in {"provisional", "incomplete"}
     assert body["rule_status"] in {"provisional", "pending", "agreed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case_name_fragment",
+    [
+        "agricultural WO pass",
+        "chemical VNM pass",
+        "machinery VNM pass",
+    ],
+)
+async def test_expanded_live_slice_golden_cases(
+    async_client: AsyncClient,
+    case_name_fragment: str,
+) -> None:
+    """Expanded deterministic cases should resolve on the newly seeded v0.1 slice."""
+
+    case = _golden_case(case_name_fragment)
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(case, await _prepared_case_facts(case)),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    _assert_expected_subset(body, case["expected"])
 
 
 @pytest.mark.asyncio

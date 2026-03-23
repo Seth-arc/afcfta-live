@@ -566,7 +566,7 @@ python -m pytest tests/unit/test_rule_decomposer_parser.py -v
 python -m pytest tests/unit/test_pathway_builder_parser.py -v
 python -m pytest tests/unit/test_applicability_builder_parser.py -v
 ```
-
+# Completed 23 March
 ---
 
 ## Prompt 18 — Prioritize the next HS6 tranche and expand live-backed coverage
@@ -602,7 +602,7 @@ When done, summarize:
 python -m pytest tests/integration/test_golden_path.py -v
 python -m pytest tests/integration/test_quick_slice_e2e.py -v
 ```
-
+# Completed 23 March
 ---
 
 ## Prompt 19 — Reconcile documentation with delivered behavior

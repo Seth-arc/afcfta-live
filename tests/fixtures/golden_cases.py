@@ -89,4 +89,53 @@ GOLDEN_CASES = [
             "rule_status": "provisional", "confidence_class": "provisional",
         },
     },
+    {
+        "name": "CIV→NGA agricultural WO pass",
+        "input": {
+            "hs6_code": "080111", "hs_version": "HS2017",
+            "exporter": "CIV", "importer": "NGA", "year": 2025,
+            "facts": {
+                "wholly_obtained": True,
+                "direct_transport": True,
+                "cumulation_claimed": False,
+            },
+        },
+        "expected": {
+            "eligible": True, "pathway_used": "WO",
+            "rule_status": "agreed", "confidence_class": "complete",
+            "failures": [], "missing_facts": [],
+        },
+    },
+    {
+        "name": "SEN→NGA chemical VNM pass",
+        "input": {
+            "hs6_code": "290110", "hs_version": "HS2017",
+            "exporter": "SEN", "importer": "NGA", "year": 2025,
+            "facts": {
+                "ex_works": 100000, "non_originating": 35000,
+                "direct_transport": True, "cumulation_claimed": False,
+            },
+        },
+        "expected": {
+            "eligible": True, "pathway_used": "VNM",
+            "rule_status": "agreed", "confidence_class": "complete",
+            "failures": [], "missing_facts": [],
+        },
+    },
+    {
+        "name": "CIV→NGA machinery VNM pass",
+        "input": {
+            "hs6_code": "840820", "hs_version": "HS2017",
+            "exporter": "CIV", "importer": "NGA", "year": 2025,
+            "facts": {
+                "ex_works": 100000, "non_originating": 45000,
+                "direct_transport": True, "cumulation_claimed": False,
+            },
+        },
+        "expected": {
+            "eligible": True, "pathway_used": "VNM",
+            "rule_status": "agreed", "confidence_class": "complete",
+            "failures": [], "missing_facts": [],
+        },
+    },
 ]

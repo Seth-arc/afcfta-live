@@ -7,7 +7,7 @@ from decimal import Decimal
 from hashlib import sha256
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import create_engine, delete, insert
+from sqlalchemy import create_engine, delete, insert, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -55,7 +55,7 @@ from app.db.models.tariffs import (
 SEED_NAMESPACE = uuid5(NAMESPACE_URL, "afcfta-intelligence/v0.1/seed-data")
 HS_VERSION = "HS2017"
 SEED_EFFECTIVE_DATE = date(2024, 1, 1)
-SEEDED_CORRIDORS = [("GHA", "NGA"), ("CMR", "NGA")]
+SEEDED_CORRIDORS = [("GHA", "NGA"), ("CMR", "NGA"), ("CIV", "NGA"), ("SEN", "NGA")]
 
 RULES_SOURCE_NAME = "source/rules"
 TARIFF_SOURCE_NAME = "source/tariffs"
@@ -115,6 +115,22 @@ PRODUCT_SPECS: list[dict[str, object]] = [
                 "target_year": 2025,
                 "staging_type": StagingTypeEnum.LINEAR,
                 "rates": {2024: "6.0000", 2025: "2.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "14.0000",
+                "target_rate": "1.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "5.0000", 2025: "1.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "16.0000",
+                "target_rate": "3.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "7.0000", 2025: "3.0000"},
             },
         },
     },
@@ -178,6 +194,22 @@ PRODUCT_SPECS: list[dict[str, object]] = [
                 "target_year": 2025,
                 "staging_type": StagingTypeEnum.LINEAR,
                 "rates": {2024: "7.0000", 2025: "5.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "11.0000",
+                "target_rate": "5.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "7.0000", 2025: "5.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "13.0000",
+                "target_rate": "6.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "8.0000", 2025: "6.0000"},
             },
         },
     },
@@ -263,6 +295,22 @@ PRODUCT_SPECS: list[dict[str, object]] = [
                 "staging_type": StagingTypeEnum.STEPWISE,
                 "rates": {2024: "32.0000", 2025: "28.0000"},
             },
+            "CIV": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "36.0000",
+                "target_rate": "26.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.STEPWISE,
+                "rates": {2024: "31.0000", 2025: "26.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "37.0000",
+                "target_rate": "27.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.STEPWISE,
+                "rates": {2024: "31.0000", 2025: "27.0000"},
+            },
         },
     },
     {
@@ -315,6 +363,22 @@ PRODUCT_SPECS: list[dict[str, object]] = [
                 "target_year": 2025,
                 "staging_type": StagingTypeEnum.LINEAR,
                 "rates": {2024: "9.0000", 2025: "4.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "19.0000",
+                "target_rate": "4.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "8.0000", 2025: "4.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "17.0000",
+                "target_rate": "3.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "7.0000", 2025: "3.0000"},
             },
         },
     },
@@ -401,6 +465,249 @@ PRODUCT_SPECS: list[dict[str, object]] = [
                 "staging_type": StagingTypeEnum.LINEAR,
                 "rates": {2024: "12.0000", 2025: "8.0000"},
             },
+            "CIV": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "19.0000",
+                "target_rate": "6.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "11.0000", 2025: "6.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "17.0000",
+                "target_rate": "7.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "10.0000", 2025: "7.0000"},
+            },
+        },
+    },
+    {
+        "hs6_code": "080111",
+        "description": "Coconuts, desiccated",
+        "chapter": "08",
+        "heading": "0801",
+        "section": "II",
+        "section_name": "Vegetable Products",
+        "rule_status": RuleStatusEnum.AGREED,
+        "legal_rule_text_verbatim": "Wholly obtained.",
+        "legal_rule_text_normalized": "WO",
+        "components": [
+            {
+                "name": "wo",
+                "component_type": RuleComponentTypeEnum.WO,
+                "operator_type": OperatorTypeEnum.STANDALONE,
+                "component_text_verbatim": "Wholly obtained.",
+                "normalized_expression": "wholly_obtained == true",
+            }
+        ],
+        "pathways": [
+            {
+                "code": "WO",
+                "label": "Wholly obtained",
+                "pathway_type": "specific",
+                "expression_json": {
+                    "op": "fact_eq",
+                    "fact": "wholly_obtained",
+                    "value": True,
+                },
+                "priority_rank": 1,
+                "allows_cumulation": False,
+                "allows_tolerance": False,
+            }
+        ],
+        "tariffs": {
+            "GHA": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "12.0000",
+                "target_rate": "0.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "4.0000", 2025: "0.0000"},
+            },
+            "CMR": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "13.0000",
+                "target_rate": "1.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "5.0000", 2025: "1.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "11.0000",
+                "target_rate": "0.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "3.0000", 2025: "0.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "12.0000",
+                "target_rate": "1.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "4.0000", 2025: "1.0000"},
+            },
+        },
+    },
+    {
+        "hs6_code": "290110",
+        "description": "Saturated acyclic hydrocarbons",
+        "chapter": "29",
+        "heading": "2901",
+        "section": "VI",
+        "section_name": "Products of the Chemical or Allied Industries",
+        "rule_status": RuleStatusEnum.AGREED,
+        "legal_rule_text_verbatim": (
+            "The value of non-originating materials shall not exceed 40 percent of the "
+            "ex-works price."
+        ),
+        "legal_rule_text_normalized": "VNM<=40",
+        "components": [
+            {
+                "name": "vnm",
+                "component_type": RuleComponentTypeEnum.VNM,
+                "operator_type": OperatorTypeEnum.STANDALONE,
+                "threshold_percent": "40.000",
+                "threshold_basis": ThresholdBasisEnum.EX_WORKS,
+                "component_text_verbatim": (
+                    "Value of non-originating materials does not exceed 40 percent of "
+                    "the ex-works price."
+                ),
+                "normalized_expression": "vnom_percent <= 40",
+            }
+        ],
+        "pathways": [
+            {
+                "code": "VNM",
+                "label": "Value of non-originating materials <= 40%",
+                "pathway_type": "specific",
+                "expression_json": {
+                    "op": "formula_lte",
+                    "formula": "vnom_percent",
+                    "value": 40,
+                },
+                "threshold_percent": "40.000",
+                "threshold_basis": ThresholdBasisEnum.EX_WORKS,
+                "priority_rank": 1,
+                "allows_cumulation": True,
+                "allows_tolerance": False,
+            }
+        ],
+        "tariffs": {
+            "GHA": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "10.0000",
+                "target_rate": "3.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "5.0000", 2025: "3.0000"},
+            },
+            "CMR": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "11.0000",
+                "target_rate": "4.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "6.0000", 2025: "4.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "9.0000",
+                "target_rate": "2.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "4.0000", 2025: "2.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "10.0000",
+                "target_rate": "3.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "5.0000", 2025: "3.0000"},
+            },
+        },
+    },
+    {
+        "hs6_code": "840820",
+        "description": "Compression-ignition internal combustion piston engines",
+        "chapter": "84",
+        "heading": "8408",
+        "section": "XVI",
+        "section_name": "Machinery and Mechanical Appliances; Electrical Equipment",
+        "rule_status": RuleStatusEnum.AGREED,
+        "legal_rule_text_verbatim": (
+            "The value of non-originating materials shall not exceed 55 percent of the "
+            "ex-works price."
+        ),
+        "legal_rule_text_normalized": "VNM<=55",
+        "components": [
+            {
+                "name": "vnm",
+                "component_type": RuleComponentTypeEnum.VNM,
+                "operator_type": OperatorTypeEnum.STANDALONE,
+                "threshold_percent": "55.000",
+                "threshold_basis": ThresholdBasisEnum.EX_WORKS,
+                "component_text_verbatim": (
+                    "Value of non-originating materials does not exceed 55 percent of "
+                    "the ex-works price."
+                ),
+                "normalized_expression": "vnom_percent <= 55",
+            }
+        ],
+        "pathways": [
+            {
+                "code": "VNM",
+                "label": "Value of non-originating materials <= 55%",
+                "pathway_type": "specific",
+                "expression_json": {
+                    "op": "formula_lte",
+                    "formula": "vnom_percent",
+                    "value": 55,
+                },
+                "threshold_percent": "55.000",
+                "threshold_basis": ThresholdBasisEnum.EX_WORKS,
+                "priority_rank": 1,
+                "allows_cumulation": True,
+                "allows_tolerance": False,
+            }
+        ],
+        "tariffs": {
+            "GHA": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "20.0000",
+                "target_rate": "10.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.STEPWISE,
+                "rates": {2024: "14.0000", 2025: "10.0000"},
+            },
+            "CMR": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "21.0000",
+                "target_rate": "11.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.STEPWISE,
+                "rates": {2024: "15.0000", 2025: "11.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "19.0000",
+                "target_rate": "9.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.STEPWISE,
+                "rates": {2024: "13.0000", 2025: "9.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.SENSITIVE,
+                "base_rate": "20.0000",
+                "target_rate": "10.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.STEPWISE,
+                "rates": {2024: "14.0000", 2025: "10.0000"},
+            },
         },
     },
 ]
@@ -411,6 +718,9 @@ PRODUCT_INSERT_ORDER = {
     "610910": 3,
     "870421": 4,
     "030389": 5,
+    "080111": 6,
+    "290110": 7,
+    "840820": 8,
 }
 PRODUCT_SPECS.sort(key=lambda spec: PRODUCT_INSERT_ORDER[str(spec["hs6_code"])])
 
@@ -466,9 +776,22 @@ def question_risk_category(pathway_code: str) -> VerificationRiskCategoryEnum:
     return VerificationRiskCategoryEnum.GENERAL
 
 
-def build_seed_rows() -> dict[str, dict[str, object]]:
+def load_existing_hs6_ids(session: Session) -> dict[str, UUID]:
+    """Return existing canonical HS6 ids keyed by hs6_code for the seeded slice."""
+
+    seeded_codes = [str(spec["hs6_code"]) for spec in PRODUCT_SPECS]
+    statement = select(HS6Product.hs6_code, HS6Product.hs6_id).where(
+        HS6Product.hs_version == HS_VERSION,
+        HS6Product.hs6_code.in_(seeded_codes),
+    )
+    rows = session.execute(statement).all()
+    return {hs6_code: hs6_id for hs6_code, hs6_id in rows}
+
+
+def build_seed_rows(existing_hs6_ids: dict[str, UUID] | None = None) -> dict[str, dict[str, object]]:
     """Build all seeded rows in forward FK dependency order."""
 
+    existing_hs6_ids = existing_hs6_ids or {}
     rules_source_id = seed_uuid(RULES_SOURCE_NAME)
     tariffs_source_id = seed_uuid(TARIFF_SOURCE_NAME)
     rules_provision_id = seed_uuid(RULES_PROVISION_NAME)
@@ -588,22 +911,23 @@ def build_seed_rows() -> dict[str, dict[str, object]]:
     for product_index, spec in enumerate(PRODUCT_SPECS, start=1):
         hs6_code = spec["hs6_code"]
         description = spec["description"]
-        hs6_id = seed_uuid(f"hs6/{hs6_code}")
+        hs6_id = existing_hs6_ids.get(str(hs6_code), seed_uuid(f"hs6/{hs6_code}"))
         psr_id = seed_uuid(f"psr/{hs6_code}")
 
-        products.append(
-            {
-                "hs6_id": hs6_id,
-                "hs_version": HS_VERSION,
-                "hs6_code": hs6_code,
-                "hs6_display": f"{hs6_code} - {description}",
-                "chapter": spec["chapter"],
-                "heading": spec["heading"],
-                "description": description,
-                "section": spec["section"],
-                "section_name": spec["section_name"],
-            }
-        )
+        if str(hs6_code) not in existing_hs6_ids:
+            products.append(
+                {
+                    "hs6_id": hs6_id,
+                    "hs_version": HS_VERSION,
+                    "hs6_code": hs6_code,
+                    "hs6_display": f"{hs6_code} - {description}",
+                    "chapter": spec["chapter"],
+                    "heading": spec["heading"],
+                    "description": description,
+                    "section": spec["section"],
+                    "section_name": spec["section_name"],
+                }
+            )
 
         rules.append(
             {
@@ -778,7 +1102,7 @@ def build_seed_rows() -> dict[str, dict[str, object]]:
                 "hs6_id": hs6_id,
                 "psr_id": psr_id,
                 "applicability_type": "direct",
-                "priority_rank": 1,
+                "priority_rank": 0,
                 "effective_date": SEED_EFFECTIVE_DATE,
             }
         )
@@ -879,7 +1203,7 @@ def build_seed_rows() -> dict[str, dict[str, object]]:
                 "pending_rule_exposure_score": Decimal("24.00"),
                 "operational_notes": (
                     f"Seeded corridor profile for {exporter}->{importer} covering the "
-                    "five v0.1 golden-case products."
+                    f"{len(PRODUCT_SPECS)} deterministic v0.1 products."
                 ),
                 "source_summary": {
                     "rule_source": str(rules_source_id),
@@ -1020,14 +1344,18 @@ def main() -> None:
     """Seed the local database with deterministic v0.1 fixture data."""
 
     validate_seed_scope()
-    seed_rows = build_seed_rows()
     engine = build_engine()
+    seed_rows: dict[str, dict[str, object]] | None = None
 
     with Session(engine) as session:
         with session.begin():
+            existing_hs6_ids = load_existing_hs6_ids(session)
+            seed_rows = build_seed_rows(existing_hs6_ids)
             delete_seed_rows(session, seed_rows)
             insert_seed_rows(session, seed_rows)
 
+    if seed_rows is None:
+        raise RuntimeError("Seed rows were not built during seeding.")
     print_summary(seed_rows)
 
 

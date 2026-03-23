@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -16,9 +15,6 @@ from app.db.models.evaluations import EligibilityCheckResult, EligibilityEvaluat
 
 class EvaluationsRepository:
     """Repository for audit-grade evaluation persistence and replay lookups."""
-
-    _DB_ALLOWED_CHECK_TYPES = {"psr", "general_rule", "status", "blocker"}
-    _SURROGATE_CHECK_TYPE = "status"
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -80,18 +76,17 @@ class EvaluationsRepository:
                 for check_result in check_results:
                     row = dict(check_result)
                     row["evaluation_id"] = evaluation_row["evaluation_id"]
-                    persisted_row = self._prepare_check_row_for_insert(row)
                     normalized_row = {
-                        "evaluation_id": persisted_row["evaluation_id"],
-                        "check_type": persisted_row["check_type"],
-                        "check_code": persisted_row["check_code"],
-                        "passed": persisted_row["passed"],
-                        "severity": persisted_row["severity"],
-                        "expected_value": persisted_row.get("expected_value"),
-                        "observed_value": persisted_row.get("observed_value"),
-                        "explanation": persisted_row["explanation"],
-                        "details_json": persisted_row.get("details_json"),
-                        "linked_component_id": persisted_row.get("linked_component_id"),
+                        "evaluation_id": row["evaluation_id"],
+                        "check_type": row["check_type"],
+                        "check_code": row["check_code"],
+                        "passed": row["passed"],
+                        "severity": row["severity"],
+                        "expected_value": row.get("expected_value"),
+                        "observed_value": row.get("observed_value"),
+                        "explanation": row["explanation"],
+                        "details_json": row.get("details_json"),
+                        "linked_component_id": row.get("linked_component_id"),
                     }
                     rows.append(
                         {
@@ -103,10 +98,7 @@ class EvaluationsRepository:
 
                 check_statement = insert(check_table).values(rows).returning(*check_table.c)
                 inserted_result = await self.session.execute(check_statement)
-                inserted_checks = [
-                    self._restore_check_row(dict(row))
-                    for row in inserted_result.mappings().all()
-                ]
+                inserted_checks = list(inserted_result.mappings().all())
 
         return {
             "evaluation": evaluation_row,
@@ -135,10 +127,7 @@ class EvaluationsRepository:
         checks_result = await self.session.execute(checks_statement)
         return {
             "evaluation": evaluation_row,
-            "checks": [
-                self._restore_check_row(dict(row))
-                for row in checks_result.mappings().all()
-            ],
+            "checks": list(checks_result.mappings().all()),
         }
 
     async def get_evaluations_for_case(self, case_id: str) -> list[Mapping[str, Any]]:
@@ -155,47 +144,3 @@ class EvaluationsRepository:
         )
         result = await self.session.execute(statement)
         return list(result.mappings().all())
-
-    @classmethod
-    def _prepare_check_row_for_insert(cls, row: Mapping[str, Any]) -> dict[str, Any]:
-        """Persist unsupported logical check types under a schema-compatible surrogate."""
-
-        persisted_row = dict(row)
-        original_check_type = str(persisted_row["check_type"])
-        if original_check_type in cls._DB_ALLOWED_CHECK_TYPES:
-            return persisted_row
-
-        details = persisted_row.get("details_json")
-        if isinstance(details, dict):
-            normalized_details = deepcopy(details)
-        elif details is None:
-            normalized_details = {}
-        else:
-            normalized_details = {"original_payload": details}
-        normalized_details["original_check_type"] = original_check_type
-        persisted_row["check_type"] = cls._SURROGATE_CHECK_TYPE
-        persisted_row["details_json"] = normalized_details
-        return persisted_row
-
-    @classmethod
-    def _restore_check_row(cls, row: Mapping[str, Any]) -> dict[str, Any]:
-        """Restore the canonical logical check type for replay consumers."""
-
-        restored_row = dict(row)
-        details = restored_row.get("details_json")
-        if not isinstance(details, dict):
-            return restored_row
-
-        original_check_type = details.get("original_check_type")
-        if not original_check_type:
-            return restored_row
-
-        restored_row["check_type"] = original_check_type
-        cleaned_details = dict(details)
-        cleaned_details.pop("original_check_type", None)
-        if cleaned_details.get("original_payload") is not None and len(cleaned_details) == 1:
-            restored_row["details_json"] = cleaned_details["original_payload"]
-            return restored_row
-        cleaned_details.pop("original_payload", None)
-        restored_row["details_json"] = cleaned_details or None
-        return restored_row

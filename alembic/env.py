@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 from logging.config import fileConfig
 
@@ -22,7 +23,26 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.getenv("DATABASE_URL_SYNC") or os.getenv("DATABASE_URL")
+def _resolve_database_url() -> str:
+    """Choose a migration URL that works with the installed database drivers."""
+
+    async_url = os.getenv("DATABASE_URL")
+    sync_url = os.getenv("DATABASE_URL_SYNC")
+
+    if async_url and "+asyncpg" in async_url:
+        return async_url
+
+    if sync_url:
+        return sync_url
+
+    if async_url:
+        return async_url
+
+    msg = "DATABASE_URL or DATABASE_URL_SYNC must be set for Alembic."
+    raise RuntimeError(msg)
+
+
+database_url = _resolve_database_url()
 if not database_url:
     msg = "DATABASE_URL or DATABASE_URL_SYNC must be set for Alembic."
     raise RuntimeError(msg)
@@ -78,6 +98,13 @@ def run_migrations_online() -> None:
     if "+asyncpg" in database_url:
         asyncio.run(run_async_migrations())
         return
+
+    if importlib.util.find_spec("psycopg2") is None:
+        async_url = os.getenv("DATABASE_URL")
+        if async_url and "+asyncpg" in async_url:
+            config.set_main_option("sqlalchemy.url", async_url)
+            asyncio.run(run_async_migrations())
+            return
 
     connectable = engine_from_config(
         configuration,

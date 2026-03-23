@@ -80,12 +80,12 @@ class EligibilityEvaluation(Base):
 
 
 class EligibilityCheckResult(Base):
-    """Atomic check record captured as part of an eligibility evaluation."""
+    """Persisted audit-stage record captured across the full eligibility evaluation flow."""
 
     __tablename__ = "eligibility_check_result"
     __table_args__ = (
         CheckConstraint(
-            "check_type IN ('psr', 'general_rule', 'status', 'blocker')",
+            "check_type IN ('classification', 'rule', 'psr', 'pathway', 'general_rule', 'status', 'tariff', 'evidence', 'decision', 'blocker')",
             name="chk_eligibility_check_result_type",
         ),
         Index("idx_eligibility_check_result_evaluation", "evaluation_id"),

@@ -26,9 +26,10 @@ Fixed repository and persistence defects uncovered by the new suites:
 - mixed typed case-fact batch persistence
 - mixed audit-check batch persistence
 - request-scoped DB commit behavior for persisted evaluations
-- compatibility handling between richer logical audit stages and current DB check_type constraints
+- persisted audit `check_type` schema alignment for full logical audit stages via Alembic revision `0011_expand_checktype`
+- Alembic migration environment fallback to async `DATABASE_URL` when sync PostgreSQL drivers are unavailable
 
-Validation completed successfully across repository, parser, assessment, and audit suites.
+Final handbook validation pass completed successfully across repository, parser, assessment, and audit suites (79 passed, 8 skipped, 0 failed).
 
 ### Scope
 

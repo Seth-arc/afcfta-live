@@ -148,10 +148,10 @@ def _evidence_result() -> EvidenceReadinessResult:
 
     return EvidenceReadinessResult(
         required_items=["certificate_of_origin"],
-        missing_items=[],
+        missing_items=["Supplier declaration"],
         verification_questions=[],
-        readiness_score=1.0,
-        completeness_ratio=1.0,
+        readiness_score=0.5,
+        completeness_ratio=0.5,
     )
 
 
@@ -290,10 +290,20 @@ async def test_eligible_product_pathway_and_general_rules_pass() -> None:
     assert result.eligible is True
     assert result.pathway_used == "CTH"
     assert result.rule_status == "agreed"
+    assert result.evidence_required == ["certificate_of_origin"]
+    assert result.missing_evidence == ["Supplier declaration"]
+    assert result.readiness_score == 0.5
+    assert result.completeness_ratio == 0.5
     assert deps["status_service"].get_status_overlay.await_args_list == [
         call("corridor", "CORRIDOR:GHA:NGA:110311", date(2025, 1, 1)),
         call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),
     ]
+    deps["evidence_service"].build_readiness.assert_awaited_once_with(
+        "pathway",
+        f"PATHWAY:{_uuid(12)}",
+        "exporter",
+        [],
+    )
 
 
 @pytest.mark.asyncio
@@ -650,7 +660,10 @@ async def test_assess_case_loads_stored_facts_and_reuses_direct_path() -> None:
     deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
     deps["evidence_service"].build_readiness.return_value = _evidence_result()
 
-    result = await service.assess_case(case_id, CaseAssessmentRequest(year=2025))
+    result = await service.assess_case(
+        case_id,
+        CaseAssessmentRequest(year=2025, existing_documents=["certificate_of_origin"]),
+    )
 
     assert result.eligible is True
     deps["cases_repository"].get_case_with_facts.assert_awaited_once_with(case_id)
@@ -663,6 +676,12 @@ async def test_assess_case_loads_stored_facts_and_reuses_direct_path() -> None:
     ]
     persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
     assert persisted_evaluation["case_id"] == case_id
+    deps["evidence_service"].build_readiness.assert_awaited_once_with(
+        "pathway",
+        f"PATHWAY:{_uuid(12)}",
+        "exporter",
+        ["certificate_of_origin"],
+    )
 
 
 @pytest.mark.asyncio
@@ -721,3 +740,55 @@ def test_case_assessment_request_accepts_existing_documents_inventory() -> None:
     )
 
     assert request.existing_documents == ["certificate_of_origin"]
+
+
+@pytest.mark.asyncio
+async def test_assessment_response_exposes_readiness_fields_from_evidence_service() -> None:
+    """Assessment responses should surface missing evidence and readiness scores additively."""
+
+    service, deps = _service()
+    request = EligibilityRequest(
+        hs6_code="110311",
+        hs_version="HS2017",
+        exporter="GHA",
+        importer="NGA",
+        year=2025,
+        persona_mode="exporter",
+        production_facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+        existing_documents=["certificate_of_origin"],
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = EvidenceReadinessResult(
+        required_items=["Certificate of origin", "Supplier declaration"],
+        missing_items=["Supplier declaration"],
+        verification_questions=["Provide the COO"],
+        readiness_score=0.5,
+        completeness_ratio=0.5,
+    )
+
+    result = await service.assess(request)
+
+    assert result.evidence_required == ["Certificate of origin", "Supplier declaration"]
+    assert result.missing_evidence == ["Supplier declaration"]
+    assert result.readiness_score == 0.5
+    assert result.completeness_ratio == 0.5

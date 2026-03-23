@@ -74,7 +74,11 @@ class EligibilityService:
         failed engine outcomes follow the normal evaluation-persistence path.
         """
 
-        eligibility_request = await self._build_request_from_case(case_id=case_id, year=request.year)
+        eligibility_request = await self._build_request_from_case(
+            case_id=case_id,
+            year=request.year,
+            existing_documents=request.existing_documents,
+        )
         return await self.assess(eligibility_request)
 
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
@@ -181,6 +185,9 @@ class EligibilityService:
                 failures=blocker_failure_codes,
                 missing_facts=blocker_missing_facts,
                 evidence_required=[],
+                missing_evidence=[],
+                readiness_score=None,
+                completeness_ratio=None,
                 confidence_class=self._blocked_confidence_class(
                     rule_status=rule_bundle.psr_rule.rule_status,
                     corridor_overlay=corridor_overlay,
@@ -254,7 +261,7 @@ class EligibilityService:
             evidence_entity_type,
             evidence_entity_key,
             request.persona_mode,
-            [],
+            request.existing_documents,
         )
         audit_checks.append(self._make_evidence_trace_check(evidence_result))
 
@@ -275,6 +282,9 @@ class EligibilityService:
             failures=final_failure_codes,
             missing_facts=missing_facts,
             evidence_required=evidence_result.required_items,
+            missing_evidence=evidence_result.missing_items,
+            readiness_score=evidence_result.readiness_score,
+            completeness_ratio=evidence_result.completeness_ratio,
             confidence_class=self._combine_confidence_class(
                 base_confidence=rule_overlay.confidence_class,
                 missing_facts=missing_facts,
@@ -297,7 +307,13 @@ class EligibilityService:
         )
         return response
 
-    async def _build_request_from_case(self, *, case_id: str, year: int) -> EligibilityRequest:
+    async def _build_request_from_case(
+        self,
+        *,
+        case_id: str,
+        year: int,
+        existing_documents: Sequence[str],
+    ) -> EligibilityRequest:
         """Convert one stored case header plus facts into a standard assessment request."""
 
         if self.cases_repository is None:
@@ -323,6 +339,7 @@ class EligibilityService:
             "year": year,
             "persona_mode": case_row.get("persona_mode"),
             "production_facts": facts,
+            "existing_documents": list(existing_documents),
             "case_id": case_id,
         }
 

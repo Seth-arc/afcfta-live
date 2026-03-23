@@ -76,6 +76,9 @@ class EligibilityAssessmentResponse(BaseModel):
     failures: list[str] = Field(default_factory=list)
     missing_facts: list[str] = Field(default_factory=list)
     evidence_required: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    readiness_score: float | None = None
+    completeness_ratio: float | None = None
     confidence_class: Literal["complete", "provisional", "incomplete"]
 
     model_config = ConfigDict(from_attributes=True)

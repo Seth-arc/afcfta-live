@@ -63,6 +63,54 @@ class GeneralRulesTrace(BaseModel):
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
+class RuleProvenanceTrace(BaseModel):
+    """Compact provenance references for one resolved PSR rule."""
+
+    source_id: UUID | None = None
+    page_ref: int | None = None
+    table_ref: str | None = None
+    row_ref: str | None = None
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
+class TariffProvenanceTrace(BaseModel):
+    """Compact provenance references for one resolved tariff outcome."""
+
+    schedule_source_id: UUID | None = None
+    rate_source_id: UUID | None = None
+    line_page_ref: int | None = None
+    rate_page_ref: int | None = None
+    table_ref: str | None = None
+    row_ref: str | None = None
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
+class DecisionProvenanceTrace(BaseModel):
+    """Rolled-up provenance references for the final decision summary."""
+
+    rule: RuleProvenanceTrace | None = None
+    tariff: TariffProvenanceTrace | None = None
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
+class AuditTariffOutcomeTrace(TariffOutcomeResponse):
+    """Tariff replay summary with additive provenance references."""
+
+    schedule_source_id: UUID | None = None
+    rate_source_id: UUID | None = None
+    line_page_ref: int | None = None
+    rate_page_ref: int | None = None
+    table_ref: str | None = None
+    row_ref: str | None = None
+    resolved_rate_year: int | None = None
+    used_fallback_rate: bool = False
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
 class FinalDecisionTrace(BaseModel):
     """Collapsed final decision summary for an evaluation."""
 
@@ -77,6 +125,7 @@ class FinalDecisionTrace(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list)
     readiness_score: float | None = None
     completeness_ratio: float | None = None
+    provenance: DecisionProvenanceTrace | None = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
@@ -92,7 +141,7 @@ class AuditTrail(BaseModel):
     pathway_evaluations: list[PathwayEvaluationTrace] = Field(default_factory=list)
     general_rules_results: GeneralRulesTrace | None = None
     status_overlay: StatusOverlay | None = None
-    tariff_outcome: TariffOutcomeResponse | None = None
+    tariff_outcome: AuditTariffOutcomeTrace | None = None
     evidence_readiness: EvidenceReadinessResult | None = None
     atomic_checks: list[EligibilityCheckResultResponse] = Field(default_factory=list)
     final_decision: FinalDecisionTrace

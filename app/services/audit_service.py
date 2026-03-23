@@ -6,16 +6,20 @@ import json
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import Any
 
 from app.core.exceptions import AuditTrailNotFoundError
-from app.schemas.assessments import TariffOutcomeResponse
 from app.schemas.audit import (
+    AuditTariffOutcomeTrace,
     AuditTrail,
+    DecisionProvenanceTrace,
     FinalDecisionTrace,
     GeneralRulesTrace,
     HS6ResolvedSnapshot,
     PathwayEvaluationTrace,
+    RuleProvenanceTrace,
+    TariffProvenanceTrace,
 )
 from app.schemas.cases import CaseFactResponse, CaseSummaryResponse
 from app.schemas.evaluations import (
@@ -321,16 +325,39 @@ class AuditService:
     def _build_tariff_outcome(
         self,
         checks: Sequence[EligibilityCheckResultResponse],
-    ) -> TariffOutcomeResponse | None:
+    ) -> AuditTariffOutcomeTrace | None:
         """Decode the persisted tariff outcome summary when present."""
 
-        return self._decode_summary_model(
+        tariff_resolution = self._decode_summary_payload(
+            checks,
+            check_type="tariff",
+            check_code="TARIFF_RESOLUTION",
+            payload_key="tariff_resolution",
+        )
+        if isinstance(tariff_resolution, dict):
+            return AuditTariffOutcomeTrace(
+                preferential_rate=self._decimal_or_none(tariff_resolution.get("preferential_rate")),
+                base_rate=self._decimal_or_none(tariff_resolution.get("base_rate")),
+                status=self._tariff_status_from_payload(tariff_resolution),
+                schedule_source_id=tariff_resolution.get("schedule_source_id"),
+                rate_source_id=tariff_resolution.get("rate_source_id"),
+                line_page_ref=tariff_resolution.get("line_page_ref"),
+                rate_page_ref=tariff_resolution.get("rate_page_ref"),
+                table_ref=tariff_resolution.get("table_ref"),
+                row_ref=tariff_resolution.get("row_ref"),
+                resolved_rate_year=tariff_resolution.get("resolved_rate_year"),
+                used_fallback_rate=bool(tariff_resolution.get("used_fallback_rate", False)),
+            )
+
+        tariff_outcome = self._decode_summary_payload(
             checks,
             check_type="tariff",
             check_code="TARIFF_RESOLUTION",
             payload_key="tariff_outcome",
-            model_cls=TariffOutcomeResponse,
         )
+        if not isinstance(tariff_outcome, dict):
+            return None
+        return AuditTariffOutcomeTrace.model_validate(tariff_outcome)
 
     def _build_final_decision(
         self,
@@ -375,6 +402,7 @@ class AuditService:
         completeness_ratio = payload.get("completeness_ratio")
         if completeness_ratio is None and evidence_readiness is not None:
             completeness_ratio = evidence_readiness.completeness_ratio
+        provenance = self._build_decision_provenance(checks)
         return FinalDecisionTrace(
             eligible=bool(eligible),
             overall_outcome=evaluation.overall_outcome,
@@ -387,7 +415,51 @@ class AuditService:
             missing_evidence=list(missing_evidence),
             readiness_score=readiness_score,
             completeness_ratio=completeness_ratio,
+            provenance=provenance,
         )
+
+    def _build_decision_provenance(
+        self,
+        checks: Sequence[EligibilityCheckResultResponse],
+    ) -> DecisionProvenanceTrace | None:
+        """Roll rule and tariff provenance into one summary-level decision trace."""
+
+        rule_payload = self._decode_summary_payload(
+            checks,
+            check_type="rule",
+            check_code="PSR_RESOLUTION",
+            payload_key="psr_rule",
+        )
+        tariff_payload = self._decode_summary_payload(
+            checks,
+            check_type="tariff",
+            check_code="TARIFF_RESOLUTION",
+            payload_key="tariff_resolution",
+        )
+
+        rule_trace = None
+        if isinstance(rule_payload, dict):
+            rule_trace = RuleProvenanceTrace(
+                source_id=rule_payload.get("source_id"),
+                page_ref=rule_payload.get("page_ref"),
+                table_ref=rule_payload.get("table_ref"),
+                row_ref=rule_payload.get("row_ref"),
+            )
+
+        tariff_trace = None
+        if isinstance(tariff_payload, dict):
+            tariff_trace = TariffProvenanceTrace(
+                schedule_source_id=tariff_payload.get("schedule_source_id"),
+                rate_source_id=tariff_payload.get("rate_source_id"),
+                line_page_ref=tariff_payload.get("line_page_ref"),
+                rate_page_ref=tariff_payload.get("rate_page_ref"),
+                table_ref=tariff_payload.get("table_ref"),
+                row_ref=tariff_payload.get("row_ref"),
+            )
+
+        if rule_trace is None and tariff_trace is None:
+            return None
+        return DecisionProvenanceTrace(rule=rule_trace, tariff=tariff_trace)
 
     def _decode_summary_model(
         self,
@@ -430,6 +502,27 @@ class AuditService:
             if payload is None and payload_key in details:
                 return None
         return None
+
+    @staticmethod
+    def _decimal_or_none(value: Any) -> Decimal | None:
+        """Preserve decimal-like values from persisted payloads when present."""
+
+        if value is None:
+            return None
+        return Decimal(str(value))
+
+    @staticmethod
+    def _tariff_status_from_payload(payload: dict[str, Any]) -> str:
+        """Mirror the assessment tariff status precedence for replayed tariff summaries."""
+
+        schedule_status = str(payload.get("schedule_status") or "").lower()
+        if schedule_status in {"provisional", "draft", "superseded"}:
+            return schedule_status
+        if payload.get("tariff_status") is not None:
+            return str(payload["tariff_status"])
+        if payload.get("status") is not None:
+            return str(payload["status"])
+        return "unknown"
 
     @staticmethod
     def _details(check: EligibilityCheckResultResponse) -> dict[str, Any]:

@@ -202,6 +202,35 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
     assert trail_body["final_decision"]["pathway_used"] == assessment_body["pathway_used"]
     assert len(trail_body["original_input_facts"]) >= len(facts)
 
+    rule_summary_check = next(
+        check
+        for check in trail_body["atomic_checks"]
+        if check["check_type"] == "rule" and check["check_code"] == "PSR_RESOLUTION"
+    )
+    tariff_summary_check = next(
+        check
+        for check in trail_body["atomic_checks"]
+        if check["check_type"] == "tariff" and check["check_code"] == "TARIFF_RESOLUTION"
+    )
+    persisted_rule = rule_summary_check["details_json"]["psr_rule"]
+    persisted_tariff = tariff_summary_check["details_json"]["tariff_resolution"]
+
+    assert trail_body["psr_rule"]["source_id"] == persisted_rule["source_id"]
+    assert trail_body["psr_rule"]["table_ref"] == persisted_rule.get("table_ref")
+    assert trail_body["tariff_outcome"]["schedule_source_id"] == persisted_tariff.get(
+        "schedule_source_id"
+    )
+    assert trail_body["tariff_outcome"]["rate_source_id"] == persisted_tariff.get(
+        "rate_source_id"
+    )
+    assert trail_body["tariff_outcome"]["table_ref"] == persisted_tariff.get("table_ref")
+    assert trail_body["final_decision"]["provenance"]["rule"]["source_id"] == trail_body[
+        "psr_rule"
+    ]["source_id"]
+    assert trail_body["final_decision"]["provenance"]["tariff"][
+        "schedule_source_id"
+    ] == trail_body["tariff_outcome"]["schedule_source_id"]
+
     check_types = {check["check_type"] for check in trail_body["atomic_checks"]}
     assert {
         "classification",

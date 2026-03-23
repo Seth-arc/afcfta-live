@@ -217,7 +217,7 @@ When done, summarize the persistence rules and the new retrieval flow.
 python -m pytest tests/integration/test_evaluations_repository.py -v
 python -m pytest tests/integration/test_audit_api.py -v
 ```
-
+# Completed 23 March
 ---
 
 ## Prompt 7 — Extend assessment inputs for submitted documents
@@ -248,7 +248,7 @@ When done, summarize the new request field and its compatibility behavior.
 python -m pytest tests/unit/test_eligibility_service.py -v
 python -m pytest tests/unit/test_evidence_service.py -v
 ```
-
+# Completed 23 March
 ---
 
 ## Prompt 8 — Compute readiness inside eligibility assessments

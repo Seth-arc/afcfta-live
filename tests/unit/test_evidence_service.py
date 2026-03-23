@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.repositories.evidence_repository import EvidenceRepository
-from app.schemas.evidence import EvidenceReadinessResult
+from app.schemas.evidence import EvidenceReadinessRequest, EvidenceReadinessResult
 from app.services.evidence_service import EvidenceService
 
 
@@ -222,3 +222,16 @@ async def test_build_readiness_uses_non_temporal_repository_contract() -> None:
         entity_key="PATHWAY:pathway-999",
         risk_category=None,
     )
+
+
+def test_evidence_readiness_request_uses_existing_documents_vocabulary() -> None:
+    """Evidence request schema should keep the shared existing_documents field name."""
+
+    request = EvidenceReadinessRequest(
+        entity_type="pathway",
+        entity_key="PATHWAY:pathway-123",
+        persona_mode="exporter",
+        existing_documents=["certificate_of_origin"],
+    )
+
+    assert request.existing_documents == ["certificate_of_origin"]

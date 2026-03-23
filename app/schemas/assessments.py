@@ -29,6 +29,7 @@ class EligibilityRequest(BaseModel):
     year: int = Field(ge=2020, le=2040)
     persona_mode: PersonaModeEnum
     production_facts: list[CaseFactIn]
+    existing_documents: list[str] = Field(default_factory=list)
     case_id: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
@@ -51,6 +52,7 @@ class CaseAssessmentRequest(BaseModel):
     """Request payload for assessing a previously stored case."""
 
     year: int = Field(ge=2020, le=2040)
+    existing_documents: list[str] = Field(default_factory=list)
 
 
 class TariffOutcomeResponse(BaseModel):

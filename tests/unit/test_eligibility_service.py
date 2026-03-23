@@ -674,3 +674,50 @@ async def test_assess_case_raises_when_case_is_missing() -> None:
 
     with pytest.raises(CaseNotFoundError):
         await service.assess_case(str(_uuid(301)), CaseAssessmentRequest(year=2025))
+
+
+def test_eligibility_request_defaults_existing_documents_for_backward_compatibility() -> None:
+    """Direct assessment callers should remain valid when they omit existing_documents."""
+
+    request = _request(
+        hs6_code="110311",
+        facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+    )
+
+    assert request.existing_documents == []
+
+
+def test_eligibility_request_accepts_existing_documents_inventory() -> None:
+    """Direct assessment requests should accept the shared evidence document inventory field."""
+
+    request = EligibilityRequest(
+        hs6_code="110311",
+        hs_version="HS2017",
+        exporter="GHA",
+        importer="NGA",
+        year=2025,
+        persona_mode="exporter",
+        production_facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+        existing_documents=["certificate_of_origin", "supplier_declaration"],
+    )
+
+    assert request.existing_documents == ["certificate_of_origin", "supplier_declaration"]
+
+
+def test_case_assessment_request_defaults_existing_documents_for_backward_compatibility() -> None:
+    """Case-backed assessment callers should remain valid when they omit existing_documents."""
+
+    request = CaseAssessmentRequest(year=2025)
+
+    assert request.existing_documents == []
+
+
+def test_case_assessment_request_accepts_existing_documents_inventory() -> None:
+    """Case-backed assessment requests should accept the shared evidence document inventory field."""
+
+    request = CaseAssessmentRequest(
+        year=2025,
+        existing_documents=["certificate_of_origin"],
+    )
+
+    assert request.existing_documents == ["certificate_of_origin"]

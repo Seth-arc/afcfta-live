@@ -59,7 +59,7 @@ class TariffsRepository:
               ON tsl.schedule_id = tsh.schedule_id
             JOIN hs6_product hp
               ON hp.hs_version = tsh.hs_version
-             AND hp.hs6_code = tsl.hs_code
+             AND hp.hs6_code = LEFT(tsl.hs_code, 6)
             WHERE tsh.importing_state = :importer
               AND tsh.exporting_scope = :exporter
               AND hp.hs_version = :hs_version

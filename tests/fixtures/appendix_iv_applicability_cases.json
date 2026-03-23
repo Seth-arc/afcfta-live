@@ -1,0 +1,161 @@
+[
+  {
+    "case_id": "most_specific_wins",
+    "pathway_rows": [
+      {
+        "hs_code": "01",
+        "hs_level": "chapter",
+        "page_ref": "1",
+        "legal_rule_text_verbatim": "WO chapter rule",
+        "hs_code_start": "",
+        "hs_code_end": ""
+      },
+      {
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "page_ref": "2",
+        "legal_rule_text_verbatim": "CTH heading rule",
+        "hs_code_start": "",
+        "hs_code_end": ""
+      },
+      {
+        "hs_code": "010110",
+        "hs_level": "subheading",
+        "page_ref": "3",
+        "legal_rule_text_verbatim": "CTSH direct rule",
+        "hs_code_start": "",
+        "hs_code_end": ""
+      },
+      {
+        "hs_code": "0101RANGE",
+        "hs_level": "subheading",
+        "page_ref": "4",
+        "legal_rule_text_verbatim": "Range rule",
+        "hs_code_start": "010120",
+        "hs_code_end": "010129"
+      }
+    ],
+    "hs6_rows": [
+      {
+        "hs6_id": "1",
+        "hs6_code": "010110"
+      },
+      {
+        "hs6_id": "2",
+        "hs6_code": "010121"
+      },
+      {
+        "hs6_id": "3",
+        "hs6_code": "010130"
+      },
+      {
+        "hs6_id": "4",
+        "hs6_code": "019999"
+      }
+    ],
+    "expected_rows": [
+      {
+        "hs6_code": "010110",
+        "hs6_id": "1",
+        "psr_hs_code": "010110",
+        "applicability_type": "direct",
+        "priority_rank": 1
+      },
+      {
+        "hs6_code": "010121",
+        "hs6_id": "2",
+        "psr_hs_code": "0101RANGE",
+        "applicability_type": "range",
+        "priority_rank": 1
+      },
+      {
+        "hs6_code": "010130",
+        "hs6_id": "3",
+        "psr_hs_code": "0101",
+        "applicability_type": "inherited_heading",
+        "priority_rank": 2
+      },
+      {
+        "hs6_code": "019999",
+        "hs6_id": "4",
+        "psr_hs_code": "01",
+        "applicability_type": "inherited_chapter",
+        "priority_rank": 3
+      }
+    ],
+    "expected_stats": {
+      "total_rules": 4,
+      "range_rules": 1,
+      "no_coverage": 0,
+      "duplicates_collapsed": 0
+    }
+  },
+  {
+    "case_id": "no_coverage_gap",
+    "pathway_rows": [
+      {
+        "hs_code": "03",
+        "hs_level": "chapter",
+        "page_ref": "1",
+        "legal_rule_text_verbatim": "Fish chapter rule",
+        "hs_code_start": "",
+        "hs_code_end": ""
+      }
+    ],
+    "hs6_rows": [
+      {
+        "hs6_id": "10",
+        "hs6_code": "040110"
+      }
+    ],
+    "expected_rows": [],
+    "expected_stats": {
+      "total_rules": 1,
+      "range_rules": 0,
+      "no_coverage": 1,
+      "duplicates_collapsed": 0
+    }
+  },
+  {
+    "case_id": "duplicate_rules_collapsed",
+    "pathway_rows": [
+      {
+        "hs_code": "0201",
+        "hs_level": "heading",
+        "page_ref": "5",
+        "legal_rule_text_verbatim": "Heading rule duplicate A",
+        "hs_code_start": "",
+        "hs_code_end": ""
+      },
+      {
+        "hs_code": "0201",
+        "hs_level": "heading",
+        "page_ref": "5",
+        "legal_rule_text_verbatim": "Heading rule duplicate A",
+        "hs_code_start": "",
+        "hs_code_end": ""
+      }
+    ],
+    "hs6_rows": [
+      {
+        "hs6_id": "20",
+        "hs6_code": "020110"
+      }
+    ],
+    "expected_rows": [
+      {
+        "hs6_code": "020110",
+        "hs6_id": "20",
+        "psr_hs_code": "0201",
+        "applicability_type": "inherited_heading",
+        "priority_rank": 2
+      }
+    ],
+    "expected_stats": {
+      "total_rules": 1,
+      "range_rules": 0,
+      "no_coverage": 0,
+      "duplicates_collapsed": 0
+    }
+  }
+]

@@ -1,0 +1,458 @@
+[
+  {
+    "case_id": "wo_pathway",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "WO",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "WO",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "WO",
+        "pathway_label": "Wholly Obtained",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "WO",
+          "variables": [],
+          "expression": {
+            "op": "fact_eq",
+            "fact": "wholly_obtained",
+            "value": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "cth_pathway",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTH",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "CTH",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "heading",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "CTH",
+        "pathway_label": "Change of Tariff Heading",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "CTH",
+          "variables": [],
+          "expression": {
+            "op": "every_non_originating_input",
+            "test": {
+              "op": "heading_ne_output"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "ctsh_pathway",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTSH",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "CTSH",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "subheading",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "CTSH",
+        "pathway_label": "Change of Tariff Subheading",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "CTSH",
+          "variables": [],
+          "expression": {
+            "op": "every_non_originating_input",
+            "test": {
+              "op": "subheading_ne_output"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "vnm_pathway",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "MaxNOM 55% (EXW)",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "VNM",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "55",
+        "threshold_basis": "ex_works",
+        "tariff_shift_level": "",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "VNM",
+        "pathway_label": "Maximum Non-Originating Materials 55% (EXW)",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "VNM",
+          "variables": [
+            {
+              "name": "vnom_percent",
+              "formula": "non_originating / ex_works * 100"
+            }
+          ],
+          "expression": {
+            "op": "formula_lte",
+            "formula": "vnom_percent",
+            "value": 55
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "va_pathway",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "VA 40% (FOB)",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "VA",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "40",
+        "threshold_basis": "fob",
+        "tariff_shift_level": "",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "VA",
+        "pathway_label": "Minimum Value Added 40% (FOB)",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "VA",
+          "variables": [
+            {
+              "name": "va_percent",
+              "formula": "(ex_works - non_originating) / ex_works * 100"
+            }
+          ],
+          "expression": {
+            "op": "formula_gte",
+            "formula": "va_percent",
+            "value": 40
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "or_alternatives",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTH; or MaxNOM 55% (EXW)",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "CTH",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "heading",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      },
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTH; or MaxNOM 55% (EXW)",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "VNM",
+        "operator_type": "or",
+        "component_order": "2",
+        "threshold_percent": "55",
+        "threshold_basis": "ex_works",
+        "tariff_shift_level": "",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "CTH",
+        "pathway_label": "Change of Tariff Heading",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "CTH",
+          "variables": [],
+          "expression": {
+            "op": "every_non_originating_input",
+            "test": {
+              "op": "heading_ne_output"
+            }
+          }
+        }
+      },
+      {
+        "pathway_code": "VNM",
+        "pathway_label": "Maximum Non-Originating Materials 55% (EXW)",
+        "priority_rank": 2,
+        "expression_json": {
+          "pathway_code": "VNM",
+          "variables": [
+            {
+              "name": "vnom_percent",
+              "formula": "non_originating / ex_works * 100"
+            }
+          ],
+          "expression": {
+            "op": "formula_lte",
+            "formula": "vnom_percent",
+            "value": 55
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "and_combination",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTH and MaxNOM 50% (EXW)",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "CTH",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "heading",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      },
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTH and MaxNOM 50% (EXW)",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "VNM",
+        "operator_type": "and",
+        "component_order": "2",
+        "threshold_percent": "50",
+        "threshold_basis": "ex_works",
+        "tariff_shift_level": "",
+        "specific_process_text": "",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "CTH+VNM",
+        "pathway_label": "Change of Tariff Heading + Maximum Non-Originating Materials 50% (EXW)",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "CTH+VNM",
+          "variables": [
+            {
+              "name": "vnom_percent",
+              "formula": "non_originating / ex_works * 100"
+            }
+          ],
+          "expression": {
+            "op": "all",
+            "args": [
+              {
+                "op": "every_non_originating_input",
+                "test": {
+                  "op": "heading_ne_output"
+                }
+              },
+              {
+                "op": "formula_lte",
+                "formula": "vnom_percent",
+                "value": 50
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "cth_exception",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "CTH except from heading 10.06",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "CTH",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "heading",
+        "specific_process_text": "except from heading 10.06",
+        "confidence_score": "1.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "CTH",
+        "pathway_label": "Change of Tariff Heading",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "CTH",
+          "variables": [],
+          "expression": {
+            "op": "every_non_originating_input",
+            "test": {
+              "op": "heading_ne_output"
+            },
+            "exceptions": "except from heading 10.06"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "process_wrapper",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "Manufacture from chemical materials of any heading",
+        "pending_flag": "False",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "PROCESS",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "",
+        "specific_process_text": "Manufacture from chemical materials of any heading",
+        "confidence_score": "0.5"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "PROCESS",
+        "pathway_label": "Specific Process",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "PROCESS",
+          "variables": [],
+          "expression": null
+        }
+      }
+    ]
+  },
+  {
+    "case_id": "note_wrapper",
+    "component_rows": [
+      {
+        "page_num": "1",
+        "raw_description": "Example product",
+        "raw_rule_text": "Yet to be agreed",
+        "pending_flag": "True",
+        "hs_code": "0101",
+        "hs_level": "heading",
+        "hs_display": "01.01",
+        "component_type": "NOTE",
+        "operator_type": "standalone",
+        "component_order": "1",
+        "threshold_percent": "",
+        "threshold_basis": "",
+        "tariff_shift_level": "",
+        "specific_process_text": "Yet to be agreed",
+        "confidence_score": "0.0"
+      }
+    ],
+    "expected": [
+      {
+        "pathway_code": "NOTE",
+        "pathway_label": "Manual Review Required",
+        "priority_rank": 1,
+        "expression_json": {
+          "pathway_code": "NOTE",
+          "variables": [],
+          "expression": null
+        }
+      }
+    ]
+  }
+]

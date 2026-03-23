@@ -9,6 +9,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from app.core.countries import V01_CORRIDORS
 from app.db.base import get_async_session_factory
 
 
@@ -30,6 +31,8 @@ async def _select_supported_candidate(
     min_pathway_count: int | None = None,
     require_cth_before_vnm: bool = False,
     preferred_hs6_codes: tuple[str, ...] = (),
+    preferred_corridors: tuple[tuple[str, str], ...] = (),
+    require_corridors: tuple[tuple[str, str], ...] = (),
     year: int = 2025,
 ) -> dict[str, Any] | None:
     where_clauses = [
@@ -50,6 +53,13 @@ async def _select_supported_candidate(
     if require_rule_statuses:
         where_clauses.append(f"pr.rule_status::text IN {_sql_tuple(require_rule_statuses)}")
 
+    if require_corridors:
+        corridor_predicates = [
+            f"(sh.exporting_scope = '{exporter}' AND sh.importing_state = '{importer}')"
+            for exporter, importer in require_corridors
+        ]
+        where_clauses.append("(" + " OR ".join(corridor_predicates) + ")")
+
     preferred_order_sql = "hp.hs6_code ASC"
     if preferred_hs6_codes:
         preferred_cases = " ".join(
@@ -57,6 +67,13 @@ async def _select_supported_candidate(
             for index, hs6_code in enumerate(preferred_hs6_codes)
         )
         preferred_order_sql = f"CASE hp.hs6_code {preferred_cases} ELSE 999 END, hp.hs6_code ASC"
+
+    if preferred_corridors:
+        corridor_cases = " ".join(
+            f"WHEN sh.exporting_scope = '{exporter}' AND sh.importing_state = '{importer}' THEN {index}"
+            for index, (exporter, importer) in enumerate(preferred_corridors)
+        )
+        preferred_order_sql = f"CASE {corridor_cases} ELSE 999 END, {preferred_order_sql}"
 
     having_clauses = []
     if require_component_types:
@@ -547,3 +564,69 @@ async def test_parser_generated_agricultural_wo_rule(async_client: AsyncClient) 
     _assert_response_shape(body)
     assert body["eligible"] is True
     assert body["pathway_used"] is not None and "WO" in body["pathway_used"]
+
+
+@pytest.mark.asyncio
+async def test_parser_generated_supported_corridor_candidate(async_client: AsyncClient) -> None:
+    """A parser-era candidate should execute on a v0.1-supported corridor outside the fixed GHA->CMR smoke cases."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            chapter_start=28,
+            chapter_end=84,
+            require_component_types=("WO", "CTH", "VNM", "VA"),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA"), ("CIV", "NGA"), ("SEN", "NGA")),
+            require_corridors=tuple(V01_CORRIDORS),
+        ),
+        "No parser-era candidate on a v0.1-supported corridor is loaded in the test database.",
+    )
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_best_effort_pass_facts(candidate),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert (candidate["exporter"], candidate["importer"]) in V01_CORRIDORS
+    assert body["hs6_code"] == candidate["hs6_code"]
+    assert body["pathway_used"] is not None
+    assert body["rule_status"] == candidate["rule_status"]
+
+
+@pytest.mark.asyncio
+async def test_pending_rule_blocks_before_pathway_evaluation(async_client: AsyncClient) -> None:
+    """Pending parser-era rules should hard block before any pathway can be selected."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_rule_statuses=("pending",),
+            require_component_types=("WO", "CTH", "VNM", "VA"),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA"), ("CIV", "NGA"), ("SEN", "NGA")),
+        ),
+        "No pending parser-era candidate with an otherwise executable pathway is loaded in the test database.",
+    )
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_best_effort_pass_facts(candidate),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is False
+    assert body["pathway_used"] is None
+    assert body["rule_status"] == "pending"
+    assert "RULE_STATUS_PENDING" in body["failures"]
+    assert body["confidence_class"] == "provisional"
+    assert not body["missing_facts"]

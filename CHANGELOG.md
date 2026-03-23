@@ -13,6 +13,22 @@
 - Seed data for 5 HS6 products across 2 corridors
 - 67 passing tests (61 unit + 6 integration)
 - Full documentation: API reference, user guides, concept docs, developer guide
+- Completed the AIS parser reliability phase.
+
+Added repository integration coverage for rules, tariffs, status, evaluations, and HS resolution.
+Added fixed-fixture parser tests for rule decomposition, pathway generation, and applicability precedence.
+Expanded live assessment integration coverage across parser-era product chapters and OR-alternative behavior.
+Added audit service unit coverage and audit API integration coverage for persisted evaluation replay.
+
+Fixed repository and persistence defects uncovered by the new suites:
+- HS6 prefix tariff matching for deeper tariff lines
+- applicability range-boundary preservation
+- mixed typed case-fact batch persistence
+- mixed audit-check batch persistence
+- request-scoped DB commit behavior for persisted evaluations
+- compatibility handling between richer logical audit stages and current DB check_type constraints
+
+Validation completed successfully across repository, parser, assessment, and audit suites.
 
 ### Scope
 

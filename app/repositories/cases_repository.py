@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import insert, select
@@ -41,16 +42,48 @@ class CasesRepository:
 
         fact_table = CaseInputFact.__table__
         rows: list[dict[str, Any]] = []
+        insertable_columns = {
+            "case_id",
+            "fact_type",
+            "fact_key",
+            "fact_value_type",
+            "fact_value_text",
+            "fact_value_number",
+            "fact_value_boolean",
+            "fact_value_date",
+            "fact_value_json",
+            "unit",
+            "source_type",
+            "source_reference",
+            "confidence_score",
+            "fact_order",
+        }
         for fact in facts:
             row = dict(fact)
             if "source_ref" in row and "source_reference" not in row:
                 row["source_reference"] = row.pop("source_ref")
             row["case_id"] = case_id
+            normalized_row = {
+                "case_id": row["case_id"],
+                "fact_type": row["fact_type"],
+                "fact_key": row["fact_key"],
+                "fact_value_type": row["fact_value_type"],
+                "fact_value_text": row.get("fact_value_text"),
+                "fact_value_number": row.get("fact_value_number"),
+                "fact_value_boolean": row.get("fact_value_boolean"),
+                "fact_value_date": row.get("fact_value_date"),
+                "fact_value_json": row.get("fact_value_json"),
+                "unit": row.get("unit"),
+                "source_type": row.get("source_type", "user_input"),
+                "source_reference": row.get("source_reference"),
+                "confidence_score": row.get("confidence_score", Decimal("1.000")),
+                "fact_order": row.get("fact_order", 1),
+            }
             rows.append(
                 {
                     key: value
-                    for key, value in row.items()
-                    if key in fact_table.c and value is not None
+                    for key, value in normalized_row.items()
+                    if key in insertable_columns and key in fact_table.c
                 }
             )
 

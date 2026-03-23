@@ -88,6 +88,8 @@ def build_rule_records(pathway_rows: list[dict[str, str]]) -> list[RuleRecord]:
                 hs_level=normalize_text(row.get("hs_level")),
                 page_ref=normalize_text(row.get("page_ref")),
                 legal_rule_text_verbatim=normalize_text(row.get("legal_rule_text_verbatim")),
+                hs_code_start=normalize_text(row.get("hs_code_start")),
+                hs_code_end=normalize_text(row.get("hs_code_end")),
             )
         )
     return rules

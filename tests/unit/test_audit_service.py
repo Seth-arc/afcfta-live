@@ -379,3 +379,249 @@ async def test_missing_evaluation_maps_to_404_domain_error() -> None:
         await service.get_decision_trace(evaluation_id=str(_uuid(30)))
 
     assert DOMAIN_STATUS_CODES[AuditTrailNotFoundError] == 404
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_resolves_latest_evaluation_from_case_id() -> None:
+    """When only case_id is supplied, the latest stored evaluation should be replayed."""
+
+    case_id = _uuid(40)
+    evaluation_id = _uuid(41)
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluations_for_case.return_value = [
+        _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+        )
+    ]
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+        ),
+        "checks": [],
+    }
+    cases_repository.get_case_with_facts.return_value = _case_bundle(case_id)
+
+    result = await service.get_decision_trace(case_id=str(case_id))
+
+    evaluations_repository.get_evaluations_for_case.assert_awaited_once_with(str(case_id))
+    evaluations_repository.get_evaluation_with_checks.assert_awaited_once_with(str(evaluation_id))
+    assert result.evaluation.evaluation_id == evaluation_id
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_reconstructs_hs6_snapshot_from_case_when_classification_summary_missing() -> None:
+    """Case header fallback should populate hs6 snapshot when the classification summary is absent."""
+
+    evaluation_id = _uuid(60)
+    case_id = _uuid(61)
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.NOT_ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(62),
+                evaluation_id=evaluation_id,
+                check_type="decision",
+                check_code="FINAL_DECISION",
+                passed=False,
+                details_json={"final_decision": {"eligible": False, "failure_codes": ["FAIL_CTH_NOT_MET"]}},
+            )
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = _case_bundle(case_id)
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.hs6_resolved is not None
+    assert result.hs6_resolved.hs6_code == "110311"
+    assert result.hs6_resolved.hs_version == "HS2017"
+    assert result.hs6_resolved.hs6_id is None
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_builds_pathway_traces_from_atomic_psr_checks_when_summary_missing() -> None:
+    """Atomic PSR checks should still reconstruct ordered pathway summaries without PATHWAY_EVALUATION rows."""
+
+    evaluation_id = _uuid(70)
+    case_id = _uuid(71)
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.NOT_ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(72),
+                evaluation_id=evaluation_id,
+                check_type="psr",
+                check_code="PROCESS",
+                passed=False,
+                details_json={
+                    "pathway_id": str(_uuid(700)),
+                    "pathway_code": "PROCESS",
+                    "pathway_label": "Specific Process",
+                    "priority_rank": 1,
+                    "evaluated_expression": None,
+                    "missing_variables": ["specific_process_performed"],
+                },
+            ),
+            _check_row(
+                check_result_id=_uuid(73),
+                evaluation_id=evaluation_id,
+                check_type="psr",
+                check_code="VNM",
+                passed=True,
+                details_json={
+                    "pathway_id": str(_uuid(701)),
+                    "pathway_code": "VNM",
+                    "pathway_label": "Maximum Non-Originating Materials 55% (EXW)",
+                    "priority_rank": 2,
+                    "evaluated_expression": "vnom_percent <= 55",
+                    "missing_variables": [],
+                },
+            ),
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = _case_bundle(case_id)
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert [trace.pathway_code for trace in result.pathway_evaluations] == ["PROCESS", "VNM"]
+    assert result.pathway_evaluations[0].priority_rank == 1
+    assert result.pathway_evaluations[0].result is False
+    assert result.pathway_evaluations[0].missing_variables == ["specific_process_performed"]
+    assert result.pathway_evaluations[1].result is True
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_reconstructs_general_rules_without_summary_check() -> None:
+    """General-rule atomic checks should synthesize the summary fields when the summary row is absent."""
+
+    evaluation_id = _uuid(80)
+    case_id = _uuid(81)
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.NOT_ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(82),
+                evaluation_id=evaluation_id,
+                check_type="general_rule",
+                check_code="DIRECT_TRANSPORT",
+                passed=False,
+                details_json={"failure_code": "FAIL_DIRECT_TRANSPORT"},
+                explanation="Direct transport requirement not met",
+            ),
+            _check_row(
+                check_result_id=_uuid(83),
+                evaluation_id=evaluation_id,
+                check_type="general_rule",
+                check_code="CUMULATION",
+                passed=True,
+                explanation="Cumulation conditions satisfied",
+            ),
+            _check_row(
+                check_result_id=_uuid(84),
+                evaluation_id=evaluation_id,
+                check_type="general_rule",
+                check_code="INSUFFICIENT_OPERATIONS",
+                passed=False,
+                details_json={"failure_code": "FAIL_INSUFFICIENT_OPERATIONS"},
+                explanation="Only minimal operations performed",
+            ),
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = _case_bundle(case_id)
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.general_rules_results is not None
+    assert result.general_rules_results.direct_transport_check == "fail"
+    assert result.general_rules_results.cumulation_check == "pass"
+    assert result.general_rules_results.insufficient_operations_check == "fail"
+    assert result.general_rules_results.general_rules_passed is False
+    assert result.general_rules_results.failure_codes == [
+        "FAIL_DIRECT_TRANSPORT",
+        "FAIL_INSUFFICIENT_OPERATIONS",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_falls_back_final_decision_codes_and_missing_facts_from_checks() -> None:
+    """Final decision should derive failure codes and missing facts when the summary payload omits them."""
+
+    evaluation_id = _uuid(90)
+    case_id = _uuid(91)
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.NOT_ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(92),
+                evaluation_id=evaluation_id,
+                check_type="blocker",
+                check_code="MISSING_CORE_FACTS",
+                passed=False,
+                details_json={
+                    "failure_code": "MISSING_CORE_FACTS",
+                    "missing_facts": ["non_originating_inputs", "output_hs6_code"],
+                },
+            ),
+            _check_row(
+                check_result_id=_uuid(93),
+                evaluation_id=evaluation_id,
+                check_type="decision",
+                check_code="FINAL_DECISION",
+                passed=False,
+                details_json={"final_decision": {"eligible": False}},
+            ),
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = _case_bundle(case_id)
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.final_decision.eligible is False
+    assert result.final_decision.failure_codes == ["MISSING_CORE_FACTS"]
+    assert result.final_decision.missing_facts == ["non_originating_inputs", "output_hs6_code"]
+
+
+@pytest.mark.asyncio
+async def test_missing_case_history_maps_case_id_lookup_to_domain_error() -> None:
+    """Resolving from a case id with no stored evaluations should raise the domain not-found error."""
+
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluations_for_case.return_value = []
+
+    with pytest.raises(AuditTrailNotFoundError):
+        await service.get_decision_trace(case_id=str(_uuid(95)))

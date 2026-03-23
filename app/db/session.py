@@ -23,4 +23,11 @@ async def get_db() -> AsyncIterator[AsyncSession]:
     """Yield an async SQLAlchemy session for FastAPI dependencies."""
 
     async with session_context() as session:
-        yield session
+        try:
+            yield session
+            if session.in_transaction():
+                await session.commit()
+        except Exception:
+            if session.in_transaction():
+                await session.rollback()
+            raise

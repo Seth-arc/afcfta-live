@@ -17,14 +17,14 @@ class StatusRepository:
         self.session = session
 
     async def get_status(
-      self,
-      entity_type: str,
-      entity_key: str,
-      as_of_date: date | None = None,
+        self,
+        entity_type: str,
+        entity_key: str,
+        as_of_date: date | None = None,
     ) -> Mapping[str, Any] | None:
-      """Return the highest-confidence status assertion active on the requested date."""
+        """Return the highest-confidence status assertion active on the requested date."""
 
-      resolved_date = as_of_date or date.today()
+        resolved_date = as_of_date or date.today()
         statement = text(
             """
             SELECT
@@ -64,11 +64,11 @@ class StatusRepository:
         self,
         entity_type: str,
         entity_key: str,
-      as_of_date: date | None = None,
+        as_of_date: date | None = None,
     ) -> list[Mapping[str, Any]]:
-      """Return transition clauses active on the requested date for an entity key."""
+        """Return transition clauses active on the requested date for an entity key."""
 
-      resolved_date = as_of_date or date.today()
+        resolved_date = as_of_date or date.today()
         statement = text(
             """
             SELECT

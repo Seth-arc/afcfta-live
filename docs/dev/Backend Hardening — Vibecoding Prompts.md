@@ -542,7 +542,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit tests/integration --cov
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 14 — Add property-based tests around deterministic edge cases
@@ -578,7 +578,7 @@ python -m pytest tests/unit/test_expression_evaluator.py -v
 python -m pytest tests/unit/test_tariff_resolution_service.py -v
 python -m pytest tests/unit/test_evidence_service.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 15 — Add load-test scaffolding for concurrent assessment traffic

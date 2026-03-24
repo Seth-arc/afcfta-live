@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\core\http_status.py
+# hypothesis_version: 6.151.9
+
+[401, 404, 422, 429, 500, 503]

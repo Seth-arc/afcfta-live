@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\rules.py
+# hypothesis_version: 6.151.9
+
+["'specific'", "'standalone'", '1', '1.000', 'CASCADE', 'RESTRICT', 'component_order', 'component_type', 'effective_date', 'expiry_date', 'hs6_id', 'hs6_product.hs6_id', 'hs_code', 'hs_level', 'hs_level_enum', 'hs_version', 'idx_psr_rule_hs_code', 'idx_psr_rule_status', 'operator_type_enum', 'priority_rank', 'psr_id', 'psr_rule', 'psr_rule.psr_id', 'psr_rule_component', 'rule_status', 'rule_status_enum', 'source_id', 'threshold_basis_enum', 'true', 'uuid_generate_v4()']

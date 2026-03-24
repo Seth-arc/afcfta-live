@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\core\entity_keys.py
+# hypothesis_version: 6.151.9
+
+['COUNTRY:{iso3}', 'HS6_RULE:{psr_id}', 'PATHWAY:{pathway_id}', 'PSR:{psr_id}', 'corridor', 'country', 'hs6_rule', 'pathway', 'psr_rule', 'schedule', 'schedule_line']

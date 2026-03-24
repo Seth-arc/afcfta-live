@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\evaluations.py
+# hypothesis_version: 6.151.9
+
+['CASCADE', 'SET NULL', 'case_file.case_id', 'case_id', 'check_code', 'check_severity_enum', 'check_type', 'evaluation_date', 'evaluation_id', 'legal_outcome_enum', 'linked_component_id', 'overall_outcome', 'rule_status_enum', 'uuid_generate_v4()']

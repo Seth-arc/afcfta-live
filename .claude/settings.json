@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ls \"c:\\\\Users\\\\ssnguna\\\\Local Sites\\\\afcfta-live\\\\tests\\\\unit-test-report\"\" && ls \"c:UsersssngunaLocal Sitesafcfta-livetestsintegration-test-report\"\")"
+      "Bash(ls \"c:\\\\Users\\\\ssnguna\\\\Local Sites\\\\afcfta-live\\\\tests\\\\unit-test-report\"\" && ls \"c:UsersssngunaLocal Sitesafcfta-livetestsintegration-test-report\"\")",
+      "Bash(python -m pip install \"hypothesis>=6.100\" -q)",
+      "Bash(python -m hypothesis --version)",
+      "Bash(python -c \"import hypothesis; print\\(hypothesis.__version__\\)\")",
+      "Bash(python -m pytest tests/unit/test_expression_evaluator.py tests/unit/test_tariff_resolution_service.py tests/unit/test_evidence_service.py -v)",
+      "Bash(python -m pytest tests/unit -q --cov)"
     ]
   }
 }

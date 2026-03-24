@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\core\exceptions.py
+# hypothesis_version: 6.151.9
+
+['AIS_ERROR', 'AUTHENTICATION_ERROR', 'CASE_NOT_FOUND', 'CLASSIFICATION_ERROR', 'INSUFFICIENT_FACTS', 'RATE_LIMIT_EXCEEDED', 'RULE_NOT_FOUND', 'STATUS_UNKNOWN', 'TARIFF_NOT_FOUND']

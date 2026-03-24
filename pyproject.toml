@@ -23,6 +23,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "hypothesis>=6.100",
     "httpx",
     "ruff",
 ]
@@ -32,6 +33,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "hypothesis>=6.100",
     "httpx",
     "ruff",
 ]

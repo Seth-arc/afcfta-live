@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\intelligence.py
+# hypothesis_version: 6.151.9
+
+["'medium'", "'open'", "'unknown'", '0.00', 'SET NULL', 'active', 'alert_event', 'alert_payload', 'alert_severity_enum', 'alert_status', 'alert_status_enum', 'alert_type', 'alert_type_enum', 'case_file.case_id', 'corridor_profile', 'corridor_status', 'corridor_status_enum', 'effective_from', 'entity_key', 'entity_type', 'exporter_state', 'gin', 'idx_alert_event_case', 'idx_alert_event_type', 'importer_state', 'method_version', 'related_case_id', 'severity', 'source_summary', 'triggered_at', 'true', 'uq_corridor_profile', 'uuid_generate_v4()']

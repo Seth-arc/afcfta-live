@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\status.py
+# hypothesis_version: 6.151.9
+
+['1.000', 'RESTRICT', 'effective_from', 'effective_to', 'end_date', 'entity_key', 'entity_type', 'source_id', 'start_date', 'status_assertion', 'status_type', 'status_type_enum', 'transition_clause', 'uuid_generate_v4()']

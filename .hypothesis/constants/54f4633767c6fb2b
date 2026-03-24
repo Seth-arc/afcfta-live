@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\core\fact_keys.py
+# hypothesis_version: 6.151.9
+
+['CTH', 'CTSH', 'PROCESS', 'VA', 'VNM', 'WO', 'boolean', 'cumulation_claimed', 'currency', 'customs_value', 'direct_transport', 'ex_works', 'fob_value', 'general', 'list', 'non_originating', 'number', 'output_hs6_code', 'required_for', 'tariff_heading_input', 'text', 'type', 'unit', 'va_percent', 'vnom_percent', 'wholly_obtained']

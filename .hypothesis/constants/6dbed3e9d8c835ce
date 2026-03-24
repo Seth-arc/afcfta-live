@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\tariffs.py
+# hypothesis_version: 6.151.9
+
+["'in_force'", "'unknown'", 'CASCADE', 'RESTRICT', 'calendar_year', 'effective_date', 'exporting_scope', 'gin', 'gin_trgm_ops', 'hs_code', 'hs_version', 'importing_state', 'product_description', 'rate_status', 'rate_status_enum', 'schedule_id', 'schedule_line_id', 'schedule_status', 'schedule_status_enum', 'source_id', 'staging_type_enum', 'target_year', 'tariff_category', 'tariff_category_enum', 'tariff_schedule_line', 'uuid_generate_v4()']

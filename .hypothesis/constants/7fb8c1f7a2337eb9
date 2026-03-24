@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\services\tariff_resolution_service.py
+# hypothesis_version: 6.151.9
+
+['country_code', 'exporter_country', 'hs6_code', 'hs_version', 'importer_country', 'incomplete', 'line_page_ref', 'mfn_base_rate', 'preferential_rate', 'rate_page_ref', 'rate_source_id', 'rate_status', 'resolved_rate_year', 'row_ref', 'schedule_id', 'schedule_line_id', 'schedule_source_id', 'schedule_status', 'table_ref', 'tariff_category', 'used_fallback_rate', 'year', 'year_rate_id']

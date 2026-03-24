@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\scripts\parsers\validation_runner.py
+# hypothesis_version: 6.151.9
+
+[100, 1000, ', ', '--all-sources', '--scope', '0.00', '100', 'FAIL', 'PASS', 'Validation summary', '__main__', 'all', 'applicability', 'artifacts', 'component', 'data', 'db', 'pathway', 'processed', 'r', 'raw_csv', 'rule', 'rules', 'source_id', 'staged', 'store_true', 'utf-8']

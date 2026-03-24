@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\cases.py
+# hypothesis_version: 6.151.9
+
+["'draft'", "'medium'", "'user_input'", '0.800', '1', '1.000', 'CASCADE', 'SET NULL', 'blocking', 'case_counterfactual', 'case_failure_mode', 'case_file', 'case_file.case_id', 'case_id', 'case_input_fact', 'chk_case_file_dates', 'counterfactual_type', 'declared_pathway', 'exporter_state', 'fact_key', 'fact_order', 'fact_type', 'fact_value_json', 'fact_value_type_enum', 'failure_order', 'failure_order >= 1', 'failure_type', 'failure_type_enum', 'gin', 'hs_code', 'importer_state', 'input_change', 'persona_mode', 'persona_mode_enum', 'projected_outcome', 'scenario_order', 'scenario_order >= 1', 'severity', 'severity_enum', 'source_type', 'submission_status', 'true', 'uq_case_fact', 'uuid_generate_v4()']

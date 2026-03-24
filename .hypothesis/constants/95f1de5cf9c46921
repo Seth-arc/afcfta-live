@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\schemas\evidence.py
+# hypothesis_version: 6.151.9
+
+[1.0, 'Bill of materials', 'Invoice', 'completeness_ratio', 'entity_key', 'entity_type', 'examples', 'existing_documents', 'exporter', 'hs6_rule', 'missing_items', 'persona_mode', 'readiness_score', 'required_items', 'submitted_documents']

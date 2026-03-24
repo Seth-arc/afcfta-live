@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\services\intelligence_service.py
+# hypothesis_version: 6.151.9
+
+['advisory_only', 'alert_message', 'alert_payload', 'alert_status', 'alert_type', 'assessment_year', 'case_id', 'corridor', 'corridor_status', 'entity_key', 'entity_type', 'exporter', 'hs6_code', 'importer', 'not_yet_operational', 'partially_agreed', 'pending', 'psr_rule', 'related_case_id', 'rule_status', 'severity', 'trigger', 'value']

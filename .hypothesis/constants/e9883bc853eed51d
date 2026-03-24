@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\services\fact_normalization_service.py
+# hypothesis_version: 6.151.9
+
+['0', '100', 'boolean', 'date', 'ex_works', 'fact_key', 'fact_value_boolean', 'fact_value_date', 'fact_value_json', 'fact_value_number', 'fact_value_text', 'fact_value_type', 'json', 'list', 'non_originating', 'number', 'text', 'type', 'va_percent', 'value', 'vnom_percent']

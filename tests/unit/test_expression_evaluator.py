@@ -6,9 +6,26 @@ from pathlib import Path
 import re
 
 import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 from app.core.exceptions import ExpressionEvaluationError
 from app.services.expression_evaluator import ExpressionEvaluator
+
+# ---------------------------------------------------------------------------
+# Bounded generators for property tests
+# ---------------------------------------------------------------------------
+
+# Monetary values: positive integers large enough to produce fractional
+# percentages but small enough for fast Decimal arithmetic.
+_POS_MONETARY = st.integers(min_value=1, max_value=1_000_000)
+_NON_NEG_MONETARY = st.integers(min_value=0, max_value=1_000_000)
+
+# VNM/VA threshold expressed as a whole-number percentage (0-100).
+_THRESHOLD_PCT = st.integers(min_value=0, max_value=100)
+
+# HS-4 tariff headings as zero-padded 4-digit strings ("1000"-"9999").
+_HEADING = st.integers(min_value=1000, max_value=9999).map(str)
 
 
 def test_vnm_passes_when_threshold_is_met() -> None:
@@ -229,3 +246,239 @@ def test_source_file_does_not_use_dynamic_execution() -> None:
     assert re.search(r"\beval\s*\(", source) is None
     assert re.search(r"\bexec\s*\(", source) is None
     assert re.search(r"(?<!re\.)\bcompile\s*\(", source) is None
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — derived-variable math
+# ---------------------------------------------------------------------------
+
+
+@given(ex_works=_POS_MONETARY, non_originating=_NON_NEG_MONETARY, threshold=_THRESHOLD_PCT)
+@settings(max_examples=300)
+def test_vnom_and_va_are_complements_at_every_threshold(
+    ex_works: int, non_originating: int, threshold: int
+) -> None:
+    """vnom_percent + va_percent == 100, so vnom <= T iff va >= (100 - T).
+
+    Invariant: the two formulas are strict mathematical complements.
+    A bug in either formula (swapped numerator/denominator, wrong sign,
+    wrong divisor) breaks this equivalence for some input triple.
+    """
+    facts = {"ex_works": ex_works, "non_originating": non_originating}
+    evaluator = ExpressionEvaluator()
+
+    vnom_result = evaluator.evaluate(
+        {"op": "formula_lte", "formula": "vnom_percent", "value": threshold}, facts
+    )
+    va_result = evaluator.evaluate(
+        {"op": "formula_gte", "formula": "va_percent", "value": 100 - threshold}, facts
+    )
+
+    assert vnom_result.result == va_result.result
+
+
+@given(ex_works=_POS_MONETARY, non_originating=_NON_NEG_MONETARY)
+@settings(max_examples=200)
+def test_vnom_is_at_most_100_when_non_originating_does_not_exceed_ex_works(
+    ex_works: int, non_originating: int
+) -> None:
+    """vnom_percent ∈ [0, 100] whenever non_originating ≤ ex_works.
+
+    Catches: wrong divisor (non_originating instead of ex_works),
+    or multiplication factor other than 100.
+    """
+    assume(non_originating <= ex_works)
+    facts = {"ex_works": ex_works, "non_originating": non_originating}
+    evaluator = ExpressionEvaluator()
+
+    result = evaluator.evaluate(
+        {"op": "formula_lte", "formula": "vnom_percent", "value": 100}, facts
+    )
+
+    assert result.result is True
+    assert result.missing_variables == []
+
+
+@given(ex_works=_POS_MONETARY, excess=_POS_MONETARY)
+@settings(max_examples=200)
+def test_vnom_exceeds_100_when_non_originating_exceeds_ex_works(
+    ex_works: int, excess: int
+) -> None:
+    """vnom_percent > 100 when non_originating > ex_works.
+
+    Catches: a cap or clamp applied to vnom before threshold comparison,
+    which would silently allow economically impossible inputs to pass.
+    """
+    non_originating = ex_works + excess
+    facts = {"ex_works": ex_works, "non_originating": non_originating}
+    evaluator = ExpressionEvaluator()
+
+    result = evaluator.evaluate(
+        {"op": "formula_lte", "formula": "vnom_percent", "value": 100}, facts
+    )
+
+    assert result.result is False
+
+
+@given(non_originating=_NON_NEG_MONETARY)
+@settings(max_examples=100)
+def test_zero_ex_works_always_raises_for_any_non_originating(non_originating: int) -> None:
+    """ex_works == 0 must raise ExpressionEvaluationError, never silently default.
+
+    Catches: a guard that only fires for non_originating == 0, or a silent
+    fallback of 0 / 0 → 0 that would incorrectly report zero VNM content.
+    """
+    facts = {"ex_works": 0, "non_originating": non_originating}
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError, match="Division by zero"):
+        evaluator.evaluate(
+            {"op": "formula_lte", "formula": "vnom_percent", "value": 60}, facts
+        )
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — text vs JSON format equivalence
+# ---------------------------------------------------------------------------
+
+
+@given(ex_works=_POS_MONETARY, non_originating=_NON_NEG_MONETARY, threshold=_THRESHOLD_PCT)
+@settings(max_examples=200)
+def test_text_and_json_vnom_expressions_produce_identical_results(
+    ex_works: int, non_originating: int, threshold: int
+) -> None:
+    """Text expression "vnom_percent <= T" and JSON formula_lte must agree on every input.
+
+    Catches: separate parsing paths that apply different numeric coercion
+    or rounding, causing one format to pass and the other to fail at the
+    same boundary.
+    """
+    facts = {"ex_works": ex_works, "non_originating": non_originating}
+    evaluator = ExpressionEvaluator()
+
+    text_result = evaluator.evaluate(f"vnom_percent <= {threshold}", facts)
+    json_result = evaluator.evaluate(
+        {"op": "formula_lte", "formula": "vnom_percent", "value": threshold}, facts
+    )
+
+    assert text_result.result == json_result.result
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — AND / OR combinator semantics
+# ---------------------------------------------------------------------------
+
+
+@given(
+    vnom_value=st.integers(min_value=1, max_value=99),
+    thresholds=st.lists(_THRESHOLD_PCT, min_size=1, max_size=6),
+)
+@settings(max_examples=200)
+def test_json_all_combinator_matches_python_all_for_any_threshold_set(
+    vnom_value: int, thresholds: list[int]
+) -> None:
+    """JSON "all" combinator over formula_lte nodes is semantically identical to Python all().
+
+    Catches: an OR/AND swap, a combinator that short-circuits to True on an
+    empty sub-result, or a result-merging bug that ignores some children.
+    """
+    facts = {"ex_works": 100, "non_originating": vnom_value}
+    expression = {
+        "op": "all",
+        "args": [
+            {"op": "formula_lte", "formula": "vnom_percent", "value": t} for t in thresholds
+        ],
+    }
+    evaluator = ExpressionEvaluator()
+
+    result = evaluator.evaluate(expression, facts)
+
+    expected = all(vnom_value <= t for t in thresholds)
+    assert result.result == expected
+
+
+@given(
+    vnom_value=st.integers(min_value=1, max_value=99),
+    thresholds=st.lists(_THRESHOLD_PCT, min_size=1, max_size=6),
+)
+@settings(max_examples=200)
+def test_json_any_combinator_matches_python_any_for_any_threshold_set(
+    vnom_value: int, thresholds: list[int]
+) -> None:
+    """JSON "any" combinator over formula_lte nodes is semantically identical to Python any().
+
+    Catches: an AND/OR swap, or a combinator that stops evaluating after the
+    first False child instead of continuing to find a passing branch.
+    """
+    facts = {"ex_works": 100, "non_originating": vnom_value}
+    expression = {
+        "op": "any",
+        "args": [
+            {"op": "formula_lte", "formula": "vnom_percent", "value": t} for t in thresholds
+        ],
+    }
+    evaluator = ExpressionEvaluator()
+
+    result = evaluator.evaluate(expression, facts)
+
+    expected = any(vnom_value <= t for t in thresholds)
+    assert result.result == expected
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — CTH heading-shift check
+# ---------------------------------------------------------------------------
+
+
+@given(
+    output_heading=_HEADING,
+    input_headings=st.lists(_HEADING, min_size=1, max_size=5),
+)
+@settings(max_examples=200)
+def test_cth_passes_when_all_input_headings_differ_from_output(
+    output_heading: str, input_headings: list[str]
+) -> None:
+    """every_non_originating_input passes iff every input heading ≠ the output heading.
+
+    Catches: using any() instead of all() in the heading loop, or an
+    off-by-one on the HS4 slice (output_code[:4] vs output_code[:6]).
+    """
+    assume(all(h != output_heading for h in input_headings))
+    evaluator = ExpressionEvaluator()
+    expression = {"op": "every_non_originating_input", "test": {"op": "heading_ne_output"}}
+    facts = {
+        "non_originating_inputs": [{"hs4_code": h} for h in input_headings],
+        "output_hs6_code": output_heading + "00",
+    }
+
+    result = evaluator.evaluate(expression, facts)
+
+    assert result.result is True
+    assert result.missing_variables == []
+
+
+@given(
+    output_heading=_HEADING,
+    other_inputs=st.lists(_HEADING, min_size=0, max_size=4),
+)
+@settings(max_examples=200)
+def test_cth_fails_as_soon_as_one_input_heading_matches_output(
+    output_heading: str, other_inputs: list[str]
+) -> None:
+    """A single matching input heading is sufficient to fail the CTH check.
+
+    Catches: an any()-based implementation that only fails when all inputs
+    match, or a slice error that compares the wrong number of digits.
+    """
+    # Append the matching heading so at least one input always matches.
+    inputs = other_inputs + [output_heading]
+    evaluator = ExpressionEvaluator()
+    expression = {"op": "every_non_originating_input", "test": {"op": "heading_ne_output"}}
+    facts = {
+        "non_originating_inputs": [{"hs4_code": h} for h in inputs],
+        "output_hs6_code": output_heading + "00",
+    }
+
+    result = evaluator.evaluate(expression, facts)
+
+    assert result.result is False

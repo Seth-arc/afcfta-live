@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\sources.py
+# hypothesis_version: 6.151.9
+
+["'current'", "'en'", "'in_force'", '1.000', 'RESTRICT', 'annex_ref', 'article_ref', 'authority_tier', 'authority_tier_enum', 'chk_source_dates', 'country_code', 'cross_reference_refs', 'effective_date', 'gin', 'gin_trgm_ops', 'instrument_type_enum', 'legal_provision', 'source_id', 'source_registry', 'source_status_enum', 'source_type', 'source_type_enum', 'status', 'topic_primary', 'topic_secondary', 'uuid_generate_v4()']

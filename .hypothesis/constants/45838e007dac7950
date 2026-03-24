@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\scripts\parsers\applicability_builder.py
+# hypothesis_version: 6.151.9
+
+[0.0, 100, '01', '010111', '010121', '0301', '030111', '030119', '030211', '1', '2', '3', '4', '5', 'CTH', 'CTSH', 'WO', '__main__', 'applicability', 'applicability_type', 'chapter', 'data', 'direct', 'duplicates_collapsed', 'heading', 'hs6_code', 'hs6_id', 'hs6_id is required', 'hs6_product.csv', 'hs_code', 'hs_code_end', 'hs_code_start', 'hs_level', 'inherited_chapter', 'inherited_heading', 'no_coverage', 'page_ref', 'priority_rank', 'processed', 'psr_hs_code', 'r', 'range', 'range_rules', 'rules', 'staged', 'subheading', 'total_rules', 'utf-8', 'w', '|']

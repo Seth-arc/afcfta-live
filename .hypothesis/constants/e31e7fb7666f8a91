@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\evidence.py
+# hypothesis_version: 6.151.9
+
+["'general'", '1', 'SET NULL', 'active', 'common_weaknesses', 'conditional_on', 'corridor_scope', 'entity_key', 'entity_type', 'evidence_requirement', 'gin', 'hs_code', 'officer_focus_points', 'optional_docs', 'persona_mode', 'persona_mode_enum', 'priority_level', 'question_order >= 1', 'required_docs', 'requirement_type', 'risk_category', 'true', 'uuid_generate_v4()']

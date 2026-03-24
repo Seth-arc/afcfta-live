@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\hs.py
+# hypothesis_version: 6.151.9
+
+['chapter', 'description', 'gin', 'gin_trgm_ops', 'heading', 'hs6_code', 'hs6_product', 'hs_version', 'uuid_generate_v4()']

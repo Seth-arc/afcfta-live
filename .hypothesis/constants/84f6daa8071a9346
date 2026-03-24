@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\models\__init__.py
+# hypothesis_version: 6.151.9
+
+['AlertEvent', 'CaseCounterfactual', 'CaseFailureMode', 'CaseFile', 'CaseInputFact', 'CorridorProfile', 'EvidenceRequirement', 'HS6PSRApplicability', 'HS6Product', 'LegalProvision', 'PSRRule', 'PSRRuleComponent', 'SourceRegistry', 'StatusAssertion', 'TariffScheduleHeader', 'TariffScheduleLine', 'TransitionClause', 'VerificationQuestion']

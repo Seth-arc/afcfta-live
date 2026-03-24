@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\core\logging.py
+# hypothesis_version: 6.151.9
+
+['INFO', 'LOG_FORMAT', 'LOG_LEVEL', 'ais_auth_scheme', 'ais_request_id', 'auth_scheme', 'event', 'exception', 'json', 'level', 'logger', 'message', 'request_id', 'structured_data', 'timestamp', 'uvicorn.access']

@@ -13,4 +13,5 @@ V01_CORRIDORS = [
     ("CMR", "NGA"), ("NGA", "CMR"),
     ("CIV", "NGA"), ("SEN", "NGA"),
     ("GHA", "CIV"), ("CIV", "SEN"),
+    ("GHA", "CMR"),
 ]

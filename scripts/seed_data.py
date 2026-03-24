@@ -55,7 +55,7 @@ from app.db.models.tariffs import (
 SEED_NAMESPACE = uuid5(NAMESPACE_URL, "afcfta-intelligence/v0.1/seed-data")
 HS_VERSION = "HS2017"
 SEED_EFFECTIVE_DATE = date(2024, 1, 1)
-SEEDED_CORRIDORS = [("GHA", "NGA"), ("CMR", "NGA"), ("CIV", "NGA"), ("SEN", "NGA")]
+SEEDED_CORRIDORS = [("GHA", "NGA"), ("CMR", "NGA"), ("CIV", "NGA"), ("SEN", "NGA"), ("GHA", "CMR")]
 
 RULES_SOURCE_NAME = "source/rules"
 TARIFF_SOURCE_NAME = "source/tariffs"
@@ -710,6 +710,75 @@ PRODUCT_SPECS: list[dict[str, object]] = [
             },
         },
     },
+    {
+        "hs6_code": "010121",
+        "description": "Live pure-bred breeding horses",
+        "chapter": "01",
+        "heading": "0101",
+        "section": "I",
+        "section_name": "Live Animals; Animal Products",
+        "rule_status": RuleStatusEnum.AGREED,
+        "legal_rule_text_verbatim": "Wholly obtained.",
+        "legal_rule_text_normalized": "WO",
+        "components": [
+            {
+                "name": "wo",
+                "component_type": RuleComponentTypeEnum.WO,
+                "operator_type": OperatorTypeEnum.STANDALONE,
+                "component_text_verbatim": "Wholly obtained.",
+                "normalized_expression": "wholly_obtained == true",
+            }
+        ],
+        "pathways": [
+            {
+                "code": "WO",
+                "label": "Wholly obtained",
+                "pathway_type": "specific",
+                "expression_json": {
+                    "op": "fact_eq",
+                    "fact": "wholly_obtained",
+                    "value": True,
+                },
+                "priority_rank": 1,
+                "allows_cumulation": False,
+                "allows_tolerance": False,
+            }
+        ],
+        "tariffs": {
+            "GHA": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "10.0000",
+                "target_rate": "0.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "5.0000", 2025: "0.0000"},
+            },
+            "CMR": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "12.0000",
+                "target_rate": "2.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "6.0000", 2025: "2.0000"},
+            },
+            "CIV": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "11.0000",
+                "target_rate": "1.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "5.0000", 2025: "1.0000"},
+            },
+            "SEN": {
+                "category": TariffCategoryEnum.LIBERALISED,
+                "base_rate": "13.0000",
+                "target_rate": "3.0000",
+                "target_year": 2025,
+                "staging_type": StagingTypeEnum.LINEAR,
+                "rates": {2024: "7.0000", 2025: "3.0000"},
+            },
+        },
+    },
 ]
 
 PRODUCT_INSERT_ORDER = {
@@ -721,6 +790,7 @@ PRODUCT_INSERT_ORDER = {
     "080111": 6,
     "290110": 7,
     "840820": 8,
+    "010121": 9,
 }
 PRODUCT_SPECS.sort(key=lambda spec: PRODUCT_INSERT_ORDER[str(spec["hs6_code"])])
 

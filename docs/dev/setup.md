@@ -46,23 +46,57 @@ cp .env.example .env
 
 The application settings loaded by `app/config.py` are:
 
-- `DATABASE_URL`
-- `DATABASE_URL_SYNC`
-- `ENV`
-- `LOG_LEVEL`
-- `APP_TITLE`
-- `APP_VERSION`
+- Database
+  - `DATABASE_URL` required
+  - `DATABASE_URL_SYNC` optional for the API process but recommended for local Alembic and sync tooling
+  - `DB_CONNECT_TIMEOUT_SECONDS` optional
+  - `DB_COMMAND_TIMEOUT_SECONDS` optional
+  - `DB_POOL_TIMEOUT_SECONDS` optional
+  - `DB_STATEMENT_TIMEOUT_MS` optional
+  - `DB_LOCK_TIMEOUT_MS` optional
+- API authentication
+  - `API_AUTH_KEY` required
+  - `API_AUTH_PRINCIPAL` optional
+  - `API_AUTH_HEADER_NAME` optional
+- Rate limiting
+  - `RATE_LIMIT_ENABLED` optional
+  - `RATE_LIMIT_WINDOW_SECONDS` optional
+  - `RATE_LIMIT_DEFAULT_MAX_REQUESTS` optional
+  - `RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS` optional
+- Deployment/runtime mode
+  - `ENV` optional locally, required in staging and production for clean environment labeling
+  - `APP_TITLE` optional
+  - `APP_VERSION` optional
+- Logging
+  - `LOG_LEVEL` optional
+  - `LOG_FORMAT` optional
+  - `LOG_REQUESTS_ENABLED` optional
+  - `LOG_DISABLE_UVICORN_ACCESS_LOG` optional
+- Optional external error tracking
+  - `ERROR_TRACKING_BACKEND` optional
+  - `SENTRY_DSN` optional
+  - `SENTRY_TRACES_SAMPLE_RATE` optional
 
 A working local example looks like this:
 
 ```env
 DATABASE_URL=postgresql+asyncpg://afcfta:afcfta_dev@localhost:5432/afcfta
 DATABASE_URL_SYNC=postgresql://afcfta:afcfta_dev@localhost:5432/afcfta
+API_AUTH_KEY=replace-with-a-local-dev-secret
 ENV=development
 LOG_LEVEL=INFO
 APP_TITLE=AfCFTA Intelligence API
 APP_VERSION=0.1.0
 ```
+
+Local development keeps secrets out of the repository by using `.env`, which is ignored by git, while `.env.example` contains only safe placeholders.
+
+Mandatory versus optional guidance:
+
+- Mandatory for local API startup: `DATABASE_URL`, `API_AUTH_KEY`
+- Mandatory for production: `DATABASE_URL`, `API_AUTH_KEY`, and `ENV`
+- Optional local conveniences: `DATABASE_URL_SYNC`, logging controls, rate-limit overrides, and error-tracking settings
+- Optional production integrations: Sentry-related settings remain optional unless external error aggregation is part of the deployment
 
 ## 4. Install Dependencies
 

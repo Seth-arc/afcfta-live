@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
@@ -10,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.exceptions import AuditTrailNotFoundError
+from app.core.logging import log_event
 from app.schemas.audit import (
     AuditTariffOutcomeTrace,
     AuditTrail,
@@ -30,7 +30,7 @@ from app.schemas.evidence import EvidenceReadinessResult
 from app.schemas.rules import PSRRuleResolvedOut
 from app.schemas.status import StatusOverlay
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.audit")
 
 
 class AuditService:
@@ -147,19 +147,21 @@ class AuditService:
         blockers = list(blockers or [])
         missing_facts = list(missing_facts or [])
         level = logging.WARNING if blockers or missing_facts else logging.INFO
-        payload = {
-            "event": "eligibility_assessment",
-            "case_id": case_id,
-            "hs6_code": hs6_code,
-            "exporter": exporter,
-            "importer": importer,
-            "outcome": outcome,
-            "confidence_class": confidence_class,
-            "duration_ms": duration_ms,
-            "blockers": blockers,
-            "missing_facts": missing_facts,
-        }
-        logger.log(level, json.dumps(payload, default=str, sort_keys=True))
+        log_event(
+            logger,
+            level,
+            event="eligibility_assessment",
+            message="Eligibility assessment completed",
+            case_id=case_id,
+            hs6_code=hs6_code,
+            exporter=exporter,
+            importer=importer,
+            outcome=outcome,
+            confidence_class=confidence_class,
+            duration_ms=duration_ms,
+            blockers=blockers,
+            missing_facts=missing_facts,
+        )
 
     async def _resolve_evaluation_id(
         self,

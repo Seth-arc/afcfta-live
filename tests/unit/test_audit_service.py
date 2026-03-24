@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
+import logging
 from uuid import UUID
 from unittest.mock import AsyncMock
 
@@ -11,7 +12,8 @@ import pytest
 
 from app.core.enums import LegalOutcome
 from app.core.exceptions import AuditTrailNotFoundError
-from app.main import DOMAIN_STATUS_CODES
+from app.core.http_status import DOMAIN_STATUS_CODES
+from app.core.logging import bind_request_log_context, reset_request_log_context, update_request_log_context
 from app.services.audit_service import AuditService
 
 
@@ -625,3 +627,41 @@ async def test_missing_case_history_maps_case_id_lookup_to_domain_error() -> Non
 
     with pytest.raises(AuditTrailNotFoundError):
         await service.get_decision_trace(case_id=str(_uuid(95)))
+
+
+def test_log_assessment_emits_structured_audit_event_with_correlation_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Assessment logs should carry a stable event name and request correlation fields."""
+
+    service = AuditService(AsyncMock(), AsyncMock())
+    context_tokens = bind_request_log_context(request_id="req-audit-1")
+    update_request_log_context(
+        authenticated_principal="pytest-suite",
+        auth_scheme="api_key",
+    )
+
+    try:
+        with caplog.at_level(logging.INFO, logger="app.audit"):
+            service.log_assessment(
+                case_id="case-123",
+                hs6_code="110311",
+                exporter="GHA",
+                importer="NGA",
+                outcome="eligible",
+                confidence_class="complete",
+                duration_ms=87,
+            )
+    finally:
+        reset_request_log_context(context_tokens)
+
+    records = [record for record in caplog.records if record.name == "app.audit"]
+    assert len(records) == 1
+    payload = records[0].structured_data
+    assert payload["event"] == "eligibility_assessment"
+    assert payload["request_id"] == "req-audit-1"
+    assert payload["authenticated_principal"] == "pytest-suite"
+    assert payload["auth_scheme"] == "api_key"
+    assert payload["case_id"] == "case-123"
+    assert payload["hs6_code"] == "110311"
+    assert payload["duration_ms"] == 87

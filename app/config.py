@@ -8,19 +8,48 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime settings for the AfCFTA Intelligence API."""
+    """Runtime settings for the AfCFTA Intelligence API.
 
+    Required settings have no default and must be supplied through the process
+    environment or a local `.env` file. All other settings default to
+    development-safe values and can be overridden per environment.
+    """
+
+    # Database
     DATABASE_URL: str
     DATABASE_URL_SYNC: str | None = None
+    DB_CONNECT_TIMEOUT_SECONDS: float = 10.0
+    DB_COMMAND_TIMEOUT_SECONDS: float = 15.0
+    DB_POOL_TIMEOUT_SECONDS: float = 30.0
+    DB_STATEMENT_TIMEOUT_MS: int = 15000
+    DB_LOCK_TIMEOUT_MS: int = 5000
+
+    # API authentication
     API_AUTH_KEY: str
     API_AUTH_PRINCIPAL: str = "configured-api-client"
     API_AUTH_HEADER_NAME: str = "X-API-Key"
+
+    # Rate limiting
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     RATE_LIMIT_DEFAULT_MAX_REQUESTS: int = 120
     RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS: int = 10
+
+    # Deployment/runtime mode
     ENV: str = "development"
+
+    # Logging
     LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "json"
+    LOG_REQUESTS_ENABLED: bool = True
+    LOG_DISABLE_UVICORN_ACCESS_LOG: bool = True
+
+    # Optional external error tracking
+    ERROR_TRACKING_BACKEND: str = "none"
+    SENTRY_DSN: str | None = None
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
+    # Application metadata
     APP_TITLE: str = "AfCFTA Intelligence API"
     APP_VERSION: str = "0.1.0"
 

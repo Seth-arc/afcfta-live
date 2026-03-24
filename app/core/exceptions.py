@@ -58,6 +58,12 @@ class RateLimitExceededError(AISBaseException):
     code = "RATE_LIMIT_EXCEEDED"
 
 
+class ReadinessCheckError(AISBaseException):
+    """Raised when a dependency readiness probe fails."""
+
+    code = "READINESS_CHECK_FAILED"
+
+
 class EvaluationPersistenceError(AISBaseException):
     """Raised when an interface assessment cannot guarantee replay-safe persistence."""
 

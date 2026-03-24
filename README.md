@@ -71,6 +71,20 @@ python scripts/seed_data.py
 python -m uvicorn app.main:app --reload
 ```
 
+Before starting the API locally, create `.env` from `.env.example` and set at least the required runtime variables:
+
+```bash
+cp .env.example .env
+```
+
+Minimum local values:
+
+```env
+DATABASE_URL=postgresql+asyncpg://afcfta:afcfta_dev@localhost:5432/afcfta
+DATABASE_URL_SYNC=postgresql://afcfta:afcfta_dev@localhost:5432/afcfta
+API_AUTH_KEY=replace-with-a-local-dev-secret
+```
+
 First working API call:
 
 ```bash
@@ -154,6 +168,7 @@ Audit replay responses are frozen to this top-level field set:
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/v1/health` | Liveness check |
+| `GET` | `/api/v1/health/ready` | Readiness check for database connectivity |
 | `GET` | `/api/v1/rules/{hs6}` | Resolve the governing PSR rule bundle |
 | `GET` | `/api/v1/tariffs` | Resolve tariff outcome for a corridor, product, and year |
 | `POST` | `/api/v1/cases` | Create a case and store submitted production facts |
@@ -170,6 +185,53 @@ Audit replay responses are frozen to this top-level field set:
 | `GET` | `/api/v1/provisions/{provision_id}` | Retrieve one legal provision |
 | `GET` | `/api/v1/intelligence/corridors/{exporter}/{importer}` | Retrieve an active corridor profile |
 | `GET` | `/api/v1/intelligence/alerts` | List alerts by status, severity, or entity scope |
+
+Runtime logging is configured through `LOG_LEVEL`, `LOG_FORMAT`, `LOG_REQUESTS_ENABLED`, and `LOG_DISABLE_UVICORN_ACCESS_LOG`. The API emits structured request logs with stable correlation fields such as `request_id`, `authenticated_principal`, `method`, `route`, `status_code`, and `latency_ms`, while assessment decisions continue to emit a separate `eligibility_assessment` audit event.
+
+## Environment Variables
+
+The checked-in [`.env.example`](.env.example) is the canonical environment-variable template.
+
+Required runtime settings:
+
+- `DATABASE_URL`
+- `API_AUTH_KEY`
+
+Optional but recommended outside the app server process:
+
+- `DATABASE_URL_SYNC` for Alembic and sync tooling
+- `ENV` to distinguish `development`, `staging`, and `production`
+- the DB timeout controls
+- the rate-limit controls
+- the logging controls
+- optional external error-tracking settings
+
+Variables are grouped by concern in [`.env.example`](.env.example):
+
+- application and deployment
+- database
+- API authentication
+- rate limiting
+- logging
+- optional external error tracking
+
+Production timeout and error-tracking configuration is intentionally minimal:
+
+- In-process DB safeguards: `DB_CONNECT_TIMEOUT_SECONDS`, `DB_COMMAND_TIMEOUT_SECONDS`, `DB_POOL_TIMEOUT_SECONDS`, `DB_STATEMENT_TIMEOUT_MS`, and `DB_LOCK_TIMEOUT_MS` bound connection acquisition, driver command time, server-side statement time, and lock wait time.
+- Optional external error tracking: `ERROR_TRACKING_BACKEND=none|sentry`, `SENTRY_DSN`, and `SENTRY_TRACES_SAMPLE_RATE` enable a Sentry hook only when explicitly configured and the dependency is installed.
+- Structured API error responses remain in-process and always active; optional error tracking only mirrors unexpected exceptions to external infrastructure and does not replace the existing JSON error envelope.
+
+What still requires external infrastructure:
+
+- Error aggregation, retention, alerting, and dashboards require a configured external service such as Sentry.
+- Long-term latency metrics, failure-rate alerting, and operator notifications still require metrics and monitoring infrastructure outside the application process.
+
+Development-only defaults to review before production:
+
+- `ENV=development`
+- `LOG_LEVEL=INFO` is safe, but `DEBUG` should remain local-only
+- the default rate limits and timeout values are conservative starting points, not production capacity planning
+- `ERROR_TRACKING_BACKEND=none` disables external aggregation until infrastructure is intentionally configured
 
 ## Architecture
 

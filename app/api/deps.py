@@ -11,6 +11,7 @@ from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.core.logging import update_request_log_context
 from app.db.session import get_assessment_db, get_db
 from app.core.exceptions import AuthenticationError, RateLimitExceededError
 from app.repositories.cases_repository import CasesRepository
@@ -123,6 +124,10 @@ async def require_authenticated_principal(
     principal = AuthenticatedPrincipal(principal_id=settings.API_AUTH_PRINCIPAL)
     request.state.authenticated_principal = principal.principal_id
     request.state.authenticated_auth_scheme = principal.auth_scheme
+    update_request_log_context(
+        authenticated_principal=principal.principal_id,
+        auth_scheme=principal.auth_scheme,
+    )
     return principal
 
 

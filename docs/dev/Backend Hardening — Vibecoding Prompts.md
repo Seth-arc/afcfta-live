@@ -284,7 +284,7 @@ python -m pytest tests/integration/test_rate_limit_api.py -v
 python -m pytest tests/integration/test_auth_api.py -v
 python -m pytest tests/integration/test_audit_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 7 — Upgrade health to true liveness and readiness checks
@@ -322,7 +322,7 @@ When done, summarize:
 python -m pytest tests/unit/test_health.py -v
 python -m pytest tests/integration -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 8 — Add structured request logging, latency capture, and audit correlation
@@ -357,9 +357,13 @@ When done, summarize:
 
 **You run:**
 ```bash
-python -m pytest tests/unit -q
+python -m pytest ./tests/unit/test_logging.py -v
+python -m pytest ./tests/unit/test_audit_service.py -v
+python -m pytest ./tests/unit/test_audit_service.py -v
+python -m pytest ./tests/integration/test_auth_api.py -v
+python -m pytest ./tests/integration/test_health_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 9 — Add failure instrumentation, DB timeout safety, and external-hook seams
@@ -392,10 +396,13 @@ When done, summarize:
 
 **You run:**
 ```bash
-python -m pytest tests/unit -q
-python -m pytest tests/integration -q
+python -m pytest ./tests/unit/test_health.py -v
+python -m pytest ./tests/unit/test_logging.py -v
+python -m pytest ./tests/unit/test_audit_service.py -v
+python -m pytest ./tests/integration/test_auth_api.py -v
+python -m pytest ./tests/integration/test_health_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 10 — Add environment completeness and a checked-in `.env.example`

@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv/Scripts/python.exe -c \"import pytest_asyncio; print\\(pytest_asyncio.__version__\\)\")"
+      "Bash(.venv/Scripts/python.exe -c \"import pytest_asyncio; print\\(pytest_asyncio.__version__\\)\")",
+      "Bash(docker exec:*)",
+      "Bash(winpty docker:*)"
     ]
   }
 }

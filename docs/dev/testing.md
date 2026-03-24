@@ -108,6 +108,86 @@ It is there to guard against:
 
 This matters because AIS executes rule logic from stored expressions and must do so through a safe parser rather than arbitrary Python execution.
 
+## Coverage Tooling
+
+Coverage is measured with `pytest-cov` against the `app` source tree.
+It is not measured against `tests/`, `scripts/`, or Alembic migration files.
+
+Install the dependency (included in the `dev` group):
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+### Coverage Commands
+
+**Unit tests with terminal and XML report (no database required):**
+
+```bash
+python -m pytest tests/unit -v \
+  --cov --cov-report=term-missing --cov-report=xml
+```
+
+**Integration tests with terminal and XML report (requires live database and seed data):**
+
+```bash
+python -m pytest tests/integration -v \
+  --cov --cov-report=term-missing --cov-report=xml
+```
+
+**Integration tests with enforced minimum threshold:**
+
+```bash
+python -m pytest tests/integration -v \
+  --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=60
+```
+
+**HTML report for local review:**
+
+```bash
+python -m pytest tests/integration -v \
+  --cov --cov-report=term-missing --cov-report=html
+# report written to artifacts/coverage-html/index.html
+```
+
+Report output locations are configured in `pyproject.toml` under `[tool.coverage.xml]`
+and `[tool.coverage.html]`.
+
+### Minimum Coverage Threshold
+
+| Scope | Threshold | Applies to |
+|---|---|---|
+| `app` source tree | **75 %** | Full suite (unit + integration combined) |
+
+The 75 % floor is the measured first-pass baseline for this codebase.
+Unit tests alone reach 84 %; 75 % leaves headroom for DB-dependent repository
+lines that are only reachable with a live stack.
+It is enforced in CI on the integration test job, which is the only job that
+runs the complete application stack (live database, migrations, seeded data).
+
+The threshold is **not** enforced on the unit-only job because unit tests
+intentionally mock repositories and cannot reach connection-pool,
+startup-lifespan, or full-route code paths.
+
+Structural gaps that prevent a higher threshold at this stage:
+
+- `app/main.py` lifespan events and middleware wiring
+- `app/db/session.py` async connection-pool setup and teardown
+- `app/config.py` pydantic-settings fields not exercised in CI environments
+- Repository methods for which no dedicated integration test exists yet
+  (for example `sources_repository`, `cases_repository` edge cases,
+  `evidence_repository`, and `intelligence_repository` write paths)
+
+Do not raise `fail_under` in `pyproject.toml` until a measured run confirms
+the new baseline is sustainable.
+
+### Tracking Coverage Over Time
+
+The XML report at `artifacts/coverage.xml` is uploaded as a GitHub Actions
+artifact (`integration-coverage-report`) on every CI run. Use successive
+artifact downloads to track whether coverage is trending up or down before
+committing to a higher threshold.
+
 ## Current Coverage
 
 The suite includes both unit and integration coverage across the assessment engine,

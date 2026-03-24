@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"c:\\\\Users\\\\ssnguna\\\\Local Sites\\\\afcfta-live\\\\tests\\\\unit-test-report\"\" && ls \"c:UsersssngunaLocal Sitesafcfta-livetestsintegration-test-report\"\")"
+    ]
+  }
+}

@@ -18,7 +18,9 @@ app/api/v1/audit.py
 app/api/v1/cases.py
 app/api/v1/evidence.py
 app/api/v1/health.py
+app/api/v1/intelligence.py
 app/api/v1/rules.py
+app/api/v1/sources.py
 app/api/v1/tariffs.py
 app/core/__init__.py
 app/core/countries.py
@@ -27,6 +29,7 @@ app/core/enums.py
 app/core/exceptions.py
 app/core/fact_keys.py
 app/core/failure_codes.py
+app/core/http_status.py
 app/core/logging.py
 app/core/utils.py
 app/db/__init__.py
@@ -73,6 +76,7 @@ app/services/evidence_service.py
 app/services/expression_evaluator.py
 app/services/fact_normalization_service.py
 app/services/general_origin_rules_service.py
+app/services/intelligence_service.py
 app/services/rule_resolution_service.py
 app/services/status_service.py
 app/services/tariff_resolution_service.py

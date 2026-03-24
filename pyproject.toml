@@ -22,6 +22,7 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "httpx",
     "ruff",
 ]
@@ -30,6 +31,7 @@ dev = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    "pytest-cov",
     "httpx",
     "ruff",
 ]
@@ -40,6 +42,36 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests that require the integration test stack",
 ]
+
+[tool.coverage.run]
+# Measure coverage of the application source tree only, not tests or scripts.
+source = ["app"]
+omit = [
+    "app/__init__.py",
+    "app/db/models/__init__.py",
+]
+
+[tool.coverage.report]
+# 75 % is the measured first-pass floor: unit tests alone reach 84 % and the
+# integration run is expected to be comparable once repository paths are added.
+# 75 % leaves headroom for DB-dependent repository lines only reachable with a
+# live stack, while still catching real regressions.
+# Do not raise this number further until a measured integration run confirms it.
+fail_under = 75
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.\\s*$",
+]
+
+[tool.coverage.xml]
+output = "artifacts/coverage.xml"
+
+[tool.coverage.html]
+directory = "artifacts/coverage-html"
 
 [tool.ruff]
 line-length = 100

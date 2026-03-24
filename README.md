@@ -297,16 +297,24 @@ If the API container exits immediately, that means `./.env.prod` is absent or in
 The repository CI workflow lives at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and runs four incremental stages:
 
 - lint via `ruff`
-- unit tests
-- integration tests against PostgreSQL with migrations and seed data applied
+- unit tests with coverage report
+- integration tests against PostgreSQL with migrations, seed data, and enforced coverage threshold
 - production Docker image build validation
 
 CI report locations:
 
-- unit test JUnit report: `artifacts/unit-tests.xml`
-- integration test JUnit report: `artifacts/integration-tests.xml`
+| Artifact name | File | Contents |
+|---|---|---|
+| `unit-test-report` | `artifacts/unit-tests.xml` | JUnit XML for unit tests |
+| `unit-coverage-report` | `artifacts/coverage.xml` | Cobertura XML coverage for unit run |
+| `integration-test-report` | `artifacts/integration-tests.xml` | JUnit XML for integration tests |
+| `integration-coverage-report` | `artifacts/coverage.xml` | Cobertura XML coverage for full-stack run |
 
-Those files are uploaded by GitHub Actions as `unit-test-report` and `integration-test-report` artifacts so later coverage and image-validation work can build on stable report paths.
+The integration job enforces a **75 % minimum coverage threshold** against the `app` source tree.
+This is the measured first-pass floor: unit tests alone reach 84 %, and 75 % leaves headroom
+for DB-dependent repository paths only reachable with a live stack.
+See [docs/dev/testing.md](docs/dev/testing.md) for the explicit coverage commands and the list of
+code areas that need the next wave of tests.
 
 ## Architecture
 

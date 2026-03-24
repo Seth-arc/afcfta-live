@@ -11,5 +11,6 @@ pdfplumber
 [dev]
 pytest
 pytest-asyncio
+pytest-cov
 httpx
 ruff

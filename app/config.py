@@ -12,6 +12,13 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
     DATABASE_URL_SYNC: str | None = None
+    API_AUTH_KEY: str
+    API_AUTH_PRINCIPAL: str = "configured-api-client"
+    API_AUTH_HEADER_NAME: str = "X-API-Key"
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_DEFAULT_MAX_REQUESTS: int = 120
+    RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS: int = 10
     ENV: str = "development"
     LOG_LEVEL: str = "INFO"
     APP_TITLE: str = "AfCFTA Intelligence API"

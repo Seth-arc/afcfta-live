@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response
 
+from app.api.deps import require_assessment_rate_limit
 from app.api.deps import get_assessment_eligibility_service
 from app.schemas.assessments import (
     CaseAssessmentRequest,
@@ -12,7 +13,7 @@ from app.schemas.assessments import (
 )
 from app.services.eligibility_service import EligibilityService
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_assessment_rate_limit)])
 
 
 @router.post("/assessments", response_model=EligibilityAssessmentResponse)

@@ -12,9 +12,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
+from app.api.deps import InMemoryRateLimiter
 from app.config import get_settings
 from app.core.exceptions import (
     AISBaseException,
+    AuthenticationError,
     AuditTrailNotFoundError,
     CaseNotFoundError,
     ClassificationError,
@@ -22,6 +24,7 @@ from app.core.exceptions import (
     EvaluationPersistenceError,
     ExpressionEvaluationError,
     InsufficientFactsError,
+    RateLimitExceededError,
     RuleNotFoundError,
     StatusUnknownError,
     TariffNotFoundError,
@@ -32,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 
 DOMAIN_STATUS_CODES: dict[type[AISBaseException], int] = {
+    AuthenticationError: 401,
+    RateLimitExceededError: 429,
     ClassificationError: 404,
     RuleNotFoundError: 404,
     TariffNotFoundError: 404,
@@ -125,6 +130,7 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
     app.state.settings = settings
+    app.state.rate_limiter = InMemoryRateLimiter()
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]

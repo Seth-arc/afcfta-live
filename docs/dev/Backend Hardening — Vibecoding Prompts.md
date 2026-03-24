@@ -204,7 +204,7 @@ When done, summarize:
 python -m pytest tests/unit/test_eligibility_service.py -v
 python -m pytest tests/integration/test_audit_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 5 — Add API authentication to every non-health endpoint
@@ -244,9 +244,10 @@ When done, summarize:
 
 **You run:**
 ```bash
-python -m pytest tests/integration -q
+python -m pytest tests/integration/test_auth_api.py -v
+python -m pytest tests/unit/test_eligibility_service.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 6 — Add rate limiting suitable for trader UI ingress
@@ -279,7 +280,9 @@ When done, summarize:
 
 **You run:**
 ```bash
-python -m pytest tests/integration -q
+python -m pytest tests/integration/test_rate_limit_api.py -v
+python -m pytest tests/integration/test_auth_api.py -v
+python -m pytest tests/integration/test_audit_api.py -v
 ```
 
 ---

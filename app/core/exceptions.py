@@ -46,6 +46,18 @@ class AuditTrailNotFoundError(AISBaseException):
     code = "AUDIT_TRAIL_NOT_FOUND"
 
 
+class AuthenticationError(AISBaseException):
+    """Raised when a request to a protected API route lacks valid credentials."""
+
+    code = "AUTHENTICATION_ERROR"
+
+
+class RateLimitExceededError(AISBaseException):
+    """Raised when a caller exceeds the configured API rate limit."""
+
+    code = "RATE_LIMIT_EXCEEDED"
+
+
 class EvaluationPersistenceError(AISBaseException):
     """Raised when an interface assessment cannot guarantee replay-safe persistence."""
 

@@ -30,8 +30,14 @@ Important trade terms:
 | `year` | integer | Yes | Year used for tariff lookup and date-scoped legal resolution. |
 | `persona_mode` | string | Yes | User perspective such as `exporter`, `officer`, or `analyst`. This affects evidence output. |
 | `production_facts` | array | Yes | Typed factual inputs used by pathway logic and general rules. |
-| `existing_documents` | array | No | Submitted document inventory used to compute readiness during the assessment. |
-| `case_id` | string or UUID | No | Existing case id. When supplied, the service can persist an evaluation trace against that case. |
+| `existing_documents` | array | No | Canonical submitted document inventory used to compute readiness during the assessment. |
+| `case_id` | string or UUID | No | Existing case id. When supplied, the service persists the evaluation trace against that case. When omitted, the interface layer auto-creates a submitted case so the response is still replayable. |
+
+Compatibility note:
+
+- `existing_documents` is the canonical request field for assessments.
+- `submitted_documents` is accepted as an input-only alias for backward compatibility.
+- Responses and documentation always use the canonical field name `existing_documents`.
 
 ## Case-Backed Assessment Endpoint
 
@@ -46,7 +52,22 @@ That request only needs:
 - `year`
 - optional `existing_documents`
 
+The same compatibility rule applies here:
+
+- canonical `existing_documents`
+- input-only alias `submitted_documents`
+
 The service loads stored case facts, normalizes them through the same path as direct assessments, and persists the resulting evaluation and audit trail against the case.
+
+## Replay Identifiers
+
+Both assessment endpoints return the same JSON response body, plus these response headers:
+
+- `X-AIS-Case-Id`: case identifier that owns the persisted evaluation.
+- `X-AIS-Evaluation-Id`: newly persisted evaluation identifier.
+- `X-AIS-Audit-URL`: relative audit replay URL for the returned evaluation.
+
+Direct `POST /api/v1/assessments` calls never return an unreplayable legal decision. If the caller omits `case_id`, AIS auto-creates a submitted case, persists the evaluation and atomic checks against it, and returns the generated identifiers in these headers.
 
 ### `production_facts[]` Fields
 
@@ -81,8 +102,9 @@ The service loads stored case facts, normalizes them through the same path as di
   "failures": [],
   "missing_facts": [],
   "evidence_required": [
-    "Certificate of Origin",
-    "Supplier declaration"
+    "Certificate of origin",
+    "Bill of materials",
+    "Invoice"
   ],
   "missing_evidence": [],
   "readiness_score": 1.0,
@@ -109,6 +131,12 @@ The service loads stored case facts, normalizes them through the same path as di
 | `missing_evidence` | Required evidence items not present in the submitted document inventory. |
 | `readiness_score` | Convenience readiness metric derived from the evidence service. |
 | `completeness_ratio` | Fraction of required evidence items already present. |
+
+This assessment contract is frozen in integration coverage at:
+
+- [tests/integration/test_golden_path.py](tests/integration/test_golden_path.py#L574)
+- [tests/integration/test_golden_path.py](tests/integration/test_golden_path.py#L988)
+- [tests/integration/test_audit_api.py](tests/integration/test_audit_api.py#L27)
 
 ## Failure Codes
 
@@ -156,6 +184,11 @@ These codes come from `app/core/failure_codes.py`.
   "importer": "NGA",
   "year": 2025,
   "persona_mode": "exporter",
+  "existing_documents": [
+    "certificate_of_origin",
+    "bill_of_materials",
+    "invoice"
+  ],
   "production_facts": [
     {
       "fact_type": "tariff_heading_input",
@@ -211,9 +244,13 @@ These codes come from `app/core/failure_codes.py`.
   "failures": [],
   "missing_facts": [],
   "evidence_required": [
-    "Certificate of Origin",
-    "Supplier declaration"
+    "Certificate of origin",
+    "Bill of materials",
+    "Invoice"
   ],
+  "missing_evidence": [],
+  "readiness_score": 1.0,
+  "completeness_ratio": 1.0,
   "confidence_class": "complete"
 }
 ```

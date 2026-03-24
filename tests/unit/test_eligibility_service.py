@@ -18,7 +18,7 @@ from app.core.enums import (
     ScheduleStatusEnum,
     TariffCategoryEnum,
 )
-from app.core.exceptions import CaseNotFoundError, TariffNotFoundError
+from app.core.exceptions import CaseNotFoundError, EvaluationPersistenceError, TariffNotFoundError
 from app.core.failure_codes import FAILURE_CODES
 from app.schemas.assessments import (
     CaseAssessmentRequest,
@@ -233,7 +233,12 @@ def _fact(fact_key: str, fact_value_type: str, **values: object) -> CaseFactIn:
     return CaseFactIn(**payload)
 
 
-def _request(*, hs6_code: str, facts: list[CaseFactIn]) -> EligibilityRequest:
+def _request(
+    *,
+    hs6_code: str,
+    facts: list[CaseFactIn],
+    case_id: str | None = None,
+) -> EligibilityRequest:
     """Return one orchestrator request."""
 
     return EligibilityRequest(
@@ -244,6 +249,7 @@ def _request(*, hs6_code: str, facts: list[CaseFactIn]) -> EligibilityRequest:
         year=2025,
         persona_mode="exporter",
         production_facts=facts,
+        case_id=case_id,
     )
 
 
@@ -264,6 +270,42 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
         "intelligence_service": AsyncMock(),
     }
     return EligibilityService(**deps), deps
+
+
+def _assert_persisted_blocker_audit(
+    deps: dict[str, object],
+    *,
+    case_id: str,
+    blocker_check_code: str,
+    failure_codes: list[str],
+    details_json: dict[str, object],
+) -> list[dict[str, object]]:
+    """Assert one blocker-stage assessment persisted the stop reason and no pathway trace."""
+
+    persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
+    persisted_checks = deps["evaluations_repository"].persist_evaluation.await_args.args[1]
+
+    assert persisted_evaluation["case_id"] == case_id
+    assert persisted_evaluation["pathway_used"] is None
+
+    blocker_check = next(
+        check for check in persisted_checks if check["check_code"] == blocker_check_code
+    )
+    assert blocker_check["check_type"] == "blocker"
+    assert blocker_check["severity"] == "blocker"
+    assert blocker_check["passed"] is False
+    assert blocker_check["details_json"] == details_json
+
+    final_decision_check = next(
+        check for check in persisted_checks if check["check_code"] == "FINAL_DECISION"
+    )
+    assert final_decision_check["check_type"] == "decision"
+    assert final_decision_check["passed"] is False
+    assert final_decision_check["details_json"]["final_decision"]["pathway_used"] is None
+    assert final_decision_check["details_json"]["final_decision"]["failure_codes"] == failure_codes
+    assert all(check["check_code"] != "PATHWAY_EVALUATION" for check in persisted_checks)
+
+    return persisted_checks
 
 
 @pytest.mark.asyncio
@@ -358,13 +400,14 @@ async def test_ineligible_product_when_no_pathway_passes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_blocker_short_circuits_on_pending_rule_status() -> None:
-    """Pending rules should halt assessment before fact normalization."""
+async def test_architecture_blocker_rule_status_pending_skips_pathway_evaluation_and_persists_audit() -> None:
+    """Architecture rule: pending PSR status must block before any pathway evaluation."""
 
     service, deps = _service()
     request = _request(
         hs6_code="030389",
         facts=[_fact("wholly_obtained", "boolean", fact_value_boolean=True)],
+        case_id=str(_uuid(230)),
     )
     deps["classification_service"].resolve_hs6.return_value = _product("030389")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(
@@ -383,11 +426,69 @@ async def test_blocker_short_circuits_on_pending_rule_status() -> None:
     result = await service.assess(request)
 
     assert result.eligible is False
-    assert "RULE_STATUS_PENDING" in result.failures
+    assert result.pathway_used is None
+    assert result.failures == ["RULE_STATUS_PENDING"]
+    assert result.missing_facts == []
     assert result.confidence_class == "provisional"
     deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    assert deps["status_service"].get_status_overlay.await_args_list == [
+        call("corridor", "CORRIDOR:GHA:NGA:030389", date(2025, 1, 1)),
+    ]
     deps["fact_normalization_service"].normalize_facts.assert_not_called()
     deps["expression_evaluator"].evaluate.assert_not_called()
+    deps["general_origin_rules_service"].evaluate.assert_not_called()
+    deps["evidence_service"].build_readiness.assert_not_called()
+    _assert_persisted_blocker_audit(
+        deps,
+        case_id=str(_uuid(230)),
+        blocker_check_code="RULE_STATUS",
+        failure_codes=["RULE_STATUS_PENDING"],
+        details_json={"failure_code": "RULE_STATUS_PENDING"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_rule_status_partially_agreed_skips_pathway_evaluation_and_persists_audit() -> None:
+    """Architecture rule: partially-agreed PSR status must block before any pathway evaluation."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="030389",
+        facts=[_fact("wholly_obtained", "boolean", fact_value_boolean=True)],
+        case_id=str(_uuid(231)),
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("030389")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(
+        hs6_code="030389",
+        rule_status=RuleStatusEnum.PARTIALLY_AGREED,
+        pathway_code="WO",
+        expression_json={"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+    )
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.return_value = _status_overlay(
+        "in_force",
+        "complete",
+        "Corridor is operational.",
+    )
+
+    result = await service.assess(request)
+
+    assert result.eligible is False
+    assert result.pathway_used is None
+    assert result.failures == ["RULE_STATUS_PENDING"]
+    assert result.missing_facts == []
+    assert result.confidence_class == "provisional"
+    deps["fact_normalization_service"].normalize_facts.assert_not_called()
+    deps["expression_evaluator"].evaluate.assert_not_called()
+    deps["general_origin_rules_service"].evaluate.assert_not_called()
+    deps["evidence_service"].build_readiness.assert_not_called()
+    _assert_persisted_blocker_audit(
+        deps,
+        case_id=str(_uuid(231)),
+        blocker_check_code="RULE_STATUS",
+        failure_codes=["RULE_STATUS_PENDING"],
+        details_json={"failure_code": "RULE_STATUS_PENDING"},
+    )
 
 
 @pytest.mark.asyncio
@@ -420,13 +521,14 @@ async def test_missing_facts_returns_incomplete_confidence() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_every_non_originating_input_facts_block_before_normalization() -> None:
-    """CTH/CTSH list-input pathways should declare the special facts as core requirements."""
+async def test_architecture_blocker_missing_core_facts_for_all_pathways_skips_pathway_evaluation_and_persists_audit() -> None:
+    """Architecture rule: missing core facts for all pathways must block before pathway evaluation."""
 
     service, deps = _service()
     request = _request(
         hs6_code="110311",
         facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+        case_id=str(_uuid(240)),
     )
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(
@@ -447,9 +549,24 @@ async def test_missing_every_non_originating_input_facts_block_before_normalizat
     result = await service.assess(request)
 
     assert result.eligible is False
+    assert result.pathway_used is None
     assert result.confidence_class == "incomplete"
     assert result.missing_facts == ["non_originating_inputs", "output_hs6_code"]
-    assert "MISSING_CORE_FACTS" in result.failures
+    assert result.failures == ["MISSING_CORE_FACTS"]
+    deps["fact_normalization_service"].normalize_facts.assert_not_called()
+    deps["expression_evaluator"].evaluate.assert_not_called()
+    deps["general_origin_rules_service"].evaluate.assert_not_called()
+    deps["evidence_service"].build_readiness.assert_not_called()
+    _assert_persisted_blocker_audit(
+        deps,
+        case_id=str(_uuid(240)),
+        blocker_check_code="MISSING_CORE_FACTS",
+        failure_codes=["MISSING_CORE_FACTS"],
+        details_json={
+            "failure_code": "MISSING_CORE_FACTS",
+            "missing_facts": ["non_originating_inputs", "output_hs6_code"],
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -578,8 +695,8 @@ async def test_general_rules_fail_after_passing_psr() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tariff_not_found_still_returns_assessment() -> None:
-    """Missing tariffs should not hard-block the rest of the assessment."""
+async def test_architecture_blocker_missing_tariff_schedule_skips_pathway_evaluation_and_persists_audit() -> None:
+    """Architecture rule: missing tariff schedule coverage must block before pathway evaluation."""
 
     service, deps = _service()
     request = _request(
@@ -589,6 +706,7 @@ async def test_tariff_not_found_still_returns_assessment() -> None:
             _fact("tariff_heading_output", "text", fact_value_text="1103"),
             _fact("direct_transport", "boolean", fact_value_boolean=True),
         ],
+        case_id=str(_uuid(250)),
     )
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
@@ -599,29 +717,41 @@ async def test_tariff_not_found_still_returns_assessment() -> None:
         _status_overlay("in_force", "complete", "Corridor is operational."),
         _status_overlay("agreed", "complete", "Rule is agreed."),
     ]
-    deps["fact_normalization_service"].normalize_facts.return_value = {
-        "tariff_heading_input": "1001",
-        "tariff_heading_output": "1103",
-        "direct_transport": True,
-    }
-    deps["expression_evaluator"].evaluate.return_value = _expression_result(
-        passed=True,
-        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
-    )
-    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
-    deps["evidence_service"].build_readiness.return_value = _evidence_result()
-
     result = await service.assess(request)
 
-    assert result.eligible is True
+    assert result.eligible is False
+    assert result.pathway_used is None
+    assert result.failures == ["NO_SCHEDULE"]
+    assert result.missing_facts == []
     assert result.tariff_outcome is None
     assert result.confidence_class == "complete"
+    assert deps["status_service"].get_status_overlay.await_args_list == [
+        call("corridor", "CORRIDOR:GHA:NGA:110311", date(2025, 1, 1)),
+    ]
+    deps["fact_normalization_service"].normalize_facts.assert_not_called()
+    deps["expression_evaluator"].evaluate.assert_not_called()
+    deps["general_origin_rules_service"].evaluate.assert_not_called()
+    deps["evidence_service"].build_readiness.assert_not_called()
     deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    persisted_checks = _assert_persisted_blocker_audit(
+        deps,
+        case_id=str(_uuid(250)),
+        blocker_check_code="NO_SCHEDULE",
+        failure_codes=["NO_SCHEDULE"],
+        details_json={
+            "failure_code": "NO_SCHEDULE",
+            "blocked_before_pathway_evaluation": True,
+        },
+    )
+    assert any(
+        check["check_code"] == "TARIFF_RESOLUTION" and check["passed"] is False
+        for check in persisted_checks
+    )
 
 
 @pytest.mark.asyncio
-async def test_not_yet_operational_corridor_emits_advisory_alert_without_mutating_failures() -> None:
-    """Corridor alerts should be advisory-only and should not add extra failure codes."""
+async def test_architecture_blocker_corridor_not_yet_operational_skips_pathway_evaluation_and_persists_audit() -> None:
+    """Architecture rule: not-yet-operational corridors must block before pathway evaluation."""
 
     service, deps = _service()
     request = _request(
@@ -631,6 +761,7 @@ async def test_not_yet_operational_corridor_emits_advisory_alert_without_mutatin
             _fact("tariff_heading_output", "text", fact_value_text="1103"),
             _fact("direct_transport", "boolean", fact_value_boolean=True),
         ],
+        case_id=str(_uuid(260)),
     )
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
@@ -644,9 +775,22 @@ async def test_not_yet_operational_corridor_emits_advisory_alert_without_mutatin
     result = await service.assess(request)
 
     assert result.eligible is False
+    assert result.pathway_used is None
     assert result.failures == ["NOT_OPERATIONAL"]
+    assert result.missing_facts == []
     assert result.confidence_class == "incomplete"
+    deps["fact_normalization_service"].normalize_facts.assert_not_called()
+    deps["expression_evaluator"].evaluate.assert_not_called()
+    deps["general_origin_rules_service"].evaluate.assert_not_called()
+    deps["evidence_service"].build_readiness.assert_not_called()
     deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    _assert_persisted_blocker_audit(
+        deps,
+        case_id=str(_uuid(260)),
+        blocker_check_code="NOT_OPERATIONAL",
+        failure_codes=["NOT_OPERATIONAL"],
+        details_json={"failure_code": "NOT_OPERATIONAL"},
+    )
 
 
 @pytest.mark.asyncio
@@ -856,6 +1000,121 @@ async def test_assess_case_raises_when_case_is_missing() -> None:
 
     with pytest.raises(CaseNotFoundError):
         await service.assess_case(str(_uuid(301)), CaseAssessmentRequest(year=2025))
+
+
+@pytest.mark.asyncio
+async def test_assess_interface_request_auto_creates_case_and_returns_replay_identifiers() -> None:
+    """Direct interface runs without case_id should auto-create a case and hand back replay ids."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    auto_case_id = str(_uuid(400))
+    evaluation_id = str(_uuid(401))
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["evaluations_repository"].get_latest_evaluation_for_case.return_value = {
+        "evaluation_id": evaluation_id
+    }
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    result = await service.assess_interface_request(request)
+
+    assert result.case_id == auto_case_id
+    assert result.evaluation_id == evaluation_id
+    assert result.response.eligible is True
+
+    deps["cases_repository"].create_case.assert_awaited_once()
+    created_case = deps["cases_repository"].create_case.await_args.args[0]
+    assert created_case["persona_mode"] == "exporter"
+    assert created_case["exporter_state"] == "GHA"
+    assert created_case["importer_state"] == "NGA"
+    assert created_case["hs6_code"] == "110311"
+    assert created_case["hs_version"] == "HS2017"
+    assert created_case["submission_status"] == "submitted"
+    assert created_case["created_by"] == "api:assessments"
+    assert created_case["updated_by"] == "api:assessments"
+    assert created_case["case_external_ref"].startswith("IFACE-ASSESS-")
+
+    deps["cases_repository"].add_facts.assert_awaited_once()
+    added_facts = deps["cases_repository"].add_facts.await_args.args[1]
+    assert [fact["fact_key"] for fact in added_facts] == [
+        "tariff_heading_input",
+        "tariff_heading_output",
+        "direct_transport",
+    ]
+
+    persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
+    assert persisted_evaluation["case_id"] == auto_case_id
+    deps["evaluations_repository"].get_latest_evaluation_for_case.assert_awaited_once_with(
+        auto_case_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_assess_interface_request_raises_when_replay_evaluation_is_missing() -> None:
+    """Interface runs should fail closed if no persisted evaluation can be resolved after assessment."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    auto_case_id = str(_uuid(402))
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["evaluations_repository"].get_latest_evaluation_for_case.return_value = None
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    with pytest.raises(EvaluationPersistenceError) as exc_info:
+        await service.assess_interface_request(request)
+
+    assert exc_info.value.detail == {
+        "case_id": auto_case_id,
+        "reason": "evaluation_not_persisted",
+    }
 
 
 def test_eligibility_request_defaults_existing_documents_for_backward_compatibility() -> None:

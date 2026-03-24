@@ -231,6 +231,231 @@ async def _seed_snapshot_alignment_candidate() -> dict[str, str]:
     return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
 
 
+async def _seed_missing_schedule_candidate() -> dict[str, str]:
+    """Insert one deterministic supported-corridor rule bundle without tariff coverage."""
+
+    hs6_code = f"95{int(uuid4().hex[:4], 16) % 10000:04d}"
+    rule_source = _build_source("missing-schedule-rule", source_type=SourceTypeEnum.APPENDIX)
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} missing schedule fixture",
+            chapter=hs6_code[:2],
+            heading=hs6_code[:4],
+            description="Synthetic missing-schedule fixture",
+            section="XXI",
+            section_name="Miscellaneous",
+        )
+        session.add_all([rule_source, product])
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description="Synthetic missing-schedule rule",
+            legal_rule_text_verbatim="Wholly obtained only.",
+            legal_rule_text_normalized="WO",
+            rule_status=RuleStatusEnum.AGREED,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"missing-schedule-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                EligibilityRulePathway(
+                    psr_id=rule.psr_id,
+                    pathway_code="WO",
+                    pathway_label="WO",
+                    pathway_type="specific",
+                    expression_json={"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+                    tariff_shift_level=HsLevelEnum.SUBHEADING,
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
+
+
+async def _seed_blocker_audit_candidate(
+    *,
+    tag: str,
+    code_prefix: str,
+    rule_status: RuleStatusEnum = RuleStatusEnum.AGREED,
+    pathway_code: str = "WO",
+    expression_json: dict[str, Any] | None = None,
+    corridor_status: StatusTypeEnum | None = None,
+) -> dict[str, str]:
+    """Insert one deterministic blocker fixture with tariff coverage and optional corridor status."""
+
+    hs6_code = f"{code_prefix}{int(uuid4().hex[:4], 16) % 10000:04d}"
+    rule_source = _build_source(f"{tag}-rule", source_type=SourceTypeEnum.APPENDIX)
+    tariff_source = _build_source(f"{tag}-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
+    status_source = (
+        _build_source(f"{tag}-status", source_type=SourceTypeEnum.STATUS_NOTICE)
+        if corridor_status is not None
+        else None
+    )
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} {tag} golden fixture",
+            chapter=hs6_code[:2],
+            heading=hs6_code[:4],
+            description=f"Synthetic {tag} golden fixture",
+            section="XXI",
+            section_name="Miscellaneous",
+        )
+        seed_rows = [rule_source, tariff_source, product]
+        if status_source is not None:
+            seed_rows.append(status_source)
+        session.add_all(seed_rows)
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description=f"Synthetic {tag} rule",
+            legal_rule_text_verbatim="Synthetic blocker rule.",
+            legal_rule_text_normalized=pathway_code,
+            rule_status=rule_status,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"{tag}-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                EligibilityRulePathway(
+                    psr_id=rule.psr_id,
+                    pathway_code=pathway_code,
+                    pathway_label=pathway_code,
+                    pathway_type="specific",
+                    expression_json=expression_json
+                    or {"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+                    tariff_shift_level=HsLevelEnum.SUBHEADING,
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+            ]
+        )
+
+        if status_source is not None:
+            session.add(
+                StatusAssertion(
+                    source_id=status_source.source_id,
+                    entity_type="corridor",
+                    entity_key=f"CORRIDOR:GHA:NGA:{hs6_code}",
+                    status_type=corridor_status,
+                    status_text_verbatim="Corridor is not yet operational.",
+                    effective_from=date(2025, 1, 1),
+                    effective_to=None,
+                )
+            )
+
+        schedule_header = TariffScheduleHeader(
+            source_id=tariff_source.source_id,
+            importing_state="NGA",
+            exporting_scope="GHA",
+            schedule_status=ScheduleStatusEnum.OFFICIAL,
+            publication_date=date(2025, 1, 1),
+            effective_date=date(2025, 1, 1),
+            hs_version="HS2017",
+            category_system="pytest",
+        )
+        session.add(schedule_header)
+        await session.flush()
+
+        schedule_line = TariffScheduleLine(
+            schedule_id=schedule_header.schedule_id,
+            hs_code=hs6_code,
+            product_description=f"Synthetic {tag} tariff line",
+            tariff_category=TariffCategoryEnum.LIBERALISED,
+            mfn_base_rate=15,
+            base_year=2025,
+            target_rate=0,
+            target_year=2025,
+            staging_type=StagingTypeEnum.IMMEDIATE,
+            row_ref=f"{tag}-{hs6_code}",
+        )
+        session.add(schedule_line)
+        await session.flush()
+        session.add(
+            TariffScheduleRateByYear(
+                schedule_line_id=schedule_line.schedule_line_id,
+                calendar_year=2025,
+                preferential_rate=0,
+                rate_status=RateStatusEnum.IN_FORCE,
+                source_id=tariff_source.source_id,
+            )
+        )
+        await session.commit()
+
+    return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
+
+
+async def _seed_rule_status_pending_candidate() -> dict[str, str]:
+    """Insert one deterministic pending-rule blocker fixture."""
+
+    return await _seed_blocker_audit_candidate(
+        tag="pending-rule",
+        code_prefix="91",
+        rule_status=RuleStatusEnum.PENDING,
+    )
+
+
+async def _seed_missing_core_facts_candidate() -> dict[str, str]:
+    """Insert one deterministic VNM blocker fixture whose core facts can be omitted."""
+
+    return await _seed_blocker_audit_candidate(
+        tag="missing-core-facts",
+        code_prefix="90",
+        pathway_code="VNM",
+        expression_json={"op": "formula_lte", "formula": "vnom_percent", "value": 60},
+    )
+
+
+async def _seed_not_operational_candidate() -> dict[str, str]:
+    """Insert one deterministic corridor-status blocker fixture."""
+
+    return await _seed_blocker_audit_candidate(
+        tag="not-operational",
+        code_prefix="89",
+        corridor_status=StatusTypeEnum.NOT_YET_OPERATIONAL,
+    )
+
+
 def _assessment_payload(
     case: Mapping[str, Any],
     facts: Mapping[str, Any],
@@ -349,22 +574,22 @@ async def _prepared_case_facts(case: Mapping[str, Any]) -> dict[str, Any]:
 def _assert_response_shape(body: Mapping[str, Any]) -> None:
     """Assert the assessment response preserves the v0.1 contract shape."""
 
-    assert set(body).issuperset(
-        {
-            "hs6_code",
-            "eligible",
-            "pathway_used",
-            "rule_status",
-            "tariff_outcome",
-            "failures",
-            "missing_facts",
-            "evidence_required",
-            "missing_evidence",
-            "readiness_score",
-            "completeness_ratio",
-            "confidence_class",
-        }
-    )
+    assert set(body) == {
+        "hs6_code",
+        "eligible",
+        "pathway_used",
+        "rule_status",
+        "tariff_outcome",
+        "failures",
+        "missing_facts",
+        "evidence_required",
+        "missing_evidence",
+        "readiness_score",
+        "completeness_ratio",
+        "confidence_class",
+    }
+    if body["tariff_outcome"] is not None:
+        assert set(body["tariff_outcome"]) == {"preferential_rate", "base_rate", "status"}
 
 
 def _assert_expected_subset(body: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
@@ -384,6 +609,73 @@ def _assert_expected_subset(body: Mapping[str, Any], expected: Mapping[str, Any]
             assert set(value).issubset(set(body["missing_facts"]))
             continue
         assert body[key] == value
+
+
+async def _create_case_with_facts(
+    async_client: AsyncClient,
+    *,
+    hs6_code: str,
+    exporter: str,
+    importer: str,
+    facts: Mapping[str, Any],
+) -> str:
+    """Create one case through the live API and return its case_id."""
+
+    response = await async_client.post(
+        "/api/v1/cases",
+        json={
+            "case_external_ref": f"GOLDEN-{uuid4()}",
+            "persona_mode": "exporter",
+            "exporter_state": exporter,
+            "importer_state": importer,
+            "hs6_code": hs6_code,
+            "hs_version": "HS2017",
+            "declared_origin": exporter,
+            "title": "Golden blocker regression",
+            "production_facts": [
+                _fact_payload(fact_key, value) for fact_key, value in facts.items()
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["case_id"]
+
+
+def _assert_blocker_audit_trail(
+    latest_body: Mapping[str, Any],
+    *,
+    blocker_check_code: str,
+    failure_codes: list[str],
+    blocker_details_json: dict[str, Any],
+    overall_outcome: str,
+) -> None:
+    """Assert one replayed audit trail stopped at the blocker stage."""
+
+    assert latest_body["final_decision"]["eligible"] is False
+    assert latest_body["final_decision"]["pathway_used"] is None
+    assert latest_body["final_decision"]["failure_codes"] == failure_codes
+    assert latest_body["evaluation"]["overall_outcome"] == overall_outcome
+    assert latest_body["pathway_evaluations"] == []
+
+    blocker_check = next(
+        check for check in latest_body["atomic_checks"] if check["check_code"] == blocker_check_code
+    )
+    assert blocker_check["check_type"] == "blocker"
+    assert blocker_check["severity"] == "blocker"
+    assert blocker_check["passed"] is False
+    assert blocker_check["details_json"] == blocker_details_json
+
+    final_decision_check = next(
+        check for check in latest_body["atomic_checks"] if check["check_code"] == "FINAL_DECISION"
+    )
+    assert final_decision_check["check_type"] == "decision"
+    assert final_decision_check["passed"] is False
+    assert final_decision_check["details_json"]["final_decision"]["pathway_used"] is None
+    assert final_decision_check["details_json"]["final_decision"]["failure_codes"] == failure_codes
+    assert all(
+        check["check_code"] != "PATHWAY_EVALUATION"
+        for check in latest_body["atomic_checks"]
+    )
 
 
 async def _select_or_fallback_candidate(year: int = 2025) -> dict[str, Any] | None:
@@ -719,3 +1011,210 @@ async def test_assessment_response_changes_for_complete_vs_incomplete_document_p
     assert complete_body["missing_evidence"] == []
     assert complete_body["readiness_score"] == 1.0
     assert complete_body["completeness_ratio"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_assessment_request_accepts_submitted_documents_alias_and_returns_canonical_contract(
+    async_client: AsyncClient,
+) -> None:
+    """Backward compatibility should accept submitted_documents while preserving the canonical response shape."""
+
+    case = _golden_case("groats CTH pass")
+    base_payload = _assessment_payload(case, await _prepared_case_facts(case))
+
+    canonical_response = await async_client.post(
+        "/api/v1/assessments",
+        json={**base_payload, "existing_documents": CTH_COMPLETE_DOCUMENT_PACK},
+    )
+    alias_response = await async_client.post(
+        "/api/v1/assessments",
+        json={**base_payload, "submitted_documents": CTH_COMPLETE_DOCUMENT_PACK},
+    )
+
+    assert canonical_response.status_code == 200, canonical_response.text
+    assert alias_response.status_code == 200, alias_response.text
+
+    canonical_body = canonical_response.json()
+    alias_body = alias_response.json()
+    _assert_response_shape(canonical_body)
+    _assert_response_shape(alias_body)
+    assert canonical_body == alias_body
+    assert "submitted_documents" not in alias_body
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_missing_tariff_schedule_persists_blocker_audit_trail(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: missing tariff schedule coverage must persist a blocker-stage audit trail."""
+
+    candidate = await _seed_missing_schedule_candidate()
+    case_id = await _create_case_with_facts(
+        async_client,
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts={"wholly_obtained": True, "direct_transport": True},
+    )
+
+    assessment_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": 2025},
+    )
+
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    _assert_response_shape(assessment_body)
+    assert assessment_body["eligible"] is False
+    assert assessment_body["pathway_used"] is None
+    assert assessment_body["failures"] == ["NO_SCHEDULE"]
+    assert assessment_body["tariff_outcome"] is None
+    assert assessment_body["missing_facts"] == []
+    assert assessment_body["evidence_required"] == []
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+    assert latest_body["evaluation"]["case_id"] == case_id
+    _assert_blocker_audit_trail(
+        latest_body,
+        blocker_check_code="NO_SCHEDULE",
+        failure_codes=["NO_SCHEDULE"],
+        blocker_details_json={
+            "failure_code": "NO_SCHEDULE",
+            "blocked_before_pathway_evaluation": True,
+        },
+        overall_outcome="not_eligible",
+    )
+    assert any(
+        check["check_type"] == "tariff"
+        and check["check_code"] == "TARIFF_RESOLUTION"
+        and check["passed"] is False
+        for check in latest_body["atomic_checks"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_rule_status_pending_persists_blocker_audit_trail(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: pending PSR status must persist a blocker-stage audit trail."""
+
+    candidate = await _seed_rule_status_pending_candidate()
+    case_id = await _create_case_with_facts(
+        async_client,
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts={"wholly_obtained": True, "direct_transport": True},
+    )
+
+    assessment_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": 2025},
+    )
+
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    _assert_response_shape(assessment_body)
+    assert assessment_body["pathway_used"] is None
+    assert assessment_body["failures"] == ["RULE_STATUS_PENDING"]
+    assert assessment_body["evidence_required"] == []
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+
+    _assert_blocker_audit_trail(
+        latest_body,
+        blocker_check_code="RULE_STATUS",
+        failure_codes=["RULE_STATUS_PENDING"],
+        blocker_details_json={"failure_code": "RULE_STATUS_PENDING"},
+        overall_outcome="insufficient_information",
+    )
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_missing_core_facts_for_all_pathways_persists_blocker_audit_trail(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: missing core facts for all pathways must persist a blocker-stage audit trail."""
+
+    candidate = await _seed_missing_core_facts_candidate()
+    case_id = await _create_case_with_facts(
+        async_client,
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts={"direct_transport": True},
+    )
+
+    assessment_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": 2025},
+    )
+
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    _assert_response_shape(assessment_body)
+    assert assessment_body["pathway_used"] is None
+    assert assessment_body["failures"] == ["MISSING_CORE_FACTS"]
+    assert set(assessment_body["missing_facts"]) == {"ex_works", "non_originating"}
+    assert assessment_body["evidence_required"] == []
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+
+    _assert_blocker_audit_trail(
+        latest_body,
+        blocker_check_code="MISSING_CORE_FACTS",
+        failure_codes=["MISSING_CORE_FACTS"],
+        blocker_details_json={
+            "failure_code": "MISSING_CORE_FACTS",
+            "missing_facts": ["ex_works", "non_originating"],
+        },
+        overall_outcome="insufficient_information",
+    )
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_corridor_not_yet_operational_persists_blocker_audit_trail(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: not-yet-operational corridors must persist a blocker-stage audit trail."""
+
+    candidate = await _seed_not_operational_candidate()
+    case_id = await _create_case_with_facts(
+        async_client,
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts={"wholly_obtained": True, "direct_transport": True},
+    )
+
+    assessment_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": 2025},
+    )
+
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    _assert_response_shape(assessment_body)
+    assert assessment_body["pathway_used"] is None
+    assert assessment_body["failures"] == ["NOT_OPERATIONAL"]
+    assert assessment_body["missing_facts"] == []
+    assert assessment_body["evidence_required"] == []
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+
+    _assert_blocker_audit_trail(
+        latest_body,
+        blocker_check_code="NOT_OPERATIONAL",
+        failure_codes=["NOT_OPERATIONAL"],
+        blocker_details_json={"failure_code": "NOT_OPERATIONAL"},
+        overall_outcome="not_yet_operational",
+    )

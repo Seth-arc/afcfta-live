@@ -46,6 +46,12 @@ class AuditTrailNotFoundError(AISBaseException):
     code = "AUDIT_TRAIL_NOT_FOUND"
 
 
+class EvaluationPersistenceError(AISBaseException):
+    """Raised when an interface assessment cannot guarantee replay-safe persistence."""
+
+    code = "EVALUATION_PERSISTENCE_ERROR"
+
+
 class CaseNotFoundError(AISBaseException):
     """Raised when a referenced case_id cannot be resolved to a stored case."""
 

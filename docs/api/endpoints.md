@@ -270,8 +270,22 @@ Runs the full deterministic eligibility engine.
 - `year`
 - `persona_mode`
 - `production_facts`
-- optional `existing_documents`
+- optional canonical `existing_documents`
 - optional `case_id`
+
+Compatibility:
+
+- `existing_documents` is the canonical request field for document inventory.
+- `submitted_documents` is accepted as an input-only alias for backward compatibility.
+
+Replay guarantee:
+
+- If `case_id` is omitted, AIS auto-creates a submitted case before running the engine.
+- The response body remains the frozen assessment contract.
+- The response headers expose the replay identifiers explicitly:
+- `X-AIS-Case-Id`
+- `X-AIS-Evaluation-Id`
+- `X-AIS-Audit-URL`
 
 **curl**
 
@@ -285,6 +299,11 @@ curl -X POST http://localhost:8000/api/v1/assessments \
     "importer": "NGA",
     "year": 2025,
     "persona_mode": "exporter",
+    "existing_documents": [
+      "certificate_of_origin",
+      "bill_of_materials",
+      "invoice"
+    ],
     "production_facts": [
       {
         "fact_type": "tariff_heading_input",
@@ -310,6 +329,14 @@ curl -X POST http://localhost:8000/api/v1/assessments \
 
 **Sample response**
 
+Response headers:
+
+```text
+X-AIS-Case-Id: 29dc2946-6ef0-46a0-b3eb-0f6a64e40db7
+X-AIS-Evaluation-Id: 4c651cd2-8f0f-4c16-9f37-8dfceef41f26
+X-AIS-Audit-URL: /api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfceef41f26
+```
+
 ```json
 {
   "hs6_code": "110311",
@@ -324,8 +351,9 @@ curl -X POST http://localhost:8000/api/v1/assessments \
   "failures": [],
   "missing_facts": [],
   "evidence_required": [
-    "Certificate of Origin",
-    "Supplier declaration"
+    "Certificate of origin",
+    "Bill of materials",
+    "Invoice"
   ],
   "missing_evidence": [],
   "readiness_score": 1.0,
@@ -345,7 +373,17 @@ Runs the same assessment flow using facts already stored on a case.
 **Request body**
 
 - `year`
-- optional `existing_documents`
+- optional canonical `existing_documents`
+
+Compatibility:
+
+- `submitted_documents` is accepted as an input-only alias for backward compatibility.
+
+Replay headers:
+
+- `X-AIS-Case-Id`
+- `X-AIS-Evaluation-Id`
+- `X-AIS-Audit-URL`
 
 **curl**
 
@@ -438,8 +476,20 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
     "pathway_used": "CTH",
     "confidence_class": "complete",
     "rule_status_at_evaluation": "agreed",
-    "tariff_status_at_evaluation": "in_force"
+    "tariff_status_at_evaluation": "in_force",
+    "created_at": "2026-03-21T15:47:19.000000Z"
   },
+  "case": {
+    "case_id": "29dc2946-6ef0-46a0-b3eb-0f6a64e40db7",
+    "case_external_ref": "CASE-GHA-110311-001",
+    "persona_mode": "exporter",
+    "exporter_state": "GHA",
+    "importer_state": "NGA",
+    "hs_code": "110311",
+    "hs_version": "HS2017",
+    "submission_status": "draft"
+  },
+  "original_input_facts": [],
   "hs6_resolved": {
     "hs6_code": "110311",
     "hs_version": "HS2017",
@@ -458,9 +508,18 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
       "priority_rank": 1,
       "evaluated_expression": "1001 != 1103",
       "result": true,
-      "missing_variables": []
+      "missing_variables": [],
+      "checks": []
     }
   ],
+  "general_rules_results": {
+    "insufficient_operations_check": "pass",
+    "cumulation_check": "not_applicable",
+    "direct_transport_check": "pass",
+    "general_rules_passed": true,
+    "failure_codes": [],
+    "checks": []
+  },
   "status_overlay": {
     "status_type": "agreed",
     "confidence_class": "complete",
@@ -475,8 +534,9 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
   },
   "evidence_readiness": {
     "required_items": [
-      "Certificate of Origin",
-      "Supplier declaration"
+      "Certificate of origin",
+      "Bill of materials",
+      "Invoice"
     ],
     "missing_items": [],
     "verification_questions": [
@@ -485,6 +545,7 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
     "readiness_score": 1.0,
     "completeness_ratio": 1.0
   },
+  "atomic_checks": [],
   "final_decision": {
     "eligible": true,
     "overall_outcome": "eligible",
@@ -493,10 +554,26 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
     "tariff_status": "in_force",
     "confidence_class": "complete",
     "failure_codes": [],
-    "missing_facts": []
+    "missing_facts": [],
+    "missing_evidence": [],
+    "readiness_score": 1.0,
+    "completeness_ratio": 1.0,
+    "provenance": {
+      "rule": {
+        "source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"
+      },
+      "tariff": {
+        "schedule_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"
+      }
+    }
   }
 }
 ```
+
+This audit replay contract is frozen in integration coverage at:
+
+- [tests/integration/test_audit_api.py](tests/integration/test_audit_api.py#L27)
+- [tests/integration/test_audit_api.py](tests/integration/test_audit_api.py#L132)
 
 ## GET /api/v1/audit/cases/{case_id}/evaluations
 

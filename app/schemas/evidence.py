@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+
+DOCUMENT_INVENTORY_ALIAS = AliasChoices("existing_documents", "submitted_documents")
 
 from app.core.enums import PersonaModeEnum, RequirementTypeEnum, VerificationRiskCategoryEnum
 
@@ -71,9 +74,25 @@ class EvidenceReadinessRequest(BaseModel):
     entity_type: str
     entity_key: str
     persona_mode: PersonaModeEnum
-    existing_documents: list[str] = Field(default_factory=list)
+    existing_documents: list[str] = Field(
+        default_factory=list,
+        validation_alias=DOCUMENT_INVENTORY_ALIAS,
+    )
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "entity_type": "hs6_rule",
+                    "entity_key": "HS6_RULE:8c6a4b89-4d4e-4d5b-9eb4-4d1775edb3b0",
+                    "persona_mode": "exporter",
+                    "existing_documents": ["certificate_of_origin"],
+                }
+            ]
+        },
+    )
 
 
 class EvidenceReadinessResult(BaseModel):
@@ -85,7 +104,26 @@ class EvidenceReadinessResult(BaseModel):
     readiness_score: float
     completeness_ratio: float
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "required_items": [
+                        "Certificate of origin",
+                        "Bill of materials",
+                        "Invoice",
+                    ],
+                    "missing_items": [],
+                    "verification_questions": [
+                        "Can the exporter provide a valid certificate of origin?"
+                    ],
+                    "readiness_score": 1.0,
+                    "completeness_ratio": 1.0,
+                }
+            ]
+        },
+    )
 
 
 EvidenceRequirementOut = EvidenceRequirementResponse

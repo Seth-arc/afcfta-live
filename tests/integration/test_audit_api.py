@@ -12,7 +12,7 @@ from app.db.base import get_async_session_factory
 from app.repositories.cases_repository import CasesRepository
 from app.repositories.evaluations_repository import EvaluationsRepository
 from tests.fixtures.golden_cases import GOLDEN_CASES
-from tests.integration.test_golden_path import _prepared_case_facts
+from tests.integration.test_golden_path import _assert_response_shape, _prepared_case_facts
 from tests.integration.test_quick_slice_e2e import (
     _assessment_payload,
     _best_effort_pass_facts,
@@ -30,6 +30,89 @@ CTH_COMPLETE_DOCUMENT_PACK = [
     "bill_of_materials",
     "invoice",
 ]
+
+
+def _assert_assessment_replay_headers(
+    response,
+    *,
+    expected_case_id: str | None = None,
+) -> tuple[str, str]:
+    """Assert assessment endpoints return explicit replay identifiers in headers."""
+
+    case_id = response.headers.get("X-AIS-Case-Id")
+    evaluation_id = response.headers.get("X-AIS-Evaluation-Id")
+    audit_url = response.headers.get("X-AIS-Audit-URL")
+
+    assert case_id is not None
+    assert evaluation_id is not None
+    if expected_case_id is not None:
+        assert case_id == expected_case_id
+    assert audit_url == f"/api/v1/audit/evaluations/{evaluation_id}"
+    return case_id, evaluation_id
+
+
+def _assert_audit_trail_contract(body: dict[str, object]) -> None:
+    """Assert the replay payload matches the current audit contract exactly."""
+
+    assert set(body) == {
+        "evaluation",
+        "case",
+        "original_input_facts",
+        "hs6_resolved",
+        "psr_rule",
+        "pathway_evaluations",
+        "general_rules_results",
+        "status_overlay",
+        "tariff_outcome",
+        "evidence_readiness",
+        "atomic_checks",
+        "final_decision",
+    }
+    evaluation = body["evaluation"]
+    assert isinstance(evaluation, dict)
+    assert set(evaluation) == {
+        "evaluation_id",
+        "case_id",
+        "evaluation_date",
+        "overall_outcome",
+        "pathway_used",
+        "confidence_class",
+        "rule_status_at_evaluation",
+        "tariff_status_at_evaluation",
+        "created_at",
+    }
+    final_decision = body["final_decision"]
+    assert isinstance(final_decision, dict)
+    assert set(final_decision) == {
+        "eligible",
+        "overall_outcome",
+        "pathway_used",
+        "rule_status",
+        "tariff_status",
+        "confidence_class",
+        "failure_codes",
+        "missing_facts",
+        "missing_evidence",
+        "readiness_score",
+        "completeness_ratio",
+        "provenance",
+    }
+    if body["tariff_outcome"] is not None:
+        tariff_outcome = body["tariff_outcome"]
+        assert isinstance(tariff_outcome, dict)
+        assert set(tariff_outcome) == {
+            "preferential_rate",
+            "base_rate",
+            "status",
+            "schedule_source_id",
+            "rate_source_id",
+            "line_page_ref",
+            "rate_page_ref",
+            "table_ref",
+            "row_ref",
+            "resolved_rate_year",
+            "used_fallback_rate",
+        }
 
 
 def _golden_case(name_fragment: str) -> dict[str, object]:
@@ -190,6 +273,7 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
     trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
     assert trail_response.status_code == 200, trail_response.text
     trail_body = trail_response.json()
+    _assert_audit_trail_contract(trail_body)
 
     assert trail_body["evaluation"]["evaluation_id"] == evaluation_id
     assert trail_body["evaluation"]["case_id"] == case_id
@@ -243,6 +327,98 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
         "evidence",
         "decision",
     }.issubset(check_types)
+
+
+@pytest.mark.asyncio
+async def test_direct_assessment_without_case_id_auto_persists_and_returns_replay_headers(
+    async_client: AsyncClient,
+) -> None:
+    """Direct interface assessments should auto-create a case and return replay identifiers."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported direct-assessment candidate with an executable WO, CTH, or VNM pathway was found.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code=candidate["hs6_code"],
+            exporter=candidate["exporter"],
+            importer=candidate["importer"],
+            facts=facts,
+        ),
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    _assert_response_shape(assessment_body)
+
+    case_id, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    case_response = await async_client.get(f"/api/v1/cases/{case_id}")
+    assert case_response.status_code == 200, case_response.text
+    case_body = case_response.json()
+    assert case_body["case"]["case_id"] == case_id
+    assert case_body["case"]["hs_code"] == candidate["hs6_code"]
+    assert case_body["case"]["submission_status"] == "submitted"
+    assert len(case_body["facts"]) >= len(facts)
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    trail_body = trail_response.json()
+    _assert_audit_trail_contract(trail_body)
+
+    assert trail_body["evaluation"]["evaluation_id"] == evaluation_id
+    assert trail_body["evaluation"]["case_id"] == case_id
+    assert trail_body["final_decision"]["eligible"] == assessment_body["eligible"]
+    assert trail_body["final_decision"]["pathway_used"] == assessment_body["pathway_used"]
+
+
+@pytest.mark.asyncio
+async def test_failed_direct_assessment_without_case_id_auto_persists_and_returns_replay_headers(
+    async_client: AsyncClient,
+) -> None:
+    """Failed direct interface assessments should still persist and return replay identifiers."""
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code="110311",
+            exporter="GHA",
+            importer="NGA",
+            facts={"direct_transport": True},
+        ),
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    _assert_response_shape(assessment_body)
+    assert assessment_body["eligible"] is False
+    assert "MISSING_CORE_FACTS" in assessment_body["failures"]
+
+    case_id, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    case_response = await async_client.get(f"/api/v1/cases/{case_id}")
+    assert case_response.status_code == 200, case_response.text
+    case_body = case_response.json()
+    assert case_body["case"]["case_id"] == case_id
+    assert len(case_body["facts"]) == 1
+    assert case_body["facts"][0]["fact_key"] == "direct_transport"
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+    _assert_audit_trail_contract(latest_body)
+
+    assert latest_body["evaluation"]["evaluation_id"] == evaluation_id
+    assert latest_body["evaluation"]["case_id"] == case_id
+    assert latest_body["final_decision"]["eligible"] is False
+    assert "MISSING_CORE_FACTS" in latest_body["final_decision"]["failure_codes"]
+    assert latest_body["evaluation"]["overall_outcome"] == "insufficient_information"
 
 
 @pytest.mark.asyncio
@@ -350,6 +526,7 @@ async def test_get_latest_case_audit_trail_returns_newest_persisted_evaluation(
     response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
     assert response.status_code == 200, response.text
     body = response.json()
+    _assert_audit_trail_contract(body)
 
     assert body["evaluation"]["evaluation_id"] == str(newer["evaluation"]["evaluation_id"])
     assert body["evaluation"]["evaluation_id"] != str(older["evaluation"]["evaluation_id"])
@@ -452,23 +629,75 @@ async def test_case_assessment_endpoint_matches_direct_assessment_response(
         },
     )
     assert direct_response.status_code == 200, direct_response.text
+    direct_case_id, direct_evaluation_id = _assert_assessment_replay_headers(
+        direct_response,
+        expected_case_id=case_id,
+    )
 
     case_response = await async_client.post(
         f"/api/v1/assessments/cases/{case_id}",
         json={"year": 2025},
     )
     assert case_response.status_code == 200, case_response.text
+    case_case_id, case_evaluation_id = _assert_assessment_replay_headers(
+        case_response,
+        expected_case_id=case_id,
+    )
 
     direct_body = direct_response.json()
     case_body = case_response.json()
 
     assert case_body == direct_body
+    assert direct_case_id == case_case_id == case_id
+    assert direct_evaluation_id != case_evaluation_id
 
     history_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/evaluations")
     assert history_response.status_code == 200, history_response.text
     history_body = history_response.json()
     assert len(history_body) >= 2
     assert all(item["case_id"] == case_id for item in history_body[:2])
+    assert {direct_evaluation_id, case_evaluation_id}.issubset(
+        {item["evaluation_id"] for item in history_body}
+    )
+
+
+@pytest.mark.asyncio
+async def test_case_assessment_request_accepts_submitted_documents_alias_and_replays_canonical_readiness(
+    async_client: AsyncClient,
+) -> None:
+    """Case-backed assessments should accept submitted_documents while replay preserving canonical readiness fields."""
+
+    case = _golden_case("groats CTH pass")
+    case_input = case["input"]
+    facts = await _prepared_case_facts(case)
+    case_id = await _create_case_with_facts(
+        hs6_code=str(case_input["hs6_code"]),
+        exporter=str(case_input["exporter"]),
+        importer=str(case_input["importer"]),
+        facts=facts,
+    )
+
+    canonical_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": int(case_input["year"]), "existing_documents": CTH_COMPLETE_DOCUMENT_PACK},
+    )
+    alias_response = await async_client.post(
+        f"/api/v1/assessments/cases/{case_id}",
+        json={"year": int(case_input["year"]), "submitted_documents": CTH_COMPLETE_DOCUMENT_PACK},
+    )
+
+    assert canonical_response.status_code == 200, canonical_response.text
+    assert alias_response.status_code == 200, alias_response.text
+    assert alias_response.json() == canonical_response.json()
+
+    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+    _assert_audit_trail_contract(latest_body)
+    assert latest_body["evidence_readiness"] is not None
+    assert latest_body["final_decision"]["missing_evidence"] == []
+    assert latest_body["final_decision"]["readiness_score"] == 1.0
+    assert latest_body["final_decision"]["completeness_ratio"] == 1.0
 
 
 @pytest.mark.asyncio

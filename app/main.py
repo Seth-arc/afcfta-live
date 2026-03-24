@@ -19,6 +19,7 @@ from app.core.exceptions import (
     CaseNotFoundError,
     ClassificationError,
     CorridorNotSupportedError,
+    EvaluationPersistenceError,
     ExpressionEvaluationError,
     InsufficientFactsError,
     RuleNotFoundError,
@@ -40,6 +41,7 @@ DOMAIN_STATUS_CODES: dict[type[AISBaseException], int] = {
     CorridorNotSupportedError: 422,
     InsufficientFactsError: 422,
     ExpressionEvaluationError: 500,
+    EvaluationPersistenceError: 500,
 }
 
 

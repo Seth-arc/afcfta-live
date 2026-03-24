@@ -127,7 +127,31 @@ class FinalDecisionTrace(BaseModel):
     completeness_ratio: float | None = None
     provenance: DecisionProvenanceTrace | None = None
 
-    model_config = ConfigDict(from_attributes=True, extra="ignore")
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore",
+        json_schema_extra={
+            "examples": [
+                {
+                    "eligible": True,
+                    "overall_outcome": "eligible",
+                    "pathway_used": "CTH",
+                    "rule_status": "agreed",
+                    "tariff_status": "in_force",
+                    "confidence_class": "complete",
+                    "failure_codes": [],
+                    "missing_facts": [],
+                    "missing_evidence": [],
+                    "readiness_score": 1.0,
+                    "completeness_ratio": 1.0,
+                    "provenance": {
+                        "rule": {"source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"},
+                        "tariff": {"schedule_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"},
+                    },
+                }
+            ]
+        },
+    )
 
 
 class AuditTrail(BaseModel):
@@ -146,4 +170,91 @@ class AuditTrail(BaseModel):
     atomic_checks: list[EligibilityCheckResultResponse] = Field(default_factory=list)
     final_decision: FinalDecisionTrace
 
-    model_config = ConfigDict(from_attributes=True, extra="ignore")
+    model_config = ConfigDict(
+        from_attributes=True,
+        extra="ignore",
+        json_schema_extra={
+            "examples": [
+                {
+                    "evaluation": {
+                        "evaluation_id": "4c651cd2-8f0f-4c16-9f37-8dfceef41f26",
+                        "case_id": "29dc2946-6ef0-46a0-b3eb-0f6a64e40db7",
+                        "evaluation_date": "2025-01-01",
+                        "overall_outcome": "eligible",
+                        "pathway_used": "CTH",
+                        "confidence_class": "complete",
+                        "rule_status_at_evaluation": "agreed",
+                        "tariff_status_at_evaluation": "in_force",
+                    },
+                    "case": {
+                        "case_id": "29dc2946-6ef0-46a0-b3eb-0f6a64e40db7",
+                        "case_external_ref": "CASE-GHA-110311-001",
+                        "persona_mode": "exporter",
+                        "exporter_state": "GHA",
+                        "importer_state": "NGA",
+                        "hs_code": "110311",
+                        "hs_version": "HS2017",
+                        "submission_status": "draft",
+                    },
+                    "original_input_facts": [],
+                    "hs6_resolved": {
+                        "hs6_code": "110311",
+                        "hs_version": "HS2017",
+                        "description": "Groats and meal of wheat",
+                    },
+                    "psr_rule": {
+                        "psr_id": "8c6a4b89-4d4e-4d5b-9eb4-4d1775edb3b0",
+                        "hs6_code": "110311",
+                        "product_description": "Groats and meal of wheat",
+                        "legal_rule_text_verbatim": "CTH",
+                        "rule_status": "agreed",
+                    },
+                    "pathway_evaluations": [],
+                    "general_rules_results": {
+                        "general_rules_passed": True,
+                        "failure_codes": [],
+                        "checks": [],
+                    },
+                    "status_overlay": {
+                        "status_type": "agreed",
+                        "confidence_class": "complete",
+                        "active_transitions": [],
+                        "constraints": [],
+                        "source_text_verbatim": "Rule is agreed.",
+                    },
+                    "tariff_outcome": {
+                        "preferential_rate": "0.0000",
+                        "base_rate": "15.0000",
+                        "status": "in_force",
+                    },
+                    "evidence_readiness": {
+                        "required_items": [
+                            "Certificate of origin",
+                            "Bill of materials",
+                            "Invoice",
+                        ],
+                        "missing_items": [],
+                        "verification_questions": [
+                            "Can the exporter provide a valid certificate of origin?"
+                        ],
+                        "readiness_score": 1.0,
+                        "completeness_ratio": 1.0,
+                    },
+                    "atomic_checks": [],
+                    "final_decision": {
+                        "eligible": True,
+                        "overall_outcome": "eligible",
+                        "pathway_used": "CTH",
+                        "rule_status": "agreed",
+                        "tariff_status": "in_force",
+                        "confidence_class": "complete",
+                        "failure_codes": [],
+                        "missing_facts": [],
+                        "missing_evidence": [],
+                        "readiness_score": 1.0,
+                        "completeness_ratio": 1.0,
+                    },
+                }
+            ]
+        },
+    )

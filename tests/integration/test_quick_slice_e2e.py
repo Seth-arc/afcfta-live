@@ -161,6 +161,219 @@ async def _seed_pending_quick_slice_candidate() -> dict[str, str]:
     return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
 
 
+async def _seed_missing_schedule_quick_slice_candidate() -> dict[str, str]:
+    """Insert one isolated agreed rule without tariff coverage for hard-blocker coverage."""
+
+    hs6_code = f"94{int(uuid4().hex[:4], 16) % 10000:04d}"
+    rule_source = _build_source("missing-schedule-rule", source_type=SourceTypeEnum.APPENDIX)
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} missing schedule quick-slice fixture",
+            chapter=hs6_code[:2],
+            heading=hs6_code[:4],
+            description="Synthetic missing-schedule quick-slice fixture",
+            section="XXI",
+            section_name="Miscellaneous",
+        )
+        session.add_all([rule_source, product])
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description="Synthetic missing-schedule fixture",
+            legal_rule_text_verbatim="Wholly obtained only.",
+            legal_rule_text_normalized="WO",
+            rule_status=RuleStatusEnum.AGREED,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"missing-schedule-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                EligibilityRulePathway(
+                    psr_id=rule.psr_id,
+                    pathway_code="WO",
+                    pathway_label="WO",
+                    pathway_type="specific",
+                    expression_json={"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+                    tariff_shift_level=HsLevelEnum.SUBHEADING,
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+            ]
+        )
+        await session.commit()
+
+    return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
+
+
+async def _seed_blocker_quick_slice_candidate(
+    *,
+    tag: str,
+    code_prefix: str,
+    rule_status: RuleStatusEnum = RuleStatusEnum.AGREED,
+    pathway_code: str = "WO",
+    expression_json: dict[str, Any] | None = None,
+    corridor_status: StatusTypeEnum | None = None,
+) -> dict[str, str]:
+    """Insert one isolated blocker fixture with optional corridor status overlay."""
+
+    hs6_code = f"{code_prefix}{int(uuid4().hex[:4], 16) % 10000:04d}"
+    rule_source = _build_source(f"{tag}-rule", source_type=SourceTypeEnum.APPENDIX)
+    tariff_source = _build_source(f"{tag}-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
+    status_source = (
+        _build_source(f"{tag}-status", source_type=SourceTypeEnum.STATUS_NOTICE)
+        if corridor_status is not None
+        else None
+    )
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} {tag} quick-slice fixture",
+            chapter=hs6_code[:2],
+            heading=hs6_code[:4],
+            description=f"Synthetic {tag} quick-slice fixture",
+            section="XXI",
+            section_name="Miscellaneous",
+        )
+        seed_rows = [rule_source, tariff_source, product]
+        if status_source is not None:
+            seed_rows.append(status_source)
+        session.add_all(seed_rows)
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description=f"Synthetic {tag} fixture",
+            legal_rule_text_verbatim="Synthetic blocker rule.",
+            legal_rule_text_normalized=pathway_code,
+            rule_status=rule_status,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"{tag}-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                EligibilityRulePathway(
+                    psr_id=rule.psr_id,
+                    pathway_code=pathway_code,
+                    pathway_label=pathway_code,
+                    pathway_type="specific",
+                    expression_json=expression_json
+                    or {"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+                    tariff_shift_level=HsLevelEnum.SUBHEADING,
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+            ]
+        )
+
+        if status_source is not None:
+            session.add(
+                StatusAssertion(
+                    source_id=status_source.source_id,
+                    entity_type="corridor",
+                    entity_key=f"CORRIDOR:GHA:NGA:{hs6_code}",
+                    status_type=corridor_status,
+                    status_text_verbatim="Corridor is not yet operational.",
+                    effective_from=date(2025, 1, 1),
+                    effective_to=None,
+                )
+            )
+
+        schedule_header = TariffScheduleHeader(
+            source_id=tariff_source.source_id,
+            importing_state="NGA",
+            exporting_scope="GHA",
+            schedule_status=ScheduleStatusEnum.OFFICIAL,
+            publication_date=date(2025, 1, 1),
+            effective_date=date(2025, 1, 1),
+            hs_version="HS2017",
+            category_system="pytest",
+        )
+        session.add(schedule_header)
+        await session.flush()
+
+        schedule_line = TariffScheduleLine(
+            schedule_id=schedule_header.schedule_id,
+            hs_code=hs6_code,
+            product_description=f"Synthetic {tag} tariff line",
+            tariff_category=TariffCategoryEnum.LIBERALISED,
+            mfn_base_rate=Decimal("15.0000"),
+            base_year=2025,
+            target_rate=Decimal("0.0000"),
+            target_year=2025,
+            staging_type=StagingTypeEnum.IMMEDIATE,
+            row_ref=f"{tag}-{hs6_code}",
+        )
+        session.add(schedule_line)
+        await session.flush()
+        session.add(
+            TariffScheduleRateByYear(
+                schedule_line_id=schedule_line.schedule_line_id,
+                calendar_year=2025,
+                preferential_rate=Decimal("0.0000"),
+                rate_status=RateStatusEnum.IN_FORCE,
+                source_id=tariff_source.source_id,
+            )
+        )
+        await session.commit()
+
+    return {"hs6_code": hs6_code, "exporter": "GHA", "importer": "NGA"}
+
+
+async def _seed_missing_core_facts_quick_slice_candidate() -> dict[str, str]:
+    """Insert one isolated VNM candidate whose core facts can be intentionally omitted."""
+
+    return await _seed_blocker_quick_slice_candidate(
+        tag="missing-core-facts",
+        code_prefix="93",
+        pathway_code="VNM",
+        expression_json={"op": "formula_lte", "formula": "vnom_percent", "value": 60},
+    )
+
+
+async def _seed_not_operational_quick_slice_candidate() -> dict[str, str]:
+    """Insert one isolated candidate whose corridor is not yet operational."""
+
+    return await _seed_blocker_quick_slice_candidate(
+        tag="not-operational",
+        code_prefix="92",
+        corridor_status=StatusTypeEnum.NOT_YET_OPERATIONAL,
+    )
+
+
 async def _seed_snapshot_consistency_candidate() -> dict[str, str]:
     """Insert one isolated two-year candidate with date-sensitive tariff and status state."""
 
@@ -709,14 +922,18 @@ async def test_quick_slice_or_fallback_to_vnm(async_client: AsyncClient) -> None
 
 
 @pytest.mark.asyncio
-async def test_quick_slice_missing_facts(async_client: AsyncClient) -> None:
-    """Missing production facts should return an incomplete assessment."""
+async def test_architecture_blocker_missing_core_facts_for_all_pathways_skips_pathway_evaluation(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: missing core facts for all pathways must block before pathway evaluation."""
+
+    candidate = await _seed_missing_core_facts_quick_slice_candidate()
 
     payload = _assessment_payload(
-        hs6_code="110311",
-        exporter="GHA",
-        importer="CMR",
-        facts={},
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts={"direct_transport": True},
     )
 
     response = await async_client.post("/api/v1/assessments", json=payload)
@@ -724,8 +941,15 @@ async def test_quick_slice_missing_facts(async_client: AsyncClient) -> None:
     assert response.status_code == 200
     body = response.json()
     _assert_response_shape(body)
-    assert body["missing_facts"]
+    assert body["eligible"] is False
+    assert body["pathway_used"] is None
+    assert body["failures"] == ["MISSING_CORE_FACTS"]
+    assert set(body["missing_facts"]) == {"ex_works", "non_originating"}
     assert body["confidence_class"] == "incomplete"
+    assert body["evidence_required"] == []
+    assert body["missing_evidence"] == []
+    assert body["readiness_score"] is None
+    assert body["completeness_ratio"] is None
 
 
 @pytest.mark.asyncio
@@ -959,8 +1183,10 @@ async def test_parser_generated_supported_corridor_candidate(async_client: Async
 
 
 @pytest.mark.asyncio
-async def test_pending_rule_blocks_before_pathway_evaluation(async_client: AsyncClient) -> None:
-    """Pending parser-era rules should hard block before any pathway can be selected."""
+async def test_architecture_blocker_rule_status_pending_skips_pathway_evaluation(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: pending PSR status must block before pathway evaluation."""
 
     candidate = await _seed_pending_quick_slice_candidate()
 
@@ -982,6 +1208,72 @@ async def test_pending_rule_blocks_before_pathway_evaluation(async_client: Async
     assert "RULE_STATUS_PENDING" in body["failures"]
     assert body["confidence_class"] == "provisional"
     assert not body["missing_facts"]
+    assert body["evidence_required"] == []
+    assert body["missing_evidence"] == []
+    assert body["readiness_score"] is None
+    assert body["completeness_ratio"] is None
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_missing_tariff_schedule_skips_pathway_evaluation(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: missing tariff schedule coverage must block before pathway evaluation."""
+
+    candidate = await _seed_missing_schedule_quick_slice_candidate()
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_wo_pass_facts(),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is False
+    assert body["pathway_used"] is None
+    assert body["failures"] == ["NO_SCHEDULE"]
+    assert body["tariff_outcome"] is None
+    assert body["missing_facts"] == []
+    assert body["evidence_required"] == []
+    assert body["missing_evidence"] == []
+    assert body["readiness_score"] is None
+    assert body["completeness_ratio"] is None
+
+
+@pytest.mark.asyncio
+async def test_architecture_blocker_corridor_not_yet_operational_skips_pathway_evaluation(
+    async_client: AsyncClient,
+) -> None:
+    """Architecture rule: not-yet-operational corridors must block before pathway evaluation."""
+
+    candidate = await _seed_not_operational_quick_slice_candidate()
+
+    payload = _assessment_payload(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=_wo_pass_facts(),
+    )
+
+    response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    _assert_response_shape(body)
+    assert body["eligible"] is False
+    assert body["pathway_used"] is None
+    assert body["failures"] == ["NOT_OPERATIONAL"]
+    assert body["missing_facts"] == []
+    assert body["confidence_class"] == "incomplete"
+    assert body["evidence_required"] == []
+    assert body["missing_evidence"] == []
+    assert body["readiness_score"] is None
+    assert body["completeness_ratio"] is None
 
 
 @pytest.mark.asyncio

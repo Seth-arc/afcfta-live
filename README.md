@@ -83,6 +83,11 @@ curl -X POST http://localhost:8000/api/v1/assessments \
     "importer": "NGA",
     "year": 2025,
     "persona_mode": "exporter",
+    "existing_documents": [
+      "certificate_of_origin",
+      "bill_of_materials",
+      "invoice"
+    ],
     "production_facts": [
       {
         "fact_type": "tariff_heading_input",
@@ -105,6 +110,44 @@ curl -X POST http://localhost:8000/api/v1/assessments \
     ]
   }'
 ```
+
+Contract compatibility note:
+
+- `existing_documents` is the canonical document-inventory field for assessment and evidence-readiness requests.
+- `submitted_documents` is accepted as an input-only alias for backward compatibility.
+- Responses and documentation always use the canonical field name `existing_documents`.
+- Assessment endpoints also return replay identifiers in response headers: `X-AIS-Case-Id`, `X-AIS-Evaluation-Id`, and `X-AIS-Audit-URL`.
+- `POST /api/v1/assessments` auto-creates a submitted case when `case_id` is omitted so every interface-triggered assessment remains replayable.
+
+Assessment responses are frozen to this field set:
+
+- `hs6_code`
+- `eligible`
+- `pathway_used`
+- `rule_status`
+- `tariff_outcome`
+- `failures`
+- `missing_facts`
+- `evidence_required`
+- `missing_evidence`
+- `readiness_score`
+- `completeness_ratio`
+- `confidence_class`
+
+Audit replay responses are frozen to this top-level field set:
+
+- `evaluation`
+- `case`
+- `original_input_facts`
+- `hs6_resolved`
+- `psr_rule`
+- `pathway_evaluations`
+- `general_rules_results`
+- `status_overlay`
+- `tariff_outcome`
+- `evidence_readiness`
+- `atomic_checks`
+- `final_decision`
 
 ## API Endpoints
 

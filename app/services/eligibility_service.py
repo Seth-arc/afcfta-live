@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from pydantic import ValidationError
 
 from app.core.entity_keys import make_entity_key
 from app.core.enums import LegalOutcome
-from app.core.exceptions import CaseNotFoundError, InsufficientFactsError, TariffNotFoundError
+from app.core.exceptions import (
+    CaseNotFoundError,
+    EvaluationPersistenceError,
+    InsufficientFactsError,
+    TariffNotFoundError,
+)
 from app.core.failure_codes import FAILURE_CODES
 from app.core.fact_keys import (
     DERIVED_VARIABLES,
@@ -32,6 +39,15 @@ from app.services.general_origin_rules_service import GeneralRulesResult
 
 FAILURE_MESSAGES_TO_CODES = {message: code for code, message in FAILURE_CODES.items()}
 PATHWAY_RULE_TYPES = {"WO", "CTH", "CTSH", "VNM", "VA", "PROCESS"}
+
+
+@dataclass(frozen=True)
+class InterfaceAssessmentResult:
+    """Assessment response plus explicit replay identifiers for interface callers."""
+
+    response: EligibilityAssessmentResponse
+    case_id: str
+    evaluation_id: str
 
 
 class EligibilityService:
@@ -82,6 +98,36 @@ class EligibilityService:
             existing_documents=request.existing_documents,
         )
         return await self.assess(eligibility_request)
+
+    async def assess_interface_request(
+        self,
+        request: EligibilityRequest,
+    ) -> InterfaceAssessmentResult:
+        """Guarantee a replayable persisted evaluation for interface-triggered direct runs."""
+
+        replayable_request = await self._ensure_replayable_request(request)
+        response = await self.assess(replayable_request)
+        evaluation_id = await self._get_latest_evaluation_id_for_case(replayable_request.case_id)
+        return InterfaceAssessmentResult(
+            response=response,
+            case_id=str(replayable_request.case_id),
+            evaluation_id=evaluation_id,
+        )
+
+    async def assess_interface_case(
+        self,
+        case_id: str,
+        request: CaseAssessmentRequest,
+    ) -> InterfaceAssessmentResult:
+        """Return a case-backed assessment together with explicit replay identifiers."""
+
+        response = await self.assess_case(case_id, request)
+        evaluation_id = await self._get_latest_evaluation_id_for_case(case_id)
+        return InterfaceAssessmentResult(
+            response=response,
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+        )
 
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
         """Execute one full assessment inside the caller's request-scoped DB snapshot."""
@@ -388,6 +434,61 @@ class EligibilityService:
             payload["source_ref"] = payload.pop("source_reference")
         return payload
 
+    async def _ensure_replayable_request(self, request: EligibilityRequest) -> EligibilityRequest:
+        """Ensure interface-triggered direct assessments always run with a persisted case_id."""
+
+        if request.case_id is not None:
+            return request
+
+        if self.cases_repository is None:
+            raise EvaluationPersistenceError(
+                "Interface assessment cannot create a replayable case because cases persistence is unavailable",
+                detail={"reason": "cases_repository_unavailable"},
+            )
+
+        case_id = await self.cases_repository.create_case(
+            {
+                "case_external_ref": f"IFACE-ASSESS-{uuid4()}",
+                "persona_mode": request.persona_mode,
+                "exporter_state": request.exporter,
+                "importer_state": request.importer,
+                "hs6_code": request.hs6_code,
+                "hs_version": request.hs_version,
+                "submission_status": "submitted",
+                "title": "Interface-triggered eligibility assessment",
+                "created_by": "api:assessments",
+                "updated_by": "api:assessments",
+            }
+        )
+        await self.cases_repository.add_facts(
+            case_id,
+            [fact.model_dump(by_alias=True) for fact in request.production_facts],
+        )
+        return request.model_copy(update={"case_id": case_id})
+
+    async def _get_latest_evaluation_id_for_case(self, case_id: str | None) -> str:
+        """Return the newest persisted evaluation id for a replayable interface assessment."""
+
+        if case_id is None:
+            raise EvaluationPersistenceError(
+                "Interface assessment completed without a case identifier",
+                detail={"reason": "missing_case_id"},
+            )
+
+        if self.evaluations_repository is None:
+            raise EvaluationPersistenceError(
+                "Interface assessment cannot confirm replay persistence because evaluation storage is unavailable",
+                detail={"case_id": case_id, "reason": "evaluations_repository_unavailable"},
+            )
+
+        evaluation_row = await self.evaluations_repository.get_latest_evaluation_for_case(case_id)
+        if evaluation_row is None:
+            raise EvaluationPersistenceError(
+                "Interface assessment did not produce a replayable evaluation trail",
+                detail={"case_id": case_id, "reason": "evaluation_not_persisted"},
+            )
+        return str(evaluation_row["evaluation_id"])
+
     def _run_blocker_checks(
         self,
         *,
@@ -424,13 +525,17 @@ class EligibilityService:
                     check_type="blocker",
                     check_code="NO_SCHEDULE",
                     passed=False,
-                    severity="major",
+                    severity="blocker",
                     expected_value="tariff schedule available",
                     observed_value="not found",
                     explanation=FAILURE_CODES["NO_SCHEDULE"],
-                    details_json={"warning_only": True},
+                    details_json={
+                        "failure_code": "NO_SCHEDULE",
+                        "blocked_before_pathway_evaluation": True,
+                    },
                 )
             )
+            failure_codes = self._merge_unique(failure_codes, ["NO_SCHEDULE"])
 
         present_fact_keys = self._present_fact_keys(production_facts)
         pathway_missing = [

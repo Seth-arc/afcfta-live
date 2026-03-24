@@ -117,6 +117,38 @@ the expanded deterministic live slice.
 Do not rely on a hard-coded test count in this document. Use the current pytest
 output as the source of truth when validating the repository state.
 
+## Continuous Integration
+
+GitHub Actions validates the repository continuously through [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
+
+Current CI stages:
+
+1. `lint`
+2. `unit-tests`
+3. `integration-tests`
+4. `docker-build`
+
+What each stage protects:
+
+- `lint` protects baseline code style and fast static hygiene with `python -m ruff check app tests scripts`
+- `unit-tests` protects service logic, helpers, and fast deterministic regressions with `python -m pytest tests/unit -v`
+- `integration-tests` protects live API and database behavior by starting PostgreSQL, applying Alembic migrations, seeding deterministic data, and running `python -m pytest tests/integration -v`
+- `docker-build` protects the production container artifact by validating `docker build -t afcfta-intelligence:ci .`
+
+CI artifact and report locations:
+
+- `artifacts/unit-tests.xml`
+- `artifacts/integration-tests.xml`
+
+Those files are uploaded as workflow artifacts so later coverage or image-validation prompts have stable report paths to extend.
+
+CI assumptions:
+
+- jobs run on `ubuntu-latest`
+- integration tests can reach PostgreSQL on `localhost:5432`
+- the integration job installs `psycopg2-binary` because `scripts/seed_data.py` uses the sync SQLAlchemy engine path
+- no repository secrets are required for the current CI stages
+
 ## What New Code Must Be Tested
 
 At minimum:

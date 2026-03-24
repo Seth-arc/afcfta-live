@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Mapping
 from datetime import date
-from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 

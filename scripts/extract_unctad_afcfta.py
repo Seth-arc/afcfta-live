@@ -36,7 +36,6 @@ import csv
 import hashlib
 import json
 import logging
-import os
 import sys
 import time
 import uuid
@@ -690,8 +689,8 @@ class CSVWriter:
                 importer = h["importing_state"]
                 scheme = h["category_system"] or "default"
                 line_count = sum(
-                    1 for l in transformer.lines
-                    if l["schedule_id"] == h["schedule_id"]
+                    1 for line in transformer.lines
+                    if line["schedule_id"] == h["schedule_id"]
                 )
                 f.write(f"  {exporter} → {importer} ({scheme}): {line_count:,} lines\n")
 
@@ -794,7 +793,6 @@ def run_extraction(output_dir, base_year, corridors_filter=None, dry_run=False):
     transformer = AISTransformer(base_year=base_year)
 
     successful = 0
-    failed = 0
     no_data = 0
     total_records = 0
 

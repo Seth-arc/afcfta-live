@@ -5,12 +5,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.core.enums import PersonaModeEnum, RequirementTypeEnum, VerificationRiskCategoryEnum
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 DOCUMENT_INVENTORY_ALIAS = AliasChoices("existing_documents", "submitted_documents")
-
-from app.core.enums import PersonaModeEnum, RequirementTypeEnum, VerificationRiskCategoryEnum
 
 
 class EvidenceRequirementResponse(BaseModel):

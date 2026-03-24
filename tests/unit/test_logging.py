@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, datetime, timezone
+from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 
+from app.api.deps import get_sources_repository
+from app.core.enums import AuthorityTierEnum, SourceStatusEnum, SourceTypeEnum
 from app.core.logging import (
     JsonLogFormatter,
     bind_request_log_context,
@@ -58,17 +63,59 @@ def test_json_log_formatter_merges_request_context_and_structured_fields() -> No
 
 @pytest.mark.asyncio
 async def test_request_logging_emits_authenticated_principal_for_protected_routes(
+    app: FastAPI,
     async_client: AsyncClient,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Protected route request logs should include the authenticated principal and request id."""
 
-    with caplog.at_level(logging.INFO, logger="app.request"):
-        response = await async_client.get(
-            "/api/v1/sources",
-            params={"limit": 1},
-            headers={"X-Request-ID": "req-http-1"},
-        )
+    class FakeSourcesRepository:
+        async def list_sources(
+            self,
+            *,
+            source_type: str | None,
+            authority_tier: str | None,
+            status: str | None,
+            limit: int,
+            offset: int,
+        ) -> list[dict[str, object]]:
+            del source_type, authority_tier, status, limit, offset
+            return [
+                {
+                    "source_id": uuid4(),
+                    "title": "Test Source",
+                    "short_title": "Test Source",
+                    "source_group": "agreement",
+                    "source_type": SourceTypeEnum.AGREEMENT,
+                    "authority_tier": AuthorityTierEnum.BINDING,
+                    "issuing_body": "AfCFTA Secretariat",
+                    "jurisdiction_scope": "afcfta",
+                    "status": SourceStatusEnum.CURRENT,
+                    "language": "en",
+                    "file_path": "data/test-source.pdf",
+                    "mime_type": "application/pdf",
+                    "checksum_sha256": "a" * 64,
+                    "publication_date": date(2024, 1, 1),
+                    "effective_date": date(2024, 1, 1),
+                    "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    "updated_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                }
+            ]
+
+    async def override_sources_repository() -> FakeSourcesRepository:
+        return FakeSourcesRepository()
+
+    app.dependency_overrides[get_sources_repository] = override_sources_repository
+
+    try:
+        with caplog.at_level(logging.INFO, logger="app.request"):
+            response = await async_client.get(
+                "/api/v1/sources",
+                params={"limit": 1},
+                headers={"X-Request-ID": "req-http-1"},
+            )
+    finally:
+        app.dependency_overrides.pop(get_sources_repository, None)
 
     assert response.status_code == 200, response.text
     records = [record for record in caplog.records if record.name == "app.request"]

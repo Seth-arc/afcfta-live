@@ -436,7 +436,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 11 — Add a production Dockerfile and a minimal prod compose entrypoint
@@ -473,7 +473,7 @@ When done, summarize:
 docker build -t afcfta-live:prod .
 docker compose -f docker-compose.prod.yml config
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 12 — Add CI for lint, unit tests, integration tests, and image build validation

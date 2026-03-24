@@ -229,14 +229,3 @@ def test_source_file_does_not_use_dynamic_execution() -> None:
     assert re.search(r"\beval\s*\(", source) is None
     assert re.search(r"\bexec\s*\(", source) is None
     assert re.search(r"(?<!re\.)\bcompile\s*\(", source) is None
-def test_source_file_does_not_use_dynamic_execution() -> None:
-    """Ensure the evaluator source never uses eval/exec/standalone compile."""
-
-    import re
-    from pathlib import Path
-
-    source = Path("app/services/expression_evaluator.py").read_text(encoding="utf-8")
-
-    assert re.search(r"\beval\s*\(", source) is None
-    assert re.search(r"\bexec\s*\(", source) is None
-    assert not re.search(r"(?<!re\.)compile\s*\(", source)

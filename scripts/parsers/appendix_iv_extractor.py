@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import pdfplumber
@@ -52,7 +52,6 @@ HEADER_PREFIXES = (
 ENCODING_FIXES = {
     "Â°T4H": "th",
     "Â°": "°",
-    "\u00c2\u00b0": "°",
     "\u201c": '"',
     "\u201d": '"',
     "\u2018": "'",

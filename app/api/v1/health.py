@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 
 from fastapi import APIRouter
 
@@ -11,6 +12,7 @@ from app.core.exceptions import ReadinessCheckError
 from app.db.base import check_database_readiness
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -29,6 +31,7 @@ async def readiness_check() -> dict[str, object]:
     try:
         await check_database_readiness()
     except Exception as exc:
+        logger.warning("Database readiness check failed: %s", exc)
         raise ReadinessCheckError(
             "Service dependencies are not ready",
             detail={

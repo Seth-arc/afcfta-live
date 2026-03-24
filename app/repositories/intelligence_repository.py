@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
-from sqlalchemy import insert, select, text
+from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.intelligence import AlertEvent

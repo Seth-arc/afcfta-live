@@ -85,6 +85,8 @@ DATABASE_URL_SYNC=postgresql://afcfta:afcfta_dev@localhost:5432/afcfta
 API_AUTH_KEY=replace-with-a-local-dev-secret
 ```
 
+Production container deployment uses the checked-in [Dockerfile](Dockerfile) and [docker-compose.prod.yml](docker-compose.prod.yml). The runtime container will exit immediately if `DATABASE_URL`, `API_AUTH_KEY`, or `ENV` are missing.
+
 First working API call:
 
 ```bash
@@ -197,6 +199,15 @@ Required runtime settings:
 - `DATABASE_URL`
 - `API_AUTH_KEY`
 
+Required in containerized production deployments:
+
+- `DATABASE_URL`
+- `API_AUTH_KEY`
+- `ENV`
+- `POSTGRES_PASSWORD` when using the bundled `db` service from [docker-compose.prod.yml](docker-compose.prod.yml)
+
+When `POSTGRES_PASSWORD` contains reserved URL characters such as `%`, `@`, `:`, `/`, or `;`, keep `POSTGRES_PASSWORD` as the raw password but URL-encode that same password inside `DATABASE_URL` and `DATABASE_URL_SYNC`.
+
 Optional but recommended outside the app server process:
 
 - `DATABASE_URL_SYNC` for Alembic and sync tooling
@@ -232,6 +243,70 @@ Development-only defaults to review before production:
 - `LOG_LEVEL=INFO` is safe, but `DEBUG` should remain local-only
 - the default rate limits and timeout values are conservative starting points, not production capacity planning
 - `ERROR_TRACKING_BACKEND=none` disables external aggregation until infrastructure is intentionally configured
+
+## Production Containers
+
+Build the production image:
+
+```bash
+docker build -t afcfta-intelligence:prod .
+```
+
+Create a dedicated production environment file before starting the production compose stack:
+
+```bash
+cp ./.env.example ./.env.prod
+```
+
+Set at least these values in `./.env.prod`:
+
+```env
+ENV=production
+DATABASE_URL=postgresql+asyncpg://afcfta:<replace-password>@db:5432/afcfta
+API_AUTH_KEY=<replace-with-a-long-random-secret>
+POSTGRES_PASSWORD=<replace-with-a-database-password>
+```
+
+Start the production-oriented stack:
+
+```bash
+docker compose -f ./docker-compose.prod.yml up --build -d
+```
+
+The runtime container starts the API with:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
+```
+
+Production compose characteristics:
+
+- no source-code bind mounts
+- a multi-stage application image rather than an ad hoc dev container
+- readiness health checks against `/api/v1/health/ready`
+- restart policies for long-running services
+- explicit required environment-variable checks for production startup
+- container runtime settings are loaded from `./.env.prod`, preventing exported host-shell `DATABASE_URL` values from silently overriding the production DSN
+
+The production health check uses the readiness endpoint, not just liveness, so database connectivity must be healthy before the container is considered ready.
+
+If the API container exits immediately, that means `./.env.prod` is absent or incomplete and the runtime fail-fast check rejected missing mandatory settings such as `API_AUTH_KEY`, `DATABASE_URL`, or `ENV`.
+
+## Continuous Integration
+
+The repository CI workflow lives at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and runs four incremental stages:
+
+- lint via `ruff`
+- unit tests
+- integration tests against PostgreSQL with migrations and seed data applied
+- production Docker image build validation
+
+CI report locations:
+
+- unit test JUnit report: `artifacts/unit-tests.xml`
+- integration test JUnit report: `artifacts/integration-tests.xml`
+
+Those files are uploaded by GitHub Actions as `unit-test-report` and `integration-test-report` artifacts so later coverage and image-validation work can build on stable report paths.
 
 ## Architecture
 

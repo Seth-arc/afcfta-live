@@ -36,6 +36,8 @@ This repo uses Docker Compose for local infrastructure.
 docker compose up -d
 ```
 
+This local compose file remains development-oriented and only starts PostgreSQL with a local named volume. Production uses [docker-compose.prod.yml](../../docker-compose.prod.yml), which builds the API image, removes development bind-mount assumptions, and adds service health checks.
+
 ## 3. Create `.env` From `.env.example`
 
 Copy the example file:
@@ -150,6 +152,63 @@ python -m pytest tests/ -v
 ```bash
 python -m uvicorn app.main:app --reload
 ```
+
+## Production Containers
+
+Use the production artifacts when you want a containerized runtime closer to staging or production:
+
+```bash
+docker build -t afcfta-intelligence:prod .
+cp ./.env.example ./.env.prod
+```
+
+Populate `./.env.prod` with at least:
+
+```env
+ENV=production
+DATABASE_URL=postgresql+asyncpg://afcfta:<replace-password>@db:5432/afcfta
+API_AUTH_KEY=<replace-with-a-long-random-secret>
+POSTGRES_PASSWORD=<replace-with-a-database-password>
+```
+
+If the database password includes reserved URL characters such as `%`, `@`, `:`, `/`, or `;`, use the raw value in `POSTGRES_PASSWORD` and the URL-encoded form of that same password in `DATABASE_URL` and `DATABASE_URL_SYNC`.
+
+Then start the production stack with the explicit env file:
+
+```bash
+docker compose -f ./docker-compose.prod.yml up --build -d
+```
+
+The production compose file reads container runtime variables directly from `./.env.prod`, which avoids accidentally leaking a host-shell `DATABASE_URL` like `localhost` into the API container.
+
+Required production environment variables for the API container:
+
+- `DATABASE_URL`
+- `API_AUTH_KEY`
+- `ENV`
+
+Required if you use the bundled PostgreSQL service in `docker-compose.prod.yml`:
+
+- `POSTGRES_PASSWORD`
+
+Optional production overrides:
+
+- `DATABASE_URL_SYNC`
+- DB timeout controls
+- rate-limit controls
+- logging controls
+- `ERROR_TRACKING_BACKEND`, `SENTRY_DSN`, and `SENTRY_TRACES_SAMPLE_RATE`
+- `UVICORN_WORKERS`
+
+The production container starts with:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
+```
+
+The container fails fast if `DATABASE_URL`, `API_AUTH_KEY`, or `ENV` are missing, and its health check targets `/api/v1/health/ready` so the process is not marked healthy until database connectivity is working.
+
+If the API container exits before serving traffic, that is expected fail-fast behavior for an incomplete production env file.
 
 ## 9. Verify The API Is Running
 

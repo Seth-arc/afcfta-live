@@ -16,22 +16,7 @@ from fastapi.responses import JSONResponse
 from app.api.router import api_router
 from app.api.deps import InMemoryRateLimiter
 from app.config import get_settings
-from app.core.exceptions import (
-    AISBaseException,
-    AuthenticationError,
-    AuditTrailNotFoundError,
-    CaseNotFoundError,
-    ClassificationError,
-    CorridorNotSupportedError,
-    EvaluationPersistenceError,
-    ExpressionEvaluationError,
-    InsufficientFactsError,
-    ReadinessCheckError,
-    RateLimitExceededError,
-    RuleNotFoundError,
-    StatusUnknownError,
-    TariffNotFoundError,
-)
+from app.core.exceptions import AISBaseException
 from app.core.http_status import DOMAIN_STATUS_CODES
 from app.core.logging import (
     bind_request_log_context,

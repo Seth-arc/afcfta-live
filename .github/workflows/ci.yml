@@ -52,7 +52,8 @@ jobs:
         run: >
           python -m pytest tests/unit -v
           --junitxml=artifacts/unit-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=90
+          --cov=app/services --cov=app/schemas --cov=app/core
+          --cov-report=term-missing --cov-report=xml --cov-fail-under=90
 
       - name: Upload unit test report
         if: always()

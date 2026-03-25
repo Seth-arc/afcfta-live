@@ -235,7 +235,7 @@ async def test_create_case_accepts_production_facts_and_returns_nested_case_cont
     assert response.status_code == 201, response.text
     body = response.json()
 
-    assert set(body) == {"case_id", "case"}
+    assert set(body) == {"case_id", "case", "evaluation_id", "audit_url", "audit_persisted"}
     assert body["case_id"] == body["case"]["case_id"]
     assert body["case"]["case_external_ref"] == external_ref
     assert body["case"]["persona_mode"] == "exporter"
@@ -243,6 +243,9 @@ async def test_create_case_accepts_production_facts_and_returns_nested_case_cont
     assert body["case"]["importer_state"] == "NGA"
     assert body["case"]["hs_code"] == "110311"
     assert "hs6_code" not in body
+    assert body["evaluation_id"] is None
+    assert body["audit_url"] is None
+    assert body["audit_persisted"] is False
 
     detail_response = await async_client.get(f"/api/v1/cases/{body['case_id']}")
     assert detail_response.status_code == 200, detail_response.text
@@ -251,6 +254,84 @@ async def test_create_case_accepts_production_facts_and_returns_nested_case_cont
         "direct_transport",
         "wholly_obtained",
     ]
+
+
+@pytest.mark.asyncio
+async def test_create_case_with_assess_true_auto_persists_and_returns_replay_ids(
+    async_client: AsyncClient,
+) -> None:
+    """POST /cases with assess=true should run one-step assessment and return replay metadata."""
+
+    response = await async_client.post(
+        "/api/v1/cases",
+        json={
+            "case_external_ref": f"IT-CASE-ASSESS-{uuid4()}",
+            "persona_mode": "exporter",
+            "exporter_state": "CIV",
+            "importer_state": "NGA",
+            "hs6_code": "080111",
+            "hs_version": "HS2017",
+            "declared_origin": "CIV",
+            "title": "One-step case+assessment contract test",
+            "assess": True,
+            "assessment": {
+                "year": 2025,
+                "submitted_documents": ["certificate_of_origin"],
+            },
+            "production_facts": [
+                _fact_payload("wholly_obtained", True),
+                _fact_payload("direct_transport", True),
+                _fact_payload("cumulation_claimed", False),
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    assert set(body) == {"case_id", "case", "evaluation_id", "audit_url", "audit_persisted"}
+    assert body["case_id"] == body["case"]["case_id"]
+    assert body["evaluation_id"] is not None
+    assert body["audit_url"] == f"/api/v1/audit/evaluations/{body['evaluation_id']}"
+    assert body["audit_persisted"] is True
+
+    header_case_id, header_evaluation_id = _assert_assessment_replay_headers(
+        response,
+        expected_case_id=body["case_id"],
+    )
+    assert header_case_id == body["case_id"]
+    assert header_evaluation_id == body["evaluation_id"]
+
+    latest_response = await async_client.get(_case_latest_path(body["case_id"]))
+    assert latest_response.status_code == 200, latest_response.text
+    latest_body = latest_response.json()
+    _assert_audit_trail_contract(latest_body)
+    assert latest_body["evaluation"]["evaluation_id"] == body["evaluation_id"]
+
+
+@pytest.mark.asyncio
+async def test_create_case_with_assess_true_requires_assessment_options(
+    async_client: AsyncClient,
+) -> None:
+    """POST /cases with assess=true must reject requests missing assessment options."""
+
+    response = await async_client.post(
+        "/api/v1/cases",
+        json={
+            "case_external_ref": f"IT-CASE-ASSESS-MISSING-{uuid4()}",
+            "persona_mode": "exporter",
+            "exporter_state": "GHA",
+            "importer_state": "NGA",
+            "hs6_code": "110311",
+            "hs_version": "HS2017",
+            "declared_origin": "GHA",
+            "assess": True,
+            "production_facts": [_fact_payload("direct_transport", True)],
+        },
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()
+    assert body["error"]["code"] == "INSUFFICIENT_FACTS"
+    assert body["error"]["details"]["missing_fields"] == ["assessment.year"]
 
 
 @pytest.mark.asyncio

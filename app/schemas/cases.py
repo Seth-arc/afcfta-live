@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.core.enums import (
     CaseSubmissionStatusEnum,
@@ -15,6 +15,8 @@ from app.core.enums import (
     FactValueTypeEnum,
     PersonaModeEnum,
 )
+
+DOCUMENT_INVENTORY_ALIAS = AliasChoices("existing_documents", "submitted_documents")
 
 
 class CaseFactIn(BaseModel):
@@ -36,6 +38,18 @@ class CaseFactIn(BaseModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
 
+class CaseCreateAssessmentOptions(BaseModel):
+    """Optional one-step assessment options for POST /cases."""
+
+    year: int = Field(ge=2020, le=2040)
+    existing_documents: list[str] = Field(
+        default_factory=list,
+        validation_alias=DOCUMENT_INVENTORY_ALIAS,
+    )
+
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+
 class CaseCreateRequest(BaseModel):
     """API request payload for creating a case and attaching facts."""
 
@@ -49,6 +63,8 @@ class CaseCreateRequest(BaseModel):
     title: str | None = None
     notes: str | None = None
     case_external_ref: str
+    assess: bool = False
+    assessment: CaseCreateAssessmentOptions | None = None
     production_facts: list[CaseFactIn] = Field(default_factory=list)
 
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -105,10 +121,13 @@ class CaseSummaryResponse(BaseModel):
 
 
 class CaseCreateResponse(BaseModel):
-    """API response after creating a case."""
+    """API response after creating a case, with optional one-step replay metadata."""
 
     case_id: UUID
     case: CaseSummaryResponse
+    evaluation_id: UUID | None = None
+    audit_url: str | None = None
+    audit_persisted: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

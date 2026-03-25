@@ -38,10 +38,10 @@ def _assessment_payload() -> dict[str, object]:
     }
 
 
-def _case_payload() -> dict[str, object]:
+def _case_payload(*, assess: bool = False) -> dict[str, object]:
     """Return a minimally valid persisted-case payload for case-backed assessment tests."""
 
-    return {
+    payload: dict[str, object] = {
         "case_external_ref": f"RL-CASE-{uuid4()}",
         "persona_mode": "exporter",
         "exporter_state": "GHA",
@@ -58,6 +58,10 @@ def _case_payload() -> dict[str, object]:
             }
         ],
     }
+    if assess:
+        payload["assess"] = True
+        payload["assessment"] = {"year": 2025}
+    return payload
 
 
 @pytest.fixture
@@ -163,6 +167,24 @@ async def test_case_assessment_route_uses_assessment_rate_limit_policy(
     assert throttled_assessment.status_code == 429, throttled_assessment.text
 
     body = throttled_assessment.json()
+    assert body["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+    assert body["error"]["details"]["policy_name"] == "assessments"
+    assert body["error"]["details"]["max_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_case_create_with_assess_true_uses_assessment_rate_limit_policy(
+    low_rate_limit_client: AsyncClient,
+) -> None:
+    """POST /cases with assess=true must consume the assessment-policy budget."""
+
+    first = await low_rate_limit_client.post("/api/v1/cases", json=_case_payload(assess=True))
+    throttled = await low_rate_limit_client.post("/api/v1/cases", json=_case_payload(assess=True))
+
+    assert first.status_code == 201, first.text
+    assert throttled.status_code == 429, throttled.text
+
+    body = throttled.json()
     assert body["error"]["code"] == "RATE_LIMIT_EXCEEDED"
     assert body["error"]["details"]["policy_name"] == "assessments"
     assert body["error"]["details"]["max_requests"] == 1

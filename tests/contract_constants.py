@@ -19,6 +19,35 @@ CASE_ASSESSMENT_REQUEST_FIELD_ORDER = (
     "existing_documents",
 )
 
+CASE_CREATE_ASSESSMENT_OPTIONS_FIELD_ORDER = (
+    "year",
+    "existing_documents",
+)
+
+CASE_CREATE_REQUEST_FIELD_ORDER = (
+    "persona_mode",
+    "exporter_state",
+    "importer_state",
+    "hs6_code",
+    "hs_version",
+    "declared_origin",
+    "declared_pathway",
+    "title",
+    "notes",
+    "case_external_ref",
+    "assess",
+    "assessment",
+    "production_facts",
+)
+
+CASE_CREATE_RESPONSE_FIELDS = frozenset({
+    "case_id",
+    "case",
+    "evaluation_id",
+    "audit_url",
+    "audit_persisted",
+})
+
 TARIFF_OUTCOME_FIELDS = frozenset({
     "preferential_rate",
     "base_rate",

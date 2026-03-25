@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 
 from app.api.deps import (
+    assessment_eligibility_service_context,
     get_assessment_eligibility_service,
     get_audit_service,
     get_cases_repository,
     require_assessment_rate_limit,
 )
-from app.core.exceptions import CaseNotFoundError
+from app.config import Settings, get_settings
+from app.core.exceptions import CaseNotFoundError, InsufficientFactsError
 from app.repositories.cases_repository import CasesRepository
 from app.schemas.assessments import CaseAssessmentRequest, EligibilityAssessmentResponse
 from app.schemas.audit import AuditTrail
 from app.schemas.cases import (
+    CaseCreateAssessmentOptions,
     CaseCreateRequest,
     CaseCreateResponse,
     CaseDetailResponse,
@@ -36,12 +39,38 @@ def _set_replay_headers(response: Response, *, case_id: str, evaluation_id: str)
     response.headers["X-AIS-Audit-URL"] = f"/api/v1/audit/evaluations/{evaluation_id}"
 
 
+def _coerce_case_create_assessment_request(
+    payload: CaseCreateRequest,
+) -> CaseAssessmentRequest:
+    """Build a case-assessment request from one-step create-case options."""
+
+    if payload.assessment is None:
+        raise InsufficientFactsError(
+            "assessment options are required when assess=true",
+            detail={"missing_fields": ["assessment.year"]},
+        )
+
+    options: CaseCreateAssessmentOptions = payload.assessment
+    return CaseAssessmentRequest(
+        year=options.year,
+        existing_documents=list(options.existing_documents),
+    )
+
+
 @router.post("/cases", response_model=CaseCreateResponse, status_code=status.HTTP_201_CREATED)
 async def create_case(
     payload: CaseCreateRequest,
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
     cases_repository: CasesRepository = Depends(get_cases_repository),
 ) -> CaseCreateResponse:
     """Create a case_file row plus its submitted production facts."""
+
+    assess_payload: CaseAssessmentRequest | None = None
+    if payload.assess:
+        await require_assessment_rate_limit(request, settings)
+        assess_payload = _coerce_case_create_assessment_request(payload)
 
     case_id = await cases_repository.create_case(payload.model_dump(by_alias=True))
     await cases_repository.add_facts(
@@ -55,9 +84,33 @@ async def create_case(
             detail={"case_id": case_id},
         )
 
+    evaluation_id: str | None = None
+    audit_url: str | None = None
+    audit_persisted = False
+    if payload.assess and assess_payload is not None:
+        # Persist case rows before running the REPEATABLE READ assessment on a new session.
+        await cases_repository.session.commit()
+
+        async with assessment_eligibility_service_context() as eligibility_service:
+            assessment = await eligibility_service.assess_interface_case(
+                case_id,
+                assess_payload,
+            )
+        evaluation_id = assessment.evaluation_id
+        audit_url = f"/api/v1/audit/evaluations/{evaluation_id}"
+        audit_persisted = assessment.response.audit_persisted
+        _set_replay_headers(
+            response,
+            case_id=assessment.case_id,
+            evaluation_id=assessment.evaluation_id,
+        )
+
     return CaseCreateResponse(
         case_id=case_id,
         case=CaseSummaryResponse.model_validate(case_bundle["case"]),
+        evaluation_id=evaluation_id,
+        audit_url=audit_url,
+        audit_persisted=audit_persisted,
     )
 
 

@@ -347,6 +347,16 @@ More detail: [docs/concepts/architecture-overview.md](docs/concepts/architecture
 
 For operator-facing parser promotion steps, see [docs/dev/parser_promotion_workflow.md](docs/dev/parser_promotion_workflow.md).
 
+### NIM Orchestration Boundary
+
+When a conversational assistant layer (NIM) is added on top of this engine, it must respect a hard boundary:
+
+- NIM may parse natural-language queries, ask clarifying questions, and explain engine outputs.
+- NIM must never decide eligibility, override deterministic output fields, or fabricate legal facts.
+- Every assessment triggered through the assistant path must produce a persisted, replayable record. The engine auto-creates a case when `case_id` is omitted. The `audit_persisted` field in the assessment response confirms the write succeeded; the assistant must not present the result as legally recorded when `audit_persisted` is `false`.
+- NIM-only metadata such as parse confidence or session state must be stripped before the request reaches the deterministic engine.
+- The canonical document-inventory field is `existing_documents`. The older alias `submitted_documents` is accepted on input only for backward compatibility and must not appear in assistant schemas or response contracts.
+
 ## Documentation
 
 | Area | Location |

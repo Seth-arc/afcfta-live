@@ -355,6 +355,8 @@ For operator-facing parser promotion steps, see [docs/dev/parser_promotion_workf
 | API Reference | [docs/api/](docs/api/) |
 | Concepts | [docs/concepts/](docs/concepts/) |
 | Developer Guide | [docs/dev/](docs/dev/) |
+| Production Runbook | [docs/dev/production_runbook.md](docs/dev/production_runbook.md) |
+| Parser Promotion | [docs/dev/parser_promotion_workflow.md](docs/dev/parser_promotion_workflow.md) |
 | Product Brief | [PRODUCT_BRIEF.md](PRODUCT_BRIEF.md) |
 | Changelog | [CHANGELOG.md](CHANGELOG.md) |
 

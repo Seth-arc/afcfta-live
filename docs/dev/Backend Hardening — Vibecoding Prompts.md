@@ -718,7 +718,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit tests/integration --cov
 ```
-
+# Completed 24 March
 ---
 Identifed:
 Gap	What is needed
@@ -734,7 +734,7 @@ Worker-count tuning evidence
 Run with UVICORN_WORKERS=4 and compare throughput vs. single-worker baseline
 
 Supplemental Prompts:
-Prompt 19 — Add a ramp-profile load scenario
+# Prompt 19 — Add a ramp-profile load scenario
 
 Read tests/load/run_load_test.py and tests/load/payloads.py.
 Read docs/dev/testing.md section "Load Testing".
@@ -764,12 +764,12 @@ When done, summarize:
 - the new CLI flags
 - what the per-stage report contains
 You run:
-
-
 python tests/load/run_load_test.py --mode ramp --help
 python tests/load/run_load_test.py --mode burst --requests 50 --api-key test
+
+
 # (dry-run against a stopped server to confirm args parse and exit cleanly)
-Prompt 20 — Cross-run latency baseline in CI
+# Prompt 20 — Cross-run latency baseline in CI
 
 Read .github/workflows/ci.yml.
 Read tests/load/run_load_test.py and artifacts/load-report.json structure.
@@ -812,7 +812,7 @@ python tests/load/compare_reports.py \
   --baseline tests/load/baseline.json \
   --report artifacts/load-report.json
 
-Prompt 21 — DB pool saturation signal
+# Prompt 21 — DB pool saturation signal
 
 Read app/db/base.py, app/db/session.py, and app/config.py.
 Read app/api/v1/health.py and the existing readiness endpoint.
@@ -853,7 +853,7 @@ You run:
 python -m pytest tests/unit/test_health.py -v
 python -m pytest tests/integration/test_health_api.py -v
 
-Prompt 22 — Multi-worker concurrency evidence
+# Prompt 22 — Multi-worker concurrency evidence
 
 Read tests/load/run_load_test.py, docs/dev/testing.md, and README.md.
 Read docker-compose.prod.yml and the Dockerfile.
@@ -889,8 +889,6 @@ When done, summarize:
 - the fields in the comparison report
 - the documented acceptance bar for raising worker count
 You run:
-
-
 python tests/load/run_multi_worker_comparison.py --help
 
 ----

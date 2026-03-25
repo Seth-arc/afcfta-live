@@ -12,6 +12,9 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./alembic.ini
+COPY scripts ./scripts
 
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip setuptools wheel \
@@ -31,6 +34,9 @@ RUN groupadd --system appuser \
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build/app ./app
+COPY --from=builder /build/alembic ./alembic
+COPY --from=builder /build/alembic.ini ./alembic.ini
+COPY --from=builder /build/scripts ./scripts
 COPY --from=builder /build/README.md ./README.md
 COPY --from=builder /build/pyproject.toml ./pyproject.toml
 

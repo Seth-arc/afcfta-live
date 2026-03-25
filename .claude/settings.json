@@ -11,7 +11,9 @@
       "Bash(python -c \":*)",
       "Bash(python tests/load/run_load_test.py --help)",
       "Bash(python -m pytest tests/unit -q)",
-      "Bash(python -m pytest tests/integration -q)"
+      "Bash(python -m pytest tests/integration -q)",
+      "Bash(python -m alembic history)",
+      "Bash(python -c \"import tests.load.run_load_test as m; print\\(''import ok''\\); print\\(''burst defaults:'', m.DEFAULT_CONCURRENCY, m.DEFAULT_TOTAL_REQUESTS\\); print\\(''ramp defaults:'', m.DEFAULT_RAMP_STAGES, m.DEFAULT_RAMP_STAGE_DURATION\\)\")"
     ]
   }
 }

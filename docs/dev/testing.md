@@ -233,18 +233,45 @@ CI assumptions:
 
 The load test harness lives in [`tests/load/`](../../tests/load/).
 It is a standalone Python script, not a pytest test, and requires no
-special infrastructure beyond a running AIS stack.
+special infrastructure beyond a running AIS stack.  No new dependencies
+are needed — stdlib `asyncio` and `httpx` are sufficient.
 
-### Scenario: sustained-concurrent
+### Modes
 
-| Parameter | Value |
+The harness supports two modes selected with `--mode`:
+
+| Mode | Behaviour |
+|---|---|
+| `burst` | All workers launch simultaneously.  Controlled by `--concurrency` and `--requests`. Default. |
+| `ramp` | Concurrency increases in discrete steps.  Each step runs for a fixed wall-clock window.  Controlled by `--ramp-stages` and `--ramp-stage-duration`. |
+
+### Scenario: burst (sustained-concurrent)
+
+| Parameter | Default |
 |---|---|
 | Endpoint | `POST /api/v1/assessments` |
 | Payloads | 5 deterministic fixtures (round-robin): GHA→NGA CTH, CMR→NGA VNM pass, CIV→NGA WO, SEN→NGA VNM, CMR→NGA VNM fail |
-| Default concurrency | 50 simultaneous workers |
-| Default total requests | 200 |
+| Concurrency | 50 simultaneous workers |
+| Total requests | 200 |
 | Per-request timeout | 30 s |
-| Default success threshold | 95 % (2xx responses) |
+| Success threshold | 95 % (2xx responses) |
+
+### Scenario: ramp
+
+| Parameter | Default |
+|---|---|
+| Endpoint | `POST /api/v1/assessments` |
+| Payloads | same 5 deterministic fixtures (round-robin) |
+| Stage concurrency levels | `10,25,50` |
+| Duration per stage | 20 s |
+| Per-request timeout | 30 s |
+| Success threshold | 95 % overall across all stages |
+
+The ramp scenario increases concurrency across three stages: 10 → 25 → 50
+concurrent workers.  Each stage runs for the configured duration, then the
+next stage starts immediately.  A single `httpx.AsyncClient` is shared across
+stages so the connection pool reflects steady-state server behaviour rather
+than cold-start per stage.
 
 All payloads match seeded HS6/corridor combinations in the deterministic
 seed slice.  The harness never generates random data.
@@ -268,51 +295,114 @@ export AIS_API_KEY=your-local-dev-api-key
 ### Running
 
 ```bash
-# Defaults: 50 concurrent, 200 total, http://localhost:8000
+# Burst defaults: 50 concurrent, 200 total, http://localhost:8000
 python tests/load/run_load_test.py
 
-# Custom scale:
-python tests/load/run_load_test.py --concurrency 100 --requests 500
+# Burst: explicit scale
+python tests/load/run_load_test.py --mode burst --concurrency 100 --requests 500
 
-# Against staging:
-python tests/load/run_load_test.py \
+# Ramp defaults: 10→25→50 concurrent, 20 s per stage
+python tests/load/run_load_test.py --mode ramp
+
+# Ramp: custom stages and duration
+python tests/load/run_load_test.py --mode ramp \
+  --ramp-stages 5,10,20,50 --ramp-stage-duration 30
+
+# Against staging with explicit credentials
+python tests/load/run_load_test.py --mode ramp \
   --url https://ais-staging.example.com \
   --api-key $STAGING_API_KEY \
-  --concurrency 50 --requests 200
+  --ramp-stages 10,25,50 --ramp-stage-duration 20
 ```
 
+### CLI flags
+
+| Flag | Mode | Default | Description |
+|---|---|---|---|
+| `--mode` | both | `burst` | `burst` or `ramp` |
+| `--url` | both | `$AIS_BASE_URL` or `http://localhost:8000` | Base URL |
+| `--api-key` | both | `$AIS_API_KEY` | API key |
+| `--auth-header` | both | `X-API-Key` | Header name for the key |
+| `--timeout` | both | `30` | Per-request timeout in seconds |
+| `--report` | both | `artifacts/load-report.json` | Output path |
+| `--fail-under` | both | `95` | Minimum overall success-rate % to exit 0 |
+| `--concurrency` | burst | `50` | Max simultaneous workers |
+| `--requests` | burst | `200` | Total request count |
+| `--ramp-stages` | ramp | `10,25,50` | Comma-separated concurrency levels |
+| `--ramp-stage-duration` | ramp | `20` | Seconds per stage |
+
 ### Metrics captured
+
+#### Burst and aggregate (both modes)
 
 | Metric | Description |
 |---|---|
 | `successful_2xx` | Count and percentage of HTTP 200 responses |
-| `rate_limited_429` | Count of HTTP 429 responses — high values indicate rate-limiter saturation |
+| `rate_limited_429` | Count of HTTP 429 responses |
 | `network_errors` | Count of connection/timeout failures |
-| `wall_elapsed_s` | Total wall-clock duration of the run |
+| `wall_elapsed_s` | Total wall-clock duration |
 | `throughput_rps` | Effective requests per second |
 | `latency_s.min/p50/p75/p95/p99/max` | Latency distribution for successful requests only |
 
-The harness prints a human-readable summary to stdout and writes a
-machine-readable JSON report to `artifacts/load-report.json`.
+#### Per stage (ramp mode only)
+
+Each entry in the `stages` array of the JSON report adds:
+
+| Field | Description |
+|---|---|
+| `stage` | 1-based stage number |
+| `concurrency` | Target concurrency for this stage |
+| `duration_target_s` | Configured stage window |
+| All metrics above | Computed from requests that completed during this stage |
+
+The `stages` key is absent from burst-mode reports.
+
+### JSON report structure
+
+Burst:
+```json
+{
+  "config": { "mode": "burst", "concurrency": 50, "total_requests": 200, ... },
+  "mode": "burst",
+  "metrics": { "successful_2xx": ..., "latency_s": { "p95": ... }, ... }
+}
+```
+
+Ramp:
+```json
+{
+  "config": { "mode": "ramp", "ramp_stages": [10, 25, 50], "ramp_stage_duration_s": 20, ... },
+  "mode": "ramp",
+  "metrics": { "scenario": "ramp-aggregate", "successful_2xx": ..., "latency_s": { ... }, ... },
+  "stages": [
+    { "stage": 1, "concurrency": 10, "duration_target_s": 20, "successful_2xx": ..., "latency_s": { "p95": ... }, ... },
+    { "stage": 2, "concurrency": 25, "duration_target_s": 20, "successful_2xx": ..., "latency_s": { "p95": ... }, ... },
+    { "stage": 3, "concurrency": 50, "duration_target_s": 20, "successful_2xx": ..., "latency_s": { "p95": ... }, ... }
+  ]
+}
+```
 
 ### Interpreting results
 
 - A 429-heavy run means `RATE_LIMIT_ENABLED=false` was not set, or the
-  `RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS` limit was too low. This is not a
-  capacity signal — it is a configuration signal.
-- p95 latency above 500 ms under 50 concurrent workers suggests the
-  connection pool or worker count needs tuning.
-- If `success_rate_pct` falls below `--fail-under` (default 95), the script
-  exits with code 1 so it can gate a staging deploy.
+  `RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS` limit was too low.  This is not a
+  capacity signal — it is a configuration signal.  The harness warns loudly
+  when more than 10 % of requests are rate-limited.
+- p95 latency above 500 ms at 50 concurrent workers suggests the connection
+  pool or worker count needs tuning.
+- In ramp mode, compare `p95` and `success_rate_pct` across stages to identify
+  the concurrency level where latency degrades or errors begin.  A clean ramp
+  should show roughly constant p95 until pool or process limits are reached.
+- If `success_rate_pct` falls below `--fail-under` (default 95) the script
+  exits with code 1, making it usable as a staging gate.
 
 ### What still needs true performance infrastructure
 
-The current harness is intentionally minimal — stdlib `asyncio` + `httpx`.
-Before a trader-facing deployment, replace or supplement it with:
+The harness is intentionally minimal — stdlib `asyncio` + `httpx`.
+Before a trader-facing deployment, supplement it with:
 
 | Gap | Tooling to add |
 |---|---|
-| Sustained ramp (not just burst) | `locust` or `k6` ramp profile |
 | Latency percentile tracking across multiple runs | Grafana + Prometheus or Datadog |
 | DB pool saturation signal | `pg_stat_activity` metrics exported via Postgres exporter |
 | Multi-worker concurrency | Run from separate machines or use a distributed load tool |

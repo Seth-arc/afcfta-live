@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from secrets import compare_digest
 from threading import Lock
 from time import monotonic
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.nim.client import NimClient
+    from app.services.nim.clarification_service import ClarificationService
+    from app.services.nim.explanation_service import ExplanationService
+    from app.services.nim.intake_service import IntakeService
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession

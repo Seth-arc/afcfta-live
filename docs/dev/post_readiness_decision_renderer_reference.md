@@ -20,7 +20,7 @@ This document covers the next major quality step after NIM readiness:
 2. **Define the NIM prompt + schema for rendering**
 3. **Add counterfactual engine logic**
 
-This is the layer that turns a safe, structured assistant into a **decision-support interface** that feels natural andconversational while remaining grounded in computable law.
+This is the layer that turns a safe, structured assistant into a **decision-support interface** that feels natural and conversational while remaining grounded in computable law.
 
 ---
 

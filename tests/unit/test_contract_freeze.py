@@ -10,6 +10,11 @@ from app.schemas.assessments import (
     EligibilityRequest,
     TariffOutcomeResponse,
 )
+from app.schemas.cases import (
+    CaseCreateAssessmentOptions,
+    CaseCreateRequest,
+    CaseCreateResponse,
+)
 from app.schemas.rules import RuleLookupResponse
 from app.schemas.tariffs import TariffResolutionResult
 from app.schemas.nim.assistant import (
@@ -25,6 +30,9 @@ from tests.contract_constants import (
     ASSISTANT_REQUEST_FIELD_ORDER,
     ASSISTANT_RESPONSE_ENVELOPE_FIELDS,
     ASSESSMENT_REQUEST_FIELD_ORDER,
+    CASE_CREATE_ASSESSMENT_OPTIONS_FIELD_ORDER,
+    CASE_CREATE_REQUEST_FIELD_ORDER,
+    CASE_CREATE_RESPONSE_FIELDS,
     CASE_ASSESSMENT_REQUEST_FIELD_ORDER,
     CLARIFICATION_FIELDS,
     ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS,
@@ -55,6 +63,27 @@ def test_case_assessment_request_contract_is_frozen() -> None:
     assert _field_order(CaseAssessmentRequest) == CASE_ASSESSMENT_REQUEST_FIELD_ORDER
     assert _schema_properties(CaseAssessmentRequest) == set(CASE_ASSESSMENT_REQUEST_FIELD_ORDER)
     assert "submitted_documents" not in _schema_text(CaseAssessmentRequest)
+
+
+def test_case_create_assessment_options_contract_is_frozen() -> None:
+    assert (
+        _field_order(CaseCreateAssessmentOptions)
+        == CASE_CREATE_ASSESSMENT_OPTIONS_FIELD_ORDER
+    )
+    assert _schema_properties(CaseCreateAssessmentOptions) == set(
+        CASE_CREATE_ASSESSMENT_OPTIONS_FIELD_ORDER
+    )
+    assert "submitted_documents" not in _schema_text(CaseCreateAssessmentOptions)
+
+
+def test_case_create_request_contract_is_frozen() -> None:
+    assert _field_order(CaseCreateRequest) == CASE_CREATE_REQUEST_FIELD_ORDER
+    assert _schema_properties(CaseCreateRequest) == set(CASE_CREATE_REQUEST_FIELD_ORDER)
+    assert "submitted_documents" not in _schema_text(CaseCreateRequest)
+
+
+def test_case_create_response_contract_is_frozen() -> None:
+    assert _schema_properties(CaseCreateResponse) == CASE_CREATE_RESPONSE_FIELDS
 
 
 def test_tariff_outcome_contract_is_frozen() -> None:

@@ -40,6 +40,6 @@ async def get_latest_case_audit_trail(
     case_id: str,
     audit_service: AuditService = Depends(get_audit_service),
 ) -> AuditTrail:
-    """Return the latest persisted audit trail for one case id."""
+    """Compatibility alias for GET /api/v1/cases/{case_id}/latest."""
 
     return await audit_service.get_latest_decision_trace(case_id)

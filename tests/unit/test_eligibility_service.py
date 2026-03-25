@@ -349,6 +349,14 @@ async def test_eligible_product_pathway_and_general_rules_pass() -> None:
     assert result.missing_evidence == ["Supplier declaration"]
     assert result.readiness_score == 0.5
     assert result.completeness_ratio == 0.5
+    deps["tariff_resolution_service"].resolve_tariff_bundle.assert_awaited_once_with(
+        "GHA",
+        "NGA",
+        "HS2017",
+        "110311",
+        2025,
+        assessment_date=date(2025, 1, 1),
+    )
     assert deps["status_service"].get_status_overlay.await_args_list == [
         call("corridor", "CORRIDOR:GHA:NGA:110311", date(2025, 1, 1)),
         call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),

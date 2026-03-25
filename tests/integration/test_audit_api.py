@@ -32,6 +32,30 @@ CTH_COMPLETE_DOCUMENT_PACK = [
 ]
 
 
+def _case_assess_path(case_id: str) -> str:
+    """Return the canonical case-owned assessment route."""
+
+    return f"/api/v1/cases/{case_id}/assess"
+
+
+def _legacy_case_assess_path(case_id: str) -> str:
+    """Return the compatibility alias for case-backed assessments."""
+
+    return f"/api/v1/assessments/cases/{case_id}"
+
+
+def _case_latest_path(case_id: str) -> str:
+    """Return the canonical case-owned latest replay route."""
+
+    return f"/api/v1/cases/{case_id}/latest"
+
+
+def _legacy_case_latest_path(case_id: str) -> str:
+    """Return the compatibility alias for latest case replay."""
+
+    return f"/api/v1/audit/cases/{case_id}/latest"
+
+
 def _assert_assessment_replay_headers(
     response,
     *,
@@ -104,6 +128,7 @@ def _assert_audit_trail_contract(body: dict[str, object]) -> None:
             "preferential_rate",
             "base_rate",
             "status",
+            "provenance_ids",
             "schedule_source_id",
             "rate_source_id",
             "line_page_ref",
@@ -113,6 +138,7 @@ def _assert_audit_trail_contract(body: dict[str, object]) -> None:
             "resolved_rate_year",
             "used_fallback_rate",
         }
+        assert isinstance(tariff_outcome["provenance_ids"], list)
 
 
 def _golden_case(name_fragment: str) -> dict[str, object]:
@@ -308,6 +334,10 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
         "rate_source_id"
     )
     assert trail_body["tariff_outcome"]["table_ref"] == persisted_tariff.get("table_ref")
+    for source_key in ("schedule_source_id", "rate_source_id"):
+        source_value = persisted_tariff.get(source_key)
+        if source_value is not None:
+            assert source_value in trail_body["tariff_outcome"]["provenance_ids"]
     assert trail_body["final_decision"]["provenance"]["rule"]["source_id"] == trail_body[
         "psr_rule"
     ]["source_id"]
@@ -417,7 +447,7 @@ async def test_failed_direct_assessment_without_case_id_auto_persists_and_return
     assert len(case_body["facts"]) == 1
     assert case_body["facts"][0]["fact_key"] == "direct_transport"
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(_case_latest_path(case_id))
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
     _assert_audit_trail_contract(latest_body)
@@ -531,7 +561,7 @@ async def test_get_latest_case_audit_trail_returns_newest_persisted_evaluation(
         )
         await session.commit()
 
-    response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    response = await async_client.get(_case_latest_path(case_id))
     assert response.status_code == 200, response.text
     body = response.json()
     _assert_audit_trail_contract(body)
@@ -539,6 +569,10 @@ async def test_get_latest_case_audit_trail_returns_newest_persisted_evaluation(
     assert body["evaluation"]["evaluation_id"] == str(newer["evaluation"]["evaluation_id"])
     assert body["evaluation"]["evaluation_id"] != str(older["evaluation"]["evaluation_id"])
     assert body["evaluation"]["case_id"] == case_id
+
+    alias_response = await async_client.get(_legacy_case_latest_path(case_id))
+    assert alias_response.status_code == 200, alias_response.text
+    assert alias_response.json() == body
 
 
 @pytest.mark.asyncio
@@ -606,7 +640,7 @@ async def test_special_cth_facts_round_trip_through_assessment_and_audit_replay(
 async def test_case_assessment_endpoint_matches_direct_assessment_response(
     async_client: AsyncClient,
 ) -> None:
-    """Assessing by stored case_id should reuse the same logic and return the same decision shape."""
+    """Canonical and legacy case assessment routes must match the direct assessment body."""
 
     candidate = _require_candidate(
         await _select_supported_candidate(
@@ -643,7 +677,7 @@ async def test_case_assessment_endpoint_matches_direct_assessment_response(
     )
 
     case_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        _case_assess_path(case_id),
         json={"year": 2025},
     )
     assert case_response.status_code == 200, case_response.text
@@ -652,19 +686,32 @@ async def test_case_assessment_endpoint_matches_direct_assessment_response(
         expected_case_id=case_id,
     )
 
+    legacy_case_response = await async_client.post(
+        _legacy_case_assess_path(case_id),
+        json={"year": 2025},
+    )
+    assert legacy_case_response.status_code == 200, legacy_case_response.text
+    legacy_case_id, legacy_evaluation_id = _assert_assessment_replay_headers(
+        legacy_case_response,
+        expected_case_id=case_id,
+    )
+
     direct_body = direct_response.json()
     case_body = case_response.json()
+    legacy_case_body = legacy_case_response.json()
 
     assert case_body == direct_body
+    assert legacy_case_body == direct_body
     assert direct_case_id == case_case_id == case_id
-    assert direct_evaluation_id != case_evaluation_id
+    assert direct_case_id == legacy_case_id
+    assert len({direct_evaluation_id, case_evaluation_id, legacy_evaluation_id}) == 3
 
     history_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/evaluations")
     assert history_response.status_code == 200, history_response.text
     history_body = history_response.json()
-    assert len(history_body) >= 2
-    assert all(item["case_id"] == case_id for item in history_body[:2])
-    assert {direct_evaluation_id, case_evaluation_id}.issubset(
+    assert len(history_body) >= 3
+    assert all(item["case_id"] == case_id for item in history_body[:3])
+    assert {direct_evaluation_id, case_evaluation_id, legacy_evaluation_id}.issubset(
         {item["evaluation_id"] for item in history_body}
     )
 
@@ -686,11 +733,11 @@ async def test_case_assessment_request_accepts_submitted_documents_alias_and_rep
     )
 
     canonical_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        _case_assess_path(case_id),
         json={"year": int(case_input["year"]), "existing_documents": CTH_COMPLETE_DOCUMENT_PACK},
     )
     alias_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        _case_assess_path(case_id),
         json={"year": int(case_input["year"]), "submitted_documents": CTH_COMPLETE_DOCUMENT_PACK},
     )
 
@@ -698,7 +745,7 @@ async def test_case_assessment_request_accepts_submitted_documents_alias_and_rep
     assert alias_response.status_code == 200, alias_response.text
     assert alias_response.json() == canonical_response.json()
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(_case_latest_path(case_id))
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
     _assert_audit_trail_contract(latest_body)
@@ -722,7 +769,7 @@ async def test_failed_case_backed_assessment_persists_and_replays_immediately(
     )
 
     assessment_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        _case_assess_path(case_id),
         json={"year": 2025},
     )
     assert assessment_response.status_code == 200, assessment_response.text
@@ -730,7 +777,7 @@ async def test_failed_case_backed_assessment_persists_and_replays_immediately(
     assert assessment_body["eligible"] is False
     assert "MISSING_CORE_FACTS" in assessment_body["failures"]
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(_case_latest_path(case_id))
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
 
@@ -775,7 +822,7 @@ async def test_audit_replay_surfaces_incomplete_document_pack_readiness(
     assert assessment_body["readiness_score"] == 0.0
     assert assessment_body["missing_evidence"]
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(_case_latest_path(case_id))
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
 
@@ -822,7 +869,7 @@ async def test_audit_replay_surfaces_complete_document_pack_readiness(
     assert assessment_body["readiness_score"] == 1.0
     assert assessment_body["missing_evidence"] == []
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(_case_latest_path(case_id))
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from app.core.countries import V01_COUNTRIES
 from app.core.exceptions import CorridorNotSupportedError, TariffNotFoundError
 from app.repositories.tariffs_repository import TariffsRepository
@@ -21,11 +23,13 @@ class TariffResolutionService:
         hs_version: str,
         hs6_code: str,
         year: int,
+        assessment_date: date | None = None,
     ) -> TariffResolutionResult:
         """Resolve the tariff outcome for a corridor, HS6 code, and calendar year."""
 
         exporter = self._normalize_country_code(exporter_country)
         importer = self._normalize_country_code(importer_country)
+        resolved_assessment_date = assessment_date or date(year, 1, 1)
 
         tariff = await self.tariffs_repository.get_tariff(
             exporter=exporter,
@@ -33,6 +37,7 @@ class TariffResolutionService:
             hs_version=hs_version,
             hs6_code=hs6_code,
             year=year,
+            assessment_date=resolved_assessment_date,
         )
         if tariff is None:
             raise TariffNotFoundError(
@@ -47,6 +52,7 @@ class TariffResolutionService:
                     "hs_version": hs_version,
                     "hs6_code": hs6_code,
                     "year": year,
+                    "assessment_date": resolved_assessment_date.isoformat(),
                 },
             )
 
@@ -78,6 +84,7 @@ class TariffResolutionService:
         hs_version: str,
         hs6_code: str,
         year: int,
+        assessment_date: date | None = None,
     ) -> TariffResolutionResult:
         """Compatibility wrapper for API handlers that call the service via resolve()."""
 
@@ -87,6 +94,7 @@ class TariffResolutionService:
             hs_version=hs_version,
             hs6_code=hs6_code,
             year=year,
+            assessment_date=assessment_date,
         )
 
     @staticmethod

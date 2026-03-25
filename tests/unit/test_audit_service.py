@@ -369,6 +369,53 @@ async def test_retrieve_evaluations_for_a_case() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_decision_trace_populates_tariff_provenance_ids_from_tariff_resolution() -> None:
+    """Tariff replay should derive provenance_ids from persisted tariff_resolution source ids."""
+
+    evaluation_id = _uuid(23)
+    case_id = _uuid(24)
+    schedule_source_id = _uuid(25)
+    rate_source_id = _uuid(26)
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(27),
+                evaluation_id=evaluation_id,
+                check_type="tariff",
+                check_code="TARIFF_RESOLUTION",
+                passed=True,
+                details_json={
+                    "tariff_resolution": {
+                        "preferential_rate": "0.0000",
+                        "base_rate": "15.0000",
+                        "schedule_status": "in_force",
+                        "schedule_source_id": str(schedule_source_id),
+                        "rate_source_id": str(rate_source_id),
+                    }
+                },
+            )
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = None
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.tariff_outcome is not None
+    assert result.tariff_outcome.provenance_ids == [
+        str(schedule_source_id),
+        str(rate_source_id),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_missing_evaluation_maps_to_404_domain_error() -> None:
     """A missing persisted trail should raise the domain 404 audit exception."""
 

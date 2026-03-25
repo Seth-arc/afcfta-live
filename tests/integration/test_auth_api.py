@@ -89,6 +89,8 @@ async def test_health_endpoint_remains_unauthenticated(
     [
         ("post", "/api/v1/cases", {"json": _valid_case_payload()}),
         ("get", f"/api/v1/cases/{uuid4()}", {}),
+        ("post", f"/api/v1/cases/{uuid4()}/assess", {"json": _valid_case_assessment_payload()}),
+        ("get", f"/api/v1/cases/{uuid4()}/latest", {}),
         ("post", "/api/v1/assessments", {"json": _valid_assessment_payload()}),
         (
             "post",

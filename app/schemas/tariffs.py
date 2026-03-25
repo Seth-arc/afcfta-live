@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.enums import RateStatusEnum, ScheduleStatusEnum, StagingTypeEnum, TariffCategoryEnum
 
@@ -98,6 +98,7 @@ class TariffResolutionResult(BaseModel):
     table_ref: str | None = None
     row_ref: str | None = None
     used_fallback_rate: bool = False
+    provenance_ids: list[UUID] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
@@ -126,6 +127,16 @@ class TariffResolutionResult(BaseModel):
                 or payload.get("schedule_status")
                 or "unknown"
             )
+        if "provenance_ids" not in payload or payload.get("provenance_ids") is None:
+            source_ids: list[Any] = []
+            for source_key in ("schedule_source_id", "rate_source_id"):
+                source_value = payload.get(source_key)
+                if source_value is None:
+                    continue
+                if source_value in source_ids:
+                    continue
+                source_ids.append(source_value)
+            payload["provenance_ids"] = source_ids
         return payload
 
 

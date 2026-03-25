@@ -255,6 +255,9 @@ class AuditTrail(BaseModel):
                         "preferential_rate": "0.0000",
                         "base_rate": "15.0000",
                         "status": "in_force",
+                        "provenance_ids": [
+                            "0f34f670-a35c-4ba0-b4c8-61de45f0e4db"
+                        ],
                     },
                     "evidence_readiness": {
                         "required_items": [

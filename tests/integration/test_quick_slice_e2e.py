@@ -526,6 +526,7 @@ async def _select_supported_candidate(
         "(sh.expiry_date IS NULL OR sh.expiry_date >= :assessment_date)",
     ]
     params: dict[str, Any] = {"year": year, "assessment_date": date(year, 1, 1)}
+    corridors = require_corridors or tuple(V01_CORRIDORS)
 
     if chapter_start is not None and chapter_end is not None:
         where_clauses.append("CAST(hp.chapter AS INTEGER) BETWEEN :chapter_start AND :chapter_end")
@@ -535,10 +536,10 @@ async def _select_supported_candidate(
     if require_rule_statuses:
         where_clauses.append(f"pr.rule_status::text IN {_sql_tuple(require_rule_statuses)}")
 
-    if require_corridors:
+    if corridors:
         corridor_predicates = [
             f"(sh.exporting_scope = '{exporter}' AND sh.importing_state = '{importer}')"
-            for exporter, importer in require_corridors
+            for exporter, importer in corridors
         ]
         where_clauses.append("(" + " OR ".join(corridor_predicates) + ")")
 

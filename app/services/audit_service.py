@@ -349,6 +349,7 @@ class AuditService:
                 preferential_rate=self._decimal_or_none(tariff_resolution.get("preferential_rate")),
                 base_rate=self._decimal_or_none(tariff_resolution.get("base_rate")),
                 status=self._tariff_status_from_payload(tariff_resolution),
+                provenance_ids=self._tariff_provenance_ids_from_payload(tariff_resolution),
                 schedule_source_id=tariff_resolution.get("schedule_source_id"),
                 rate_source_id=tariff_resolution.get("rate_source_id"),
                 line_page_ref=tariff_resolution.get("line_page_ref"),
@@ -367,7 +368,11 @@ class AuditService:
         )
         if not isinstance(tariff_outcome, dict):
             return None
-        return AuditTariffOutcomeTrace.model_validate(tariff_outcome)
+        tariff_outcome_payload = dict(tariff_outcome)
+        tariff_outcome_payload["provenance_ids"] = self._tariff_provenance_ids_from_payload(
+            tariff_outcome_payload
+        )
+        return AuditTariffOutcomeTrace.model_validate(tariff_outcome_payload)
 
     def _build_final_decision(
         self,
@@ -557,6 +562,31 @@ class AuditService:
         if payload.get("status") is not None:
             return str(payload["status"])
         return "unknown"
+
+    @staticmethod
+    def _tariff_provenance_ids_from_payload(payload: dict[str, Any]) -> list[str]:
+        """Collect stable tariff provenance ids from explicit and legacy payload fields."""
+
+        provenance_ids: list[str] = []
+
+        explicit_ids = payload.get("provenance_ids")
+        if isinstance(explicit_ids, list):
+            for raw_value in explicit_ids:
+                if raw_value is None:
+                    continue
+                value = str(raw_value)
+                if value not in provenance_ids:
+                    provenance_ids.append(value)
+
+        for source_key in ("schedule_source_id", "rate_source_id"):
+            raw_value = payload.get(source_key)
+            if raw_value is None:
+                continue
+            value = str(raw_value)
+            if value not in provenance_ids:
+                provenance_ids.append(value)
+
+        return provenance_ids
 
     @staticmethod
     def _details(check: EligibilityCheckResultResponse) -> dict[str, Any]:

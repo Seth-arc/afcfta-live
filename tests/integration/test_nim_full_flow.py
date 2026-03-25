@@ -58,6 +58,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from tests.contract_constants import (
+    ALL_REQUIRED_DRAFT_FACTS,
+    ASSISTANT_ERROR_FIELDS,
+    ASSISTANT_RESPONSE_ENVELOPE_FIELDS,
+    CLARIFICATION_FIELDS,
+    ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS,
+    ENGINE_DECISION_FIELDS,
+    TARIFF_OUTCOME_FIELDS,
+    VALID_CONFIDENCE_CLASSES,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -66,60 +76,11 @@ AUDIT_URL = "/api/v1/audit/evaluations/{evaluation_id}"
 
 # ─── Canonical field sets for hallucination guards ──────────────────────────
 
-# Every field declared in EligibilityAssessmentResponse
-KNOWN_ASSESSMENT_FIELDS = frozenset({
-    "hs6_code",
-    "eligible",
-    "pathway_used",
-    "rule_status",
-    "tariff_outcome",
-    "failures",
-    "missing_facts",
-    "evidence_required",
-    "missing_evidence",
-    "readiness_score",
-    "completeness_ratio",
-    "confidence_class",
-    "audit_persisted",
-})
-
-# Every field declared in TariffOutcomeResponse
-KNOWN_TARIFF_FIELDS = frozenset({"preferential_rate", "base_rate", "status"})
-
-# Every field declared in AssistantResponseEnvelope
-KNOWN_ENVELOPE_FIELDS = frozenset({
-    "response_type",
-    "case_id",
-    "evaluation_id",
-    "audit_url",
-    "audit_persisted",
-    "assessment",
-    "clarification",
-    "explanation",
-    "explanation_fallback_used",
-    "error",
-})
-
-# Every field declared in ClarificationResponse
-KNOWN_CLARIFICATION_FIELDS = frozenset({"question", "missing_facts", "missing_evidence"})
-
-# Every field declared in AssistantError
-KNOWN_ERROR_FIELDS = frozenset({"code", "message", "detail"})
-
-# The five engine-protected decision fields that NIM may never alter
-ENGINE_DECISION_FIELDS = frozenset({
-    "eligible",
-    "pathway_used",
-    "rule_status",
-    "tariff_outcome",
-    "confidence_class",
-})
-
-# The five required facts the intake must present before the engine runs
-ALL_REQUIRED_DRAFT_FACTS = {"hs6_code", "exporter", "importer", "year", "persona_mode"}
-
-# Valid confidence_class values per EligibilityAssessmentResponse schema
-VALID_CONFIDENCE_CLASSES = {"complete", "provisional", "incomplete"}
+KNOWN_ASSESSMENT_FIELDS = ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS
+KNOWN_TARIFF_FIELDS = TARIFF_OUTCOME_FIELDS
+KNOWN_ENVELOPE_FIELDS = ASSISTANT_RESPONSE_ENVELOPE_FIELDS
+KNOWN_CLARIFICATION_FIELDS = CLARIFICATION_FIELDS
+KNOWN_ERROR_FIELDS = ASSISTANT_ERROR_FIELDS
 
 
 # ─── Shared test inputs ──────────────────────────────────────────────────────

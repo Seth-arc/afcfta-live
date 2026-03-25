@@ -53,21 +53,21 @@ jobs:
           python -m pytest tests/unit -v
           --junitxml=artifacts/unit-tests.xml
           --cov=app/services --cov=app/schemas --cov=app/core
-          --cov-report=term-missing --cov-report=xml --cov-fail-under=90
+          --cov-report=term-missing --cov-report=xml:artifacts/unit-coverage.xml --cov-fail-under=90
 
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-report
+          name: unit-test-report-${{ github.sha }}
           path: artifacts/unit-tests.xml
 
       - name: Upload unit coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-coverage-report
-          path: artifacts/coverage.xml
+          name: unit-coverage-report-${{ github.sha }}
+          path: artifacts/unit-coverage.xml
 
   integration-tests:
     name: Integration Tests
@@ -118,21 +118,93 @@ jobs:
         run: >
           python -m pytest tests/integration -v
           --junitxml=artifacts/integration-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=80
+          --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml --cov-fail-under=80
 
       - name: Upload integration test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-report
+          name: integration-test-report-${{ github.sha }}
           path: artifacts/integration-tests.xml
 
       - name: Upload integration coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-coverage-report
-          path: artifacts/coverage.xml
+          name: integration-coverage-report-${{ github.sha }}
+          path: artifacts/integration-coverage.xml
+
+  assistant-nim-tests:
+    name: Assistant and NIM Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: afcfta
+          POSTGRES_USER: afcfta
+          POSTGRES_PASSWORD: afcfta_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U afcfta -d afcfta"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://afcfta:afcfta_dev@localhost:5432/afcfta
+      DATABASE_URL_SYNC: postgresql://afcfta:afcfta_dev@localhost:5432/afcfta
+      API_AUTH_KEY: ci-assistant-test-key
+      API_AUTH_PRINCIPAL: github-actions
+      API_AUTH_HEADER_NAME: X-API-Key
+      ENV: ci
+      LOG_LEVEL: INFO
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install assistant/NIM dependencies
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pip install psycopg2-binary
+
+      - name: Apply database migrations
+        run: python -m alembic upgrade head
+
+      - name: Seed reference data
+        run: python scripts/seed_data.py
+
+      - name: Run assistant and NIM suites
+        run: >
+          python -m pytest
+          tests/integration/test_assistant_api.py
+          tests/integration/test_nim_full_flow.py
+          -v
+          --junitxml=artifacts/assistant-nim-tests.xml
+          --cov=app.api.v1.assistant
+          --cov=app.services.nim
+          --cov=app.schemas.nim
+          --cov-report=term-missing
+          --cov-report=xml:artifacts/assistant-nim-coverage.xml
+
+      - name: Upload assistant/NIM test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assistant-nim-test-report-${{ github.sha }}
+          path: artifacts/assistant-nim-tests.xml
+
+      - name: Upload assistant/NIM coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assistant-nim-coverage-report-${{ github.sha }}
+          path: artifacts/assistant-nim-coverage.xml
 
   load-baseline:
     name: Load Baseline
@@ -237,7 +309,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: load-baseline-report
+          name: load-baseline-report-${{ github.sha }}
           path: |
             artifacts/load-report-ci.json
             artifacts/load-report-100.json

@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\schemas\assessments.py
+# hypothesis_version: 6.151.9
+
+[1.0, 2020, 2025, 2040, '0.0000', '1001', '1103', '110311', '15.0000', 'Bill of materials', 'CTH', 'GHA', 'HS2017', 'Invoice', 'NGA', 'agreed', 'base_rate', 'bill_of_materials', 'boolean', 'complete', 'completeness_ratio', 'confidence_class', 'direct_transport', 'eligible', 'evidence_required', 'examples', 'existing_documents', 'exporter', 'fact_key', 'fact_type', 'fact_value_boolean', 'fact_value_text', 'fact_value_type', 'failures', 'hs6_code', 'hs_version', 'importer', 'in_force', 'incomplete', 'invoice', 'missing_evidence', 'missing_facts', 'pathway_used', 'persona_mode', 'preferential_rate', 'production_facts', 'provenance_ids', 'provisional', 'readiness_score', 'rule_status', 'status', 'submitted_documents', 'tariff_heading_input', 'tariff_outcome', 'text', 'year']

@@ -26,12 +26,28 @@ class TariffsRepository:
         hs_version: str,
         hs6_code: str,
         year: int,
+        assessment_date: date | None = None,
     ) -> Mapping[str, Any] | None:
-        """Resolve the best matching tariff line and year rate for a corridor and HS6."""
+        """Resolve the best matching tariff line and year rate for a corridor and HS6.
+
+        The schedule header window is evaluated against one exact snapshot date.
+        When no explicit date is supplied, the lookup defaults to ``year-01-01``
+        for backward-compatible behavior with the assessment endpoint contract.
+        """
+
+        resolved_assessment_date = assessment_date or date(year, 1, 1)
 
         settings = get_settings()
         if settings.CACHE_STATIC_LOOKUPS:
-            cache_key = ("tariff", exporter, importer, hs_version, hs6_code, year)
+            cache_key = (
+                "tariff",
+                exporter,
+                importer,
+                hs_version,
+                hs6_code,
+                year,
+                resolved_assessment_date.isoformat(),
+            )
             hit, cached = cache.get(cache.tariff_store, cache_key)
             if hit:
                 return cached
@@ -74,8 +90,8 @@ class TariffsRepository:
               AND tsh.exporting_scope = :exporter
               AND hp.hs_version = :hs_version
               AND hp.hs6_code = :hs6_code
-              AND (tsh.effective_date IS NULL OR tsh.effective_date <= :year_end)
-              AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :year_start)
+              AND (tsh.effective_date IS NULL OR tsh.effective_date <= :assessment_date)
+              AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :assessment_date)
             ORDER BY
               CASE tsh.schedule_status
                 WHEN 'gazetted' THEN 1
@@ -94,8 +110,7 @@ class TariffsRepository:
                 "importer": importer,
                 "hs_version": hs_version,
                 "hs6_code": hs6_code,
-                "year_start": date(year, 1, 1),
-                "year_end": date(year, 12, 31),
+                "assessment_date": resolved_assessment_date,
             },
         )
         tariff_bundle = schedule_result.mappings().first()

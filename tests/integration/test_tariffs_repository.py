@@ -189,6 +189,74 @@ async def _seed_schedule_status_fixture(session: AsyncSession) -> dict[str, str]
     }
 
 
+async def _seed_mid_year_effectivity_fixture(session: AsyncSession) -> dict[str, str]:
+    """Insert one schedule that starts mid-year for exact snapshot-date assertions."""
+
+    hs6_code = "990202"
+    exporter = "TSTC"
+    importer = "TSTD"
+    product = HS6Product(
+        hs_version="HS2017",
+        hs6_code=hs6_code,
+        hs6_display=f"{hs6_code} mid-year tariff fixture",
+        chapter=hs6_code[:2],
+        heading=hs6_code[:4],
+        description="Synthetic mid-year tariff fixture",
+        section="XXI",
+        section_name="Miscellaneous",
+    )
+    source = _build_source("tariff-mid-year")
+    session.add_all([product, source])
+    await session.flush()
+
+    header = TariffScheduleHeader(
+        source_id=source.source_id,
+        importing_state=importer,
+        exporting_scope=exporter,
+        schedule_status=ScheduleStatusEnum.OFFICIAL,
+        publication_date=date(DEFAULT_YEAR, 6, 1),
+        effective_date=date(DEFAULT_YEAR, 7, 1),
+        expiry_date=date(DEFAULT_YEAR, 12, 31),
+        hs_version="HS2017",
+        category_system="pytest",
+    )
+    session.add(header)
+    await session.flush()
+
+    line = TariffScheduleLine(
+        schedule_id=header.schedule_id,
+        hs_code=f"{hs6_code}00",
+        product_description="Synthetic mid-year line",
+        tariff_category=TariffCategoryEnum.LIBERALISED,
+        mfn_base_rate=Decimal("15.0000"),
+        base_year=DEFAULT_YEAR,
+        target_rate=Decimal("0.0000"),
+        target_year=DEFAULT_YEAR,
+        staging_type=StagingTypeEnum.IMMEDIATE,
+        row_ref="mid-year",
+    )
+    session.add(line)
+    await session.flush()
+
+    session.add(
+        TariffScheduleRateByYear(
+            schedule_line_id=line.schedule_line_id,
+            calendar_year=DEFAULT_YEAR,
+            preferential_rate=Decimal("0.0000"),
+            rate_status=RateStatusEnum.IN_FORCE,
+            source_id=source.source_id,
+        )
+    )
+    await session.flush()
+
+    return {
+        "exporter": exporter,
+        "importer": importer,
+        "hs_version": "HS2017",
+        "hs6_code": hs6_code,
+    }
+
+
 async def _expected_tariff_bundle(
     session: AsyncSession,
     *,
@@ -197,6 +265,7 @@ async def _expected_tariff_bundle(
     hs_version: str,
     hs6_code: str,
     year: int,
+    assessment_date: date | None,
     prefix_match: bool,
 ) -> Mapping[str, Any] | None:
     """Mirror the tariff lookup query so repository output can be compared directly."""
@@ -206,6 +275,7 @@ async def _expected_tariff_bundle(
         if prefix_match
         else "hp.hs_version = tsh.hs_version AND hp.hs6_code = tsl.hs_code"
     )
+    resolved_assessment_date = assessment_date or date(year, 1, 1)
     schedule_statement = text(
         f"""
         SELECT
@@ -244,8 +314,8 @@ async def _expected_tariff_bundle(
           AND tsh.exporting_scope = :exporter
           AND hp.hs_version = :hs_version
           AND hp.hs6_code = :hs6_code
-          AND (tsh.effective_date IS NULL OR tsh.effective_date <= :year_end)
-          AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :year_start)
+          AND (tsh.effective_date IS NULL OR tsh.effective_date <= :assessment_date)
+          AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :assessment_date)
         ORDER BY
           CASE tsh.schedule_status
             WHEN 'gazetted' THEN 1
@@ -265,8 +335,7 @@ async def _expected_tariff_bundle(
                 "importer": importer,
                 "hs_version": hs_version,
                 "hs6_code": hs6_code,
-                "year_start": date(year, 1, 1),
-                "year_end": date(year, 12, 31),
+                "assessment_date": resolved_assessment_date,
             },
         )
     ).mappings().first()
@@ -344,8 +413,8 @@ async def test_get_tariff_matches_single_deeper_line_by_hs6_prefix(
               ON tsry.schedule_line_id = tsl.schedule_line_id
              AND tsry.calendar_year = :year
             WHERE LENGTH(tsl.hs_code) > 6
-              AND (tsh.effective_date IS NULL OR tsh.effective_date <= :year_end)
-              AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :year_start)
+              AND (tsh.effective_date IS NULL OR tsh.effective_date <= :assessment_date)
+              AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :assessment_date)
             GROUP BY tsh.exporting_scope, tsh.importing_state, hp.hs_version, hp.hs6_code
             HAVING COUNT(*) = 1
             ORDER BY hp.hs6_code ASC
@@ -353,8 +422,7 @@ async def test_get_tariff_matches_single_deeper_line_by_hs6_prefix(
             """,
             {
                 "year": DEFAULT_YEAR,
-                "year_start": date(DEFAULT_YEAR, 1, 1),
-                "year_end": date(DEFAULT_YEAR, 12, 31),
+                "assessment_date": date(DEFAULT_YEAR, 1, 1),
             },
         ),
         "No live tariff-backed HS6 candidate with a single deeper tariff line is loaded in the test database.",
@@ -366,6 +434,7 @@ async def test_get_tariff_matches_single_deeper_line_by_hs6_prefix(
         hs_version=str(candidate["hs_version"]),
         hs6_code=str(candidate["hs6_code"]),
         year=DEFAULT_YEAR,
+        assessment_date=None,
         prefix_match=True,
     )
 
@@ -409,15 +478,14 @@ async def test_get_tariff_returns_exact_requested_year_rate_when_available(
             JOIN tariff_schedule_rate_by_year tsry
               ON tsry.schedule_line_id = tsl.schedule_line_id
             WHERE tsry.calendar_year = :year
-              AND (tsh.effective_date IS NULL OR tsh.effective_date <= :year_end)
-              AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :year_start)
+              AND (tsh.effective_date IS NULL OR tsh.effective_date <= :assessment_date)
+              AND (tsh.expiry_date IS NULL OR tsh.expiry_date >= :assessment_date)
             ORDER BY hp.hs6_code ASC, tsh.exporting_scope ASC, tsh.importing_state ASC
             LIMIT 1
             """,
             {
                 "year": DEFAULT_YEAR,
-                "year_start": date(DEFAULT_YEAR, 1, 1),
-                "year_end": date(DEFAULT_YEAR, 12, 31),
+                "assessment_date": date(DEFAULT_YEAR, 1, 1),
             },
         ),
         "No tariff-backed candidate with an exact requested-year rate is loaded in the test database.",
@@ -429,6 +497,7 @@ async def test_get_tariff_returns_exact_requested_year_rate_when_available(
         hs_version=str(candidate["hs_version"]),
         hs6_code=str(candidate["hs6_code"]),
         year=DEFAULT_YEAR,
+        assessment_date=None,
         prefix_match=True,
     )
 
@@ -500,6 +569,7 @@ async def test_get_tariff_falls_back_to_latest_prior_rate_when_requested_year_mi
         hs_version=str(candidate["hs_version"]),
         hs6_code=str(candidate["hs6_code"]),
         year=requested_year,
+        assessment_date=None,
         prefix_match=True,
     )
 
@@ -554,6 +624,7 @@ async def test_get_tariff_returns_source_and_reference_provenance_fields(
         hs_version=str(candidate["hs_version"]),
         hs6_code=str(candidate["hs6_code"]),
         year=DEFAULT_YEAR,
+        assessment_date=None,
         prefix_match=True,
     )
 
@@ -590,6 +661,7 @@ async def test_get_tariff_prefers_highest_priority_schedule_status(
         hs_version=str(candidate["hs_version"]),
         hs6_code=str(candidate["hs6_code"]),
         year=DEFAULT_YEAR,
+        assessment_date=None,
         prefix_match=True,
     )
 
@@ -606,6 +678,45 @@ async def test_get_tariff_prefers_highest_priority_schedule_status(
     assert str(resolved["schedule_id"]) == str(expected["schedule_id"])
     assert str(resolved["schedule_status"]) == str(expected["schedule_status"])
     assert str(resolved["schedule_status"]) == "gazetted"
+
+
+@pytest.mark.asyncio
+async def test_get_tariff_honors_exact_mid_year_assessment_date(
+    tariffs_repository: tuple[AsyncSession, TariffsRepository],
+) -> None:
+    """Mid-year schedule windows must be evaluated against the exact assessment date."""
+
+    session, repository = tariffs_repository
+    candidate = await _seed_mid_year_effectivity_fixture(session)
+    before_effective = await repository.get_tariff(
+        exporter=str(candidate["exporter"]),
+        importer=str(candidate["importer"]),
+        hs_version=str(candidate["hs_version"]),
+        hs6_code=str(candidate["hs6_code"]),
+        year=DEFAULT_YEAR,
+        assessment_date=date(DEFAULT_YEAR, 6, 30),
+    )
+    on_or_after_effective = await repository.get_tariff(
+        exporter=str(candidate["exporter"]),
+        importer=str(candidate["importer"]),
+        hs_version=str(candidate["hs_version"]),
+        hs6_code=str(candidate["hs6_code"]),
+        year=DEFAULT_YEAR,
+        assessment_date=date(DEFAULT_YEAR, 7, 1),
+    )
+    after_expiry = await repository.get_tariff(
+        exporter=str(candidate["exporter"]),
+        importer=str(candidate["importer"]),
+        hs_version=str(candidate["hs_version"]),
+        hs6_code=str(candidate["hs6_code"]),
+        year=DEFAULT_YEAR,
+        assessment_date=date(DEFAULT_YEAR + 1, 1, 1),
+    )
+
+    assert before_effective is None
+    assert on_or_after_effective is not None
+    assert on_or_after_effective["resolved_rate_year"] == DEFAULT_YEAR
+    assert after_expiry is None
 
 
 @pytest.mark.asyncio

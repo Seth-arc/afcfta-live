@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 from unittest.mock import AsyncMock
@@ -81,6 +82,37 @@ async def test_year_fallback_uses_latest_prior_rate() -> None:
     assert result.staging_year == 2025
     assert result.preferential_rate == Decimal("5.0000")
     assert result.tariff_status == "in_force"
+
+
+@pytest.mark.asyncio
+async def test_resolve_threads_explicit_assessment_date_to_repository() -> None:
+    """Explicit assessment_date should be forwarded to the repository unchanged."""
+
+    repository = AsyncMock()
+    repository.get_tariff.return_value = _tariff_row(
+        resolved_rate_year=2025,
+        preferential_rate="0.0000",
+    )
+    service = TariffResolutionService(repository)
+    snapshot_date = date(2025, 7, 15)
+
+    await service.resolve(
+        "GHA",
+        "NGA",
+        "HS2017",
+        "110311",
+        2025,
+        assessment_date=snapshot_date,
+    )
+
+    repository.get_tariff.assert_awaited_once_with(
+        exporter="GHA",
+        importer="NGA",
+        hs_version="HS2017",
+        hs6_code="110311",
+        year=2025,
+        assessment_date=snapshot_date,
+    )
 
 
 @pytest.mark.asyncio

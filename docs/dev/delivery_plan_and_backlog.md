@@ -6,6 +6,16 @@
 - The highest-value next steps are to harden runtime correctness, complete the case workflow, and expose already-built legal traceability and intelligence layers.
 - This plan assumes incremental delivery on the existing v0.1 scope, not a continent-wide expansion.
 
+## Implementation Reconciliation (2026-03-25)
+
+The repository implementation now includes several contract and workflow changes that should be treated as the current baseline for all downstream plans:
+
+- Case orchestration is normalized around `POST /api/v1/cases/{case_id}/assess` and `GET /api/v1/cases/{case_id}/latest` (legacy aliases still exist for compatibility).
+- Tariff schedule validity is resolved against one exact `assessment_date` snapshot, not a whole-year overlap window.
+- `GET /api/v1/tariffs` supports `as_of_date` (defaults to `year-01-01`).
+- Public rule/tariff-facing contracts now expose `provenance_ids` for direct source traversal.
+- Assessment `tariff_outcome` now includes `provenance_ids` so API consumers can keep provenance context without an audit replay call.
+
 ## Milestone 1: Assessment Correctness Hardening
 
 **Goal:** make every assessment legally and technically consistent with the project's architecture rules.

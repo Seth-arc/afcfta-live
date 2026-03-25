@@ -204,6 +204,7 @@ class EligibilityService:
                 request.hs_version,
                 product.hs6_code,
                 request.year,
+                assessment_date=assessment_date,
             )
             audit_checks.append(self._make_tariff_trace_check(tariff_result))
         except TariffNotFoundError:
@@ -844,6 +845,7 @@ class EligibilityService:
             preferential_rate=tariff_result.preferential_rate,
             base_rate=tariff_result.base_rate,
             status=self._tariff_status_for_response(tariff_result),
+            provenance_ids=[str(source_id) for source_id in tariff_result.provenance_ids],
         )
 
     def _tariff_status_for_response(self, tariff_result: TariffResolutionResult) -> str:

@@ -125,6 +125,7 @@ class TariffOutcomeResponse(BaseModel):
     preferential_rate: Decimal | None = None
     base_rate: Decimal | None = None
     status: str
+    provenance_ids: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -159,6 +160,9 @@ class EligibilityAssessmentResponse(BaseModel):
                         "preferential_rate": "0.0000",
                         "base_rate": "15.0000",
                         "status": "in_force",
+                        "provenance_ids": [
+                            "c3d3fd71-d1b2-412e-a708-1685f1f2299f"
+                        ],
                     },
                     "failures": [],
                     "missing_facts": [],

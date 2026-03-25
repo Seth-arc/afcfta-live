@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\schemas\tariffs.py
+# hypothesis_version: 6.151.9
+
+['_mapping', 'base_rate', 'before', 'ignore', 'mfn_base_rate', 'model_dump', 'provenance_ids', 'python', 'rate_source_id', 'rate_status', 'resolved_rate_year', 'schedule_source_id', 'schedule_status', 'staging_year', 'tariff_status', 'unknown']

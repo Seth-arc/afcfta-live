@@ -65,6 +65,7 @@ class PSRRuleResolvedOut(BaseModel):
 
     psr_id: UUID
     source_id: UUID
+    provenance_ids: list[UUID] = Field(default_factory=list)
     appendix_version: str | None = None
     hs_version: str
     hs6_code: str = Field(
@@ -85,6 +86,27 @@ class PSRRuleResolvedOut(BaseModel):
     row_ref: str | None = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_provenance_ids(cls, value: Any) -> Any:
+        """Populate provenance_ids from source_id when callers omit it."""
+
+        if value is None:
+            return value
+        if isinstance(value, dict):
+            payload = dict(value)
+        elif hasattr(value, "model_dump"):
+            payload = value.model_dump(mode="python")
+        elif hasattr(value, "_mapping"):
+            payload = dict(value._mapping)
+        else:
+            return value
+
+        if "provenance_ids" not in payload or payload.get("provenance_ids") is None:
+            source_id = payload.get("source_id")
+            payload["provenance_ids"] = [source_id] if source_id is not None else []
+        return payload
 
 
 class RuleResolutionResult(BaseModel):

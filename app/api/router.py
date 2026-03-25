@@ -39,6 +39,7 @@ protected_router.include_router(intelligence.router)
 assessment_router = APIRouter(
 	dependencies=[Depends(require_authenticated_principal)]
 )
+assessment_router.include_router(cases.assessment_router)
 assessment_router.include_router(assessments.router)
 assessment_router.include_router(assistant.router)
 

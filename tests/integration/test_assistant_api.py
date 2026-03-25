@@ -25,42 +25,16 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from tests.contract_constants import (
+    ASSISTANT_RESPONSE_ENVELOPE_FIELDS,
+    CLARIFICATION_FIELDS,
+    ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS,
+    VALID_ASSISTANT_RESPONSE_TYPES,
+)
 
 pytestmark = pytest.mark.integration
 
 ASSISTANT_URL = "/api/v1/assistant/assess"
-
-REQUIRED_ENVELOPE_FIELDS = {
-    "response_type",
-    "case_id",
-    "evaluation_id",
-    "audit_url",
-    "audit_persisted",
-    "assessment",
-    "clarification",
-    "explanation",
-    "explanation_fallback_used",
-    "error",
-}
-
-REQUIRED_CLARIFICATION_FIELDS = {"question", "missing_facts", "missing_evidence"}
-
-REQUIRED_ASSESSMENT_FIELDS = {
-    "hs6_code",
-    "eligible",
-    "pathway_used",
-    "rule_status",
-    "tariff_outcome",
-    "failures",
-    "missing_facts",
-    "evidence_required",
-    "missing_evidence",
-    "readiness_score",
-    "completeness_ratio",
-    "confidence_class",
-    "audit_persisted",
-}
-
 
 def _minimal_request() -> dict[str, object]:
     """Return a minimally valid assistant request."""
@@ -174,8 +148,8 @@ async def test_assistant_response_contains_all_required_envelope_fields(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert REQUIRED_ENVELOPE_FIELDS.issubset(set(body)), (
-        f"Envelope missing fields: {REQUIRED_ENVELOPE_FIELDS - set(body)}"
+    assert ASSISTANT_RESPONSE_ENVELOPE_FIELDS.issubset(set(body)), (
+        f"Envelope missing fields: {ASSISTANT_RESPONSE_ENVELOPE_FIELDS - set(body)}"
     )
 
 
@@ -188,7 +162,7 @@ async def test_assistant_response_type_is_a_known_discriminator_value(
     response = await async_client.post(ASSISTANT_URL, json=_minimal_request())
 
     assert response.status_code == 200, response.text
-    assert response.json()["response_type"] in {"clarification", "assessment", "error"}
+    assert response.json()["response_type"] in VALID_ASSISTANT_RESPONSE_TYPES
 
 
 @pytest.mark.asyncio
@@ -201,8 +175,8 @@ async def test_assistant_response_with_context_returns_valid_envelope(
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert REQUIRED_ENVELOPE_FIELDS.issubset(set(body))
-    assert body["response_type"] in {"clarification", "assessment", "error"}
+    assert ASSISTANT_RESPONSE_ENVELOPE_FIELDS.issubset(set(body))
+    assert body["response_type"] in VALID_ASSISTANT_RESPONSE_TYPES
 
 
 # ---------------------------------------------------------------------------
@@ -244,8 +218,8 @@ async def test_clarification_payload_has_required_fields(
     if body["response_type"] == "clarification":
         assert body["clarification"] is not None
         clr = body["clarification"]
-        assert REQUIRED_CLARIFICATION_FIELDS.issubset(set(clr)), (
-            f"Clarification missing fields: {REQUIRED_CLARIFICATION_FIELDS - set(clr)}"
+        assert CLARIFICATION_FIELDS.issubset(set(clr)), (
+            f"Clarification missing fields: {CLARIFICATION_FIELDS - set(clr)}"
         )
         assert isinstance(clr["question"], str) and len(clr["question"]) > 0
         assert isinstance(clr["missing_facts"], list)
@@ -313,8 +287,8 @@ async def test_assessment_response_shape_when_type_is_assessment(
         # Assessment payload must carry all deterministic engine fields
         assert body["assessment"] is not None
         asmnt = body["assessment"]
-        assert REQUIRED_ASSESSMENT_FIELDS.issubset(set(asmnt)), (
-            f"Assessment missing fields: {REQUIRED_ASSESSMENT_FIELDS - set(asmnt)}"
+        assert ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS.issubset(set(asmnt)), (
+            f"Assessment missing fields: {ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS - set(asmnt)}"
         )
 
         # Clarification and error must be null for assessment responses
@@ -481,11 +455,11 @@ async def test_assistant_happy_path_returns_assessment_with_all_required_fields(
         )
 
         # Envelope shape
-        assert REQUIRED_ENVELOPE_FIELDS.issubset(set(body))
+        assert ASSISTANT_RESPONSE_ENVELOPE_FIELDS.issubset(set(body))
 
         # Assessment payload
         assert body["assessment"] is not None
-        assert REQUIRED_ASSESSMENT_FIELDS.issubset(set(body["assessment"]))
+        assert ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS.issubset(set(body["assessment"]))
         assert body["assessment"]["hs6_code"] == "110311"
 
         # Clarification and error must be absent for an assessment response

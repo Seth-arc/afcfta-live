@@ -12,6 +12,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 
 from app.api import deps as api_deps
+from app.core.countries import V01_CORRIDORS
 from app.core.enums import (
     AuthorityTierEnum,
     HsLevelEnum,
@@ -590,7 +591,12 @@ def _assert_response_shape(body: Mapping[str, Any]) -> None:
         "audit_persisted",
     }
     if body["tariff_outcome"] is not None:
-        assert set(body["tariff_outcome"]) == {"preferential_rate", "base_rate", "status"}
+        assert set(body["tariff_outcome"]) == {
+            "preferential_rate",
+            "base_rate",
+            "status",
+            "provenance_ids",
+        }
 
 
 def _assert_expected_subset(body: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
@@ -682,8 +688,12 @@ def _assert_blocker_audit_trail(
 async def _select_or_fallback_candidate(year: int = 2025) -> dict[str, Any] | None:
     """Find a live parser-era rule bundle where CTH precedes VNM as an alternative."""
 
+    corridor_predicates = " OR ".join(
+        f"(sh.exporting_scope = '{exporter}' AND sh.importing_state = '{importer}')"
+        for exporter, importer in V01_CORRIDORS
+    )
     statement = text(
-        """
+        f"""
         SELECT
             hp.hs6_code,
             hp.heading,
@@ -704,6 +714,7 @@ async def _select_or_fallback_candidate(year: int = 2025) -> dict[str, Any] | No
           AND (pa.expiry_date IS NULL OR pa.expiry_date >= :assessment_date)
           AND (sh.effective_date IS NULL OR sh.effective_date <= :assessment_date)
           AND (sh.expiry_date IS NULL OR sh.expiry_date >= :assessment_date)
+          AND ({corridor_predicates})
         GROUP BY
             hp.hs6_code,
             hp.heading,
@@ -1059,7 +1070,7 @@ async def test_architecture_blocker_missing_tariff_schedule_persists_blocker_aud
     )
 
     assessment_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        f"/api/v1/cases/{case_id}/assess",
         json={"year": 2025},
     )
 
@@ -1073,7 +1084,7 @@ async def test_architecture_blocker_missing_tariff_schedule_persists_blocker_aud
     assert assessment_body["missing_facts"] == []
     assert assessment_body["evidence_required"] == []
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(f"/api/v1/cases/{case_id}/latest")
 
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
@@ -1112,7 +1123,7 @@ async def test_architecture_blocker_rule_status_pending_persists_blocker_audit_t
     )
 
     assessment_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        f"/api/v1/cases/{case_id}/assess",
         json={"year": 2025},
     )
 
@@ -1123,7 +1134,7 @@ async def test_architecture_blocker_rule_status_pending_persists_blocker_audit_t
     assert assessment_body["failures"] == ["RULE_STATUS_PENDING"]
     assert assessment_body["evidence_required"] == []
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(f"/api/v1/cases/{case_id}/latest")
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
 
@@ -1152,7 +1163,7 @@ async def test_architecture_blocker_missing_core_facts_for_all_pathways_persists
     )
 
     assessment_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        f"/api/v1/cases/{case_id}/assess",
         json={"year": 2025},
     )
 
@@ -1164,7 +1175,7 @@ async def test_architecture_blocker_missing_core_facts_for_all_pathways_persists
     assert set(assessment_body["missing_facts"]) == {"ex_works", "non_originating"}
     assert assessment_body["evidence_required"] == []
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(f"/api/v1/cases/{case_id}/latest")
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
 
@@ -1196,7 +1207,7 @@ async def test_architecture_blocker_corridor_not_yet_operational_persists_blocke
     )
 
     assessment_response = await async_client.post(
-        f"/api/v1/assessments/cases/{case_id}",
+        f"/api/v1/cases/{case_id}/assess",
         json={"year": 2025},
     )
 
@@ -1208,7 +1219,7 @@ async def test_architecture_blocker_corridor_not_yet_operational_persists_blocke
     assert assessment_body["missing_facts"] == []
     assert assessment_body["evidence_required"] == []
 
-    latest_response = await async_client.get(f"/api/v1/audit/cases/{case_id}/latest")
+    latest_response = await async_client.get(f"/api/v1/cases/{case_id}/latest")
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
 

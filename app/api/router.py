@@ -8,6 +8,7 @@ from app.api.deps import (
 )
 from app.api.v1 import (
 	assessments,
+	assistant,
 	audit,
 	cases,
 	evidence,
@@ -39,6 +40,7 @@ assessment_router = APIRouter(
 	dependencies=[Depends(require_authenticated_principal)]
 )
 assessment_router.include_router(assessments.router)
+assessment_router.include_router(assistant.router)
 
 api_router.include_router(protected_router)
 api_router.include_router(assessment_router)

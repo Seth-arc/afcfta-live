@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\api\v1\assistant.py
+# hypothesis_version: 6.151.9
+
+['/assistant/assess', 'clarification', 'exporter', 'hs6_code', 'importer', 'year']

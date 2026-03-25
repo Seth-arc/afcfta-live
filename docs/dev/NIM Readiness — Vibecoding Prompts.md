@@ -103,7 +103,7 @@ When done, summarize:
 ```bash
 git diff docs/dev/NIM\ Integration\ —\ Vibecoding\ Prompts.md
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 2 — Build a thin assistant-facing contract harness
@@ -139,7 +139,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_assistant_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 3 — Create NIM module structure with strict dependency boundaries
@@ -183,7 +183,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_assistant_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 4 — Implement the NIM client wrapper with safe failure semantics
@@ -224,7 +224,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 5 — Define and validate the intake schema against live backend contracts

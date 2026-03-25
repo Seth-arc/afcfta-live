@@ -23,7 +23,10 @@
       "Bash(python -m pytest tests/integration/test_golden_path.py tests/integration/test_audit_api.py -q --timeout=60)",
       "Bash(python -m pytest tests/integration/test_golden_path.py::test_assessment_request_accepts_submitted_documents_alias_and_returns_canonical_contract -x -s)",
       "Bash(python -m pytest tests/unit/ -q)",
-      "Read(//c/Users/ssnguna/**)"
+      "Read(//c/Users/ssnguna/**)",
+      "Bash(.venv/Scripts/python.exe -c \":*)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_assistant_api.py -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_nim_client.py -v)"
     ]
   }
 }

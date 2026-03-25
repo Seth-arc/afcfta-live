@@ -55,6 +55,17 @@ class Settings(BaseSettings):
     SENTRY_DSN: str | None = None
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0
 
+    # NIM assistant integration
+    # Set NIM_ENABLED=false to disable model calls and return None from NimClient.
+    # NIM_BASE_URL, NIM_API_KEY, and NIM_MODEL must be non-empty when NIM_ENABLED=true.
+    # The deps factory validates this at startup.
+    NIM_ENABLED: bool = False
+    NIM_BASE_URL: str = ""
+    NIM_API_KEY: str = ""
+    NIM_MODEL: str = ""
+    NIM_TIMEOUT_SECONDS: float = 30.0
+    NIM_MAX_RETRIES: int = 2
+
     # Application metadata
     APP_TITLE: str = "AfCFTA Intelligence API"
     APP_VERSION: str = "0.1.0"

@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\services\nim\client.py
+# hypothesis_version: 6.151.9
+
+[0.5, 30.0, 429, 500, 502, 503, 504, '/', 'Authorization', 'Content-Type', 'application/json', 'choices', 'connect_error', 'content', 'http_error', 'json_object', 'max_retries_exceeded', 'message', 'messages', 'model', 'response_format', 'role', 'system', 'temperature', 'timeout', 'type', 'unknown', 'user']

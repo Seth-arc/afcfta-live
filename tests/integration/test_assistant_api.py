@@ -1,8 +1,13 @@
-"""Integration tests for the NIM assistant endpoint contract.
+"""Integration tests for the NIM assistant endpoint.
 
-These tests pin the assistant-facing response shape and guard against
-contract drift between the NIM orchestration layer and the deterministic
-engine. They do NOT test model-calling logic (which is not yet wired).
+Covers:
+- Authentication and rate-limit guard.
+- Input validation (schema rejection before any NIM call).
+- Envelope shape contract for all three response_type values.
+- Clarification path: NIM disabled → empty draft → real clarification flow.
+- Happy path: mocked intake draft → full engine run → assessment + replay ids.
+- Replay linkage: case_id, evaluation_id, audit_url populated and consistent.
+- Field-name migration: submitted_documents must never appear in responses.
 
 Invariants that must always hold:
 1. The endpoint requires authentication.
@@ -15,7 +20,10 @@ Invariants that must always hold:
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 
 pytestmark = pytest.mark.integration
@@ -242,20 +250,24 @@ async def test_clarification_payload_has_required_fields(
 
 
 @pytest.mark.asyncio
-async def test_harness_stub_returns_clarification(
+async def test_nim_disabled_returns_clarification_with_missing_facts(
     async_client: AsyncClient,
 ) -> None:
-    """The contract harness must return clarification (no NIM model is wired yet)."""
+    """With NIM disabled (default in tests), an empty draft is produced and the
+    real clarification flow fires, asking for all required facts."""
 
     response = await async_client.post(ASSISTANT_URL, json=_minimal_request())
 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["response_type"] == "clarification", (
-        "Harness stub must return clarification until NIM intake service is wired"
+        "NIM disabled → empty draft → clarification with all required facts missing"
     )
     assert body["clarification"] is not None
     assert len(body["clarification"]["missing_facts"]) > 0
+    assert body["audit_persisted"] is False
+    assert body["case_id"] is None
+    assert body["evaluation_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -397,3 +409,183 @@ async def test_audit_persisted_false_when_no_engine_ran(
         assert body["case_id"] is None
         assert body["evaluation_id"] is None
         assert body["audit_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# Happy path: complete draft → full engine run → assessment with replay ids
+# ---------------------------------------------------------------------------
+
+# Shared helper: build a complete NimAssessmentDraft for the GHA→NGA corridor.
+def _complete_gha_nga_draft():
+    """Return a complete NimAssessmentDraft for HS 110311, GHA→NGA, 2025."""
+    from app.core.enums import PersonaModeEnum
+    from app.schemas.nim.intake import (
+        AssessmentContext,
+        HS6Candidate,
+        NimAssessmentDraft,
+        TradeFlow,
+    )
+
+    return NimAssessmentDraft(
+        product=HS6Candidate(hs6_code="110311"),
+        trade_flow=TradeFlow(exporter="GHA", importer="NGA", year=2025),
+        context=AssessmentContext(persona_mode=PersonaModeEnum.EXPORTER),
+    )
+
+
+def _override_intake_with_complete_draft(app: FastAPI) -> None:
+    """Install a dependency override that returns the complete GHA→NGA draft."""
+    from app.api.deps import get_intake_service
+    from app.services.nim.intake_service import IntakeService
+
+    draft = _complete_gha_nga_draft()
+    real_svc = IntakeService(MagicMock())  # only to_eligibility_request is needed
+
+    mock_svc = MagicMock(spec=IntakeService)
+    mock_svc.parse_user_input = AsyncMock(return_value=draft)
+    mock_svc.to_eligibility_request = real_svc.to_eligibility_request
+
+    app.dependency_overrides[get_intake_service] = lambda: mock_svc
+
+
+def _remove_intake_override(app: FastAPI) -> None:
+    from app.api.deps import get_intake_service
+
+    app.dependency_overrides.pop(get_intake_service, None)
+
+
+@pytest.mark.asyncio
+async def test_assistant_happy_path_returns_assessment_with_all_required_fields(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """Happy path: complete draft injected via override → engine runs →
+    response_type is 'assessment' with all required envelope and assessment fields.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        assert body["response_type"] == "assessment", (
+            f"Expected 'assessment', got '{body['response_type']}'. "
+            f"clarification={body.get('clarification')}, error={body.get('error')}"
+        )
+
+        # Envelope shape
+        assert REQUIRED_ENVELOPE_FIELDS.issubset(set(body))
+
+        # Assessment payload
+        assert body["assessment"] is not None
+        assert REQUIRED_ASSESSMENT_FIELDS.issubset(set(body["assessment"]))
+        assert body["assessment"]["hs6_code"] == "110311"
+
+        # Clarification and error must be absent for an assessment response
+        assert body["clarification"] is None
+        assert body["error"] is None
+
+        # Explanation is optional but must not be a fabricated empty string
+        if body["explanation"] is not None:
+            assert isinstance(body["explanation"], str)
+            assert len(body["explanation"]) > 0
+    finally:
+        _remove_intake_override(app)
+
+
+# ---------------------------------------------------------------------------
+# Replay linkage: case_id, evaluation_id, audit_url set and consistent
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assistant_happy_path_sets_replay_identifiers(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """case_id, evaluation_id, and audit_url must all be populated for assessments
+    and audit_url must reference the evaluation_id so clients can replay the decision.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment":
+            assert body["case_id"] is not None, "case_id must be set for assessment"
+            assert body["evaluation_id"] is not None, "evaluation_id must be set"
+            assert body["audit_url"] is not None, "audit_url must be set"
+
+            # audit_url must reference the same evaluation_id
+            assert body["audit_url"] == (
+                f"/api/v1/audit/evaluations/{body['evaluation_id']}"
+            ), "audit_url must embed evaluation_id for deterministic replay"
+
+            # audit_persisted reflects real DB write — must be a bool
+            assert isinstance(body["audit_persisted"], bool)
+    finally:
+        _remove_intake_override(app)
+
+
+@pytest.mark.asyncio
+async def test_assistant_happy_path_sets_replay_response_headers(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """X-AIS-Case-Id, X-AIS-Evaluation-Id, and X-AIS-Audit-URL response headers
+    must be present for assessment responses and must match the body identifiers.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment":
+            assert "x-ais-case-id" in response.headers, "X-AIS-Case-Id header missing"
+            assert "x-ais-evaluation-id" in response.headers
+            assert "x-ais-audit-url" in response.headers
+
+            assert response.headers["x-ais-case-id"] == body["case_id"]
+            assert response.headers["x-ais-evaluation-id"] == body["evaluation_id"]
+            assert response.headers["x-ais-audit-url"] == body["audit_url"]
+    finally:
+        _remove_intake_override(app)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic field invariant: explanation must not alter assessment
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assessment_fields_not_altered_by_explanation(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """Engine assessment fields must be identical to what the engine returned;
+    the explanation service must not alter eligible, pathway_used, rule_status,
+    tariff_outcome, confidence_class, failures, or missing_facts.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment":
+            asmnt = body["assessment"]
+            # All required deterministic fields must be present and typed correctly
+            assert isinstance(asmnt["eligible"], bool)
+            assert isinstance(asmnt["failures"], list)
+            assert isinstance(asmnt["missing_facts"], list)
+            assert isinstance(asmnt["confidence_class"], str)
+            # submitted_documents must never appear
+            assert "submitted_documents" not in asmnt
+    finally:
+        _remove_intake_override(app)

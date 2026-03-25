@@ -331,3 +331,81 @@ async def get_assessment_eligibility_service(
     """Return the assessment orchestrator bound to a repeatable-read session."""
 
     return _build_eligibility_service(session)
+
+
+def assessment_eligibility_service_context():
+    """Return an async context manager that yields an EligibilityService bound
+    to a REPEATABLE READ session.
+
+    Unlike ``get_assessment_eligibility_service`` (which is a FastAPI
+    ``Depends`` and opens the DB connection eagerly for every request),
+    this helper creates the DB connection only when the ``async with`` block
+    is entered. The assistant handler enters it only on the assessment path,
+    so clarification and 422 responses are served without any DB access.
+
+    Usage::
+
+        async with assessment_eligibility_service_context() as eligibility_svc:
+            result = await eligibility_svc.assess_interface_request(request)
+    """
+    from contextlib import asynccontextmanager
+
+    from app.db.session import assessment_session_context
+
+    @asynccontextmanager
+    async def _ctx():
+        async with assessment_session_context() as session:
+            yield _build_eligibility_service(session)
+
+    return _ctx()
+
+
+# ---------------------------------------------------------------------------
+# NIM service factories
+# ---------------------------------------------------------------------------
+
+
+def get_nim_client(settings: Settings = Depends(get_settings)) -> "NimClient":
+    """Return a NimClient configured from application settings.
+
+    When NIM_ENABLED is False (the default), the client is constructed but
+    generate_json() returns None immediately, so all NIM services fall back
+    to their deterministic paths without making any HTTP calls.
+    """
+    from app.services.nim.client import NimClient
+
+    return NimClient(
+        base_url=settings.NIM_BASE_URL,
+        api_key=settings.NIM_API_KEY,
+        model=settings.NIM_MODEL,
+        enabled=settings.NIM_ENABLED,
+        timeout_seconds=settings.NIM_TIMEOUT_SECONDS,
+        max_retries=settings.NIM_MAX_RETRIES,
+    )
+
+
+def get_intake_service(
+    nim_client: "NimClient" = Depends(get_nim_client),
+) -> "IntakeService":
+    """Return an IntakeService bound to the request-scoped NimClient."""
+    from app.services.nim.intake_service import IntakeService
+
+    return IntakeService(nim_client)
+
+
+def get_clarification_service(
+    nim_client: "NimClient" = Depends(get_nim_client),
+) -> "ClarificationService":
+    """Return a ClarificationService bound to the request-scoped NimClient."""
+    from app.services.nim.clarification_service import ClarificationService
+
+    return ClarificationService(nim_client)
+
+
+def get_explanation_service(
+    nim_client: "NimClient" = Depends(get_nim_client),
+) -> "ExplanationService":
+    """Return an ExplanationService bound to the request-scoped NimClient."""
+    from app.services.nim.explanation_service import ExplanationService
+
+    return ExplanationService(nim_client)

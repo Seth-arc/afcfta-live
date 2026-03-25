@@ -490,6 +490,81 @@ If `pool_pressure` is `saturated` and p95 latency is high, the bottleneck
 is the connection pool, not the application logic.  Increase `DB_POOL_SIZE`
 (and `DB_POOL_MAX_OVERFLOW`) or add Uvicorn workers before scaling load further.
 
+### Multi-worker comparison
+
+`tests/load/run_multi_worker_comparison.py` measures the throughput difference
+between a single-worker and a multi-worker server by running the burst scenario
+against two separately started instances and printing a side-by-side report.
+
+**The script does not start or stop server processes.**
+Start both servers before running it.
+
+#### Step 1 — start the two servers (two terminal windows, same database)
+
+**Terminal A — single worker (port 8001):**
+
+```bash
+# Copy your prod env and override worker count and port
+cp .env.prod .env.single
+# Edit .env.single: set RATE_LIMIT_ENABLED=false
+UVICORN_WORKERS=1 DATABASE_URL="postgresql+asyncpg://afcfta:<password>@localhost:5432/afcfta" \
+  ENV=development API_AUTH_KEY=$AIS_API_KEY \
+  uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
+```
+
+**Terminal B — multi-worker (port 8002):**
+
+```bash
+UVICORN_WORKERS=4 DATABASE_URL="postgresql+asyncpg://afcfta:<password>@localhost:5432/afcfta" \
+  ENV=development API_AUTH_KEY=$AIS_API_KEY \
+  RATE_LIMIT_ENABLED=false \
+  uvicorn app.main:app --host 0.0.0.0 --port 8002 --workers 4
+```
+
+Both servers share the same database.  The DB connection pool is per-worker,
+so 4 workers × `DB_POOL_SIZE=5` = up to 20 simultaneous DB connections.
+Set `DB_POOL_SIZE` and `DB_POOL_MAX_OVERFLOW` accordingly before running.
+
+#### Step 2 — run the comparison
+
+```bash
+python tests/load/run_multi_worker_comparison.py \
+    --single-url http://localhost:8001 \
+    --multi-url  http://localhost:8002 \
+    --api-key    $AIS_API_KEY \
+    --concurrency 50 \
+    --requests 200
+```
+
+Report is written to `artifacts/multi-worker-comparison.json`.
+
+#### Expected outcome and acceptance bar
+
+Linear throughput scaling (2× workers → 2× RPS) is unlikely because:
+
+- The database connection pool is the shared bottleneck.  Each worker holds
+  its own pool, but all pools share the same PostgreSQL instance.
+- Uvicorn's async workers handle I/O concurrency well within a single process;
+  adding workers mainly helps CPU-bound work and independent event-loop tasks.
+- At low concurrency levels the single worker may already be mostly idle,
+  leaving little headroom for multi-worker gains.
+
+**Acceptance bar before raising `UVICORN_WORKERS` in production:**
+
+| Check | Required result |
+|---|---|
+| Multi-worker `success_rate_pct` | ≥ 95 % |
+| Multi-worker throughput (`throughput_rps`) | > single-worker throughput |
+| Multi-worker p95 latency | ≤ single-worker p95 (multi-worker should not be slower) |
+| `pool_pressure` on both servers | not `saturated` during the run |
+
+If multi-worker throughput is not meaningfully higher than single-worker,
+the bottleneck is the database or network, not worker count.  Address pool
+tuning (`DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW`) or query performance first.
+
+Do not raise `UVICORN_WORKERS` in production without a comparison run that
+passes all four checks above.
+
 ### What still needs true performance infrastructure
 
 The harness is intentionally minimal — stdlib `asyncio` + `httpx`.

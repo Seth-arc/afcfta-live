@@ -498,3 +498,60 @@ Review [docs/dev/testing.md](testing.md) for the list of repository paths only
 reachable with a live stack that are not yet covered by integration tests. Confirm
 none of those paths are exercised by the first trader-facing flows before enabling
 public access.
+
+---
+
+## 10. Tuning UVICORN_WORKERS
+
+The default `UVICORN_WORKERS=2` is a conservative starting point for a single-host
+deployment.  Do not raise this value without first running the multi-worker comparison
+harness described in [docs/dev/testing.md](testing.md#multi-worker-comparison).
+
+### 10.1 Run the comparison harness
+
+Before changing `UVICORN_WORKERS` in `.env.prod`, validate on staging or on the
+production host before routing live traffic:
+
+1. Start a single-worker instance on port 8001 and a multi-worker instance on
+   port 8002 pointing at the same database (see testing.md for exact commands).
+2. Run:
+
+```bash
+python tests/load/run_multi_worker_comparison.py \
+    --single-url http://localhost:8001 \
+    --multi-url  http://localhost:8002 \
+    --api-key    $AIS_API_KEY \
+    --concurrency 50 \
+    --requests 200
+```
+
+3. Confirm all four acceptance checks pass before promoting the new worker count:
+
+| Check | Required |
+|---|---|
+| Multi-worker `success_rate_pct` | ≥ 95 % |
+| Multi-worker `throughput_rps` | > single-worker |
+| Multi-worker p95 latency | ≤ single-worker p95 |
+| `pool_pressure` on both instances | not `saturated` |
+
+### 10.2 Pool sizing when raising workers
+
+Each Uvicorn worker holds its own connection pool.  With `UVICORN_WORKERS=4`
+and `DB_POOL_SIZE=5`, the API can hold up to 20 simultaneous database
+connections.  Confirm your PostgreSQL `max_connections` setting can accommodate
+`UVICORN_WORKERS × (DB_POOL_SIZE + DB_POOL_MAX_OVERFLOW)` before deploying.
+
+### 10.3 Apply the change
+
+Once the comparison run passes:
+
+```bash
+# Update .env.prod
+UVICORN_WORKERS=4   # or whichever value was tested
+
+# Restart the API service (zero downtime requires a load balancer)
+docker compose -f ./docker-compose.prod.yml up -d api
+```
+
+Verify the readiness endpoint returns healthy and re-run the operator checklist
+from section 4.

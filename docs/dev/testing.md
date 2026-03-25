@@ -206,19 +206,22 @@ Current CI stages:
 1. `lint`
 2. `unit-tests`
 3. `integration-tests`
-4. `docker-build`
+4. `load-baseline`
+5. `docker-build`
 
 What each stage protects:
 
 - `lint` protects baseline code style and fast static hygiene with `python -m ruff check app tests scripts`
 - `unit-tests` protects service logic, helpers, and fast deterministic regressions with `python -m pytest tests/unit -v`
 - `integration-tests` protects live API and database behavior by starting PostgreSQL, applying Alembic migrations, seeding deterministic data, and running `python -m pytest tests/integration -v`
+- `load-baseline` protects against performance regressions by running a small burst load test and comparing results against a committed baseline
 - `docker-build` protects the production container artifact by validating `docker build -t afcfta-intelligence:ci .`
 
 CI artifact and report locations:
 
 - `artifacts/unit-tests.xml`
 - `artifacts/integration-tests.xml`
+- `artifacts/load-report-ci.json`
 
 Those files are uploaded as workflow artifacts so later coverage or image-validation prompts have stable report paths to extend.
 
@@ -228,6 +231,65 @@ CI assumptions:
 - integration tests can reach PostgreSQL on `localhost:5432`
 - the integration job installs `psycopg2-binary` because `scripts/seed_data.py` uses the sync SQLAlchemy engine path
 - no repository secrets are required for the current CI stages
+
+## Load Baseline
+
+The `load-baseline` CI job detects performance regressions on every push and pull request.
+
+### What it does
+
+1. Starts PostgreSQL, applies migrations, and seeds reference data.
+2. Starts the FastAPI app with `uvicorn` and `RATE_LIMIT_ENABLED=false`.
+3. Runs a small burst: `--concurrency 10 --requests 50`.
+4. Compares the resulting `artifacts/load-report-ci.json` against the committed baseline at `tests/load/baseline.json` using `tests/load/compare_reports.py`.
+
+### Comparison metrics and tolerances
+
+| Metric | Check | Default tolerance |
+|---|---|---|
+| `metrics.latency_s.p95` | Must not exceed `baseline_p95 × 1.25` | 25% increase |
+| `metrics.success_rate_pct` | Must be ≥ 95% | fixed floor |
+
+The job fails if either check fails. The CI report is uploaded as the `load-baseline-report` artifact on every run.
+
+### How to update the baseline
+
+Only update the baseline when a deliberate change — new query, schema migration, middleware addition — is expected to shift performance.
+
+**Steps:**
+
+1. Run the CI-scale burst locally against your running stack:
+
+```bash
+python tests/load/run_load_test.py \
+  --mode burst \
+  --concurrency 10 \
+  --requests 50 \
+  --api-key $AIS_API_KEY \
+  --report artifacts/load-report-ci.json
+```
+
+2. Verify the new numbers are intentional (not a bug):
+
+```bash
+python tests/load/compare_reports.py \
+  --baseline tests/load/baseline.json \
+  --report artifacts/load-report-ci.json
+```
+
+3. Promote the report to the new baseline:
+
+```bash
+cp artifacts/load-report-ci.json tests/load/baseline.json
+git add tests/load/baseline.json
+git commit -m "chore: update load baseline after <reason>"
+```
+
+Alternatively, download the `load-baseline-report` artifact from a passing CI run and use that as the new baseline — it reflects GitHub Actions runner performance rather than local performance.
+
+### First-run note
+
+The committed `tests/load/baseline.json` uses a conservative p95 of 2.0 s to avoid false positives on the first CI run. After the first successful CI run, download the `load-baseline-report` artifact and promote it as described above to tighten the baseline to actual measured CI performance.
 
 ## Load Testing
 

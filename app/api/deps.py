@@ -209,6 +209,7 @@ def _build_eligibility_service(session: AsyncSession) -> EligibilityService:
         audit_service=AuditService(
             evaluations_repository=EvaluationsRepository(session),
             cases_repository=CasesRepository(session),
+            sources_repository=SourcesRepository(session),
         ),
     )
 
@@ -245,6 +246,7 @@ async def get_audit_service(
     return AuditService(
         evaluations_repository=EvaluationsRepository(session),
         cases_repository=CasesRepository(session),
+        sources_repository=SourcesRepository(session),
     )
 
 

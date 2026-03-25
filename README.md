@@ -316,6 +316,29 @@ for DB-dependent repository paths only reachable with a live stack.
 See [docs/dev/testing.md](docs/dev/testing.md) for the explicit coverage commands and the list of
 code areas that need the next wave of tests.
 
+## Load Testing
+
+A lightweight load test harness lives in [`tests/load/`](tests/load/).
+It requires no special tooling — only a running stack and `httpx` (already a dev dependency).
+
+```bash
+export RATE_LIMIT_ENABLED=false   # required — default limit is 10 req/60 s
+export AIS_API_KEY=your-api-key
+
+python tests/load/run_load_test.py --concurrency 50 --requests 200
+```
+
+The harness sends 200 requests across 5 deterministic seeded payloads (GHA→NGA CTH,
+CMR→NGA VNM, CIV→NGA WO, SEN→NGA VNM, CMR→NGA VNM-fail) with 50 concurrent workers.
+It captures success rate, throughput (req/s), and latency percentiles (p50/p75/p95/p99)
+for successful requests only.
+
+Output: human-readable terminal summary + `artifacts/load-report.json`.
+Exit code 1 if success rate falls below `--fail-under` (default 95 %).
+
+See [docs/dev/testing.md](docs/dev/testing.md) for full documentation including
+prerequisites, interpretation guidance, and the gap list for true performance infrastructure.
+
 ## Architecture
 
 AIS uses a layered architecture: thin API handlers, business logic in services, SQL in repositories, and explicit database models and schemas underneath. Every operational layer resolves through a canonical HS6 product spine, which eliminates text-matching ambiguity across rules, tariffs, statuses, and evidence. The engine is deterministic boolean execution, not ML scoring, so the same inputs produce the same outputs.

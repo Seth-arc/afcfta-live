@@ -229,6 +229,95 @@ CI assumptions:
 - the integration job installs `psycopg2-binary` because `scripts/seed_data.py` uses the sync SQLAlchemy engine path
 - no repository secrets are required for the current CI stages
 
+## Load Testing
+
+The load test harness lives in [`tests/load/`](../../tests/load/).
+It is a standalone Python script, not a pytest test, and requires no
+special infrastructure beyond a running AIS stack.
+
+### Scenario: sustained-concurrent
+
+| Parameter | Value |
+|---|---|
+| Endpoint | `POST /api/v1/assessments` |
+| Payloads | 5 deterministic fixtures (round-robin): GHA→NGA CTH, CMR→NGA VNM pass, CIV→NGA WO, SEN→NGA VNM, CMR→NGA VNM fail |
+| Default concurrency | 50 simultaneous workers |
+| Default total requests | 200 |
+| Per-request timeout | 30 s |
+| Default success threshold | 95 % (2xx responses) |
+
+All payloads match seeded HS6/corridor combinations in the deterministic
+seed slice.  The harness never generates random data.
+
+### Prerequisites
+
+```bash
+# Stack must be running with migrations and seed data applied.
+docker compose up -d
+python -m alembic upgrade head
+python scripts/seed_data.py
+
+# Disable the in-process rate limiter — the default is 10 reqs/60 s,
+# which would rate-limit most of a 200-request run before it completes.
+export RATE_LIMIT_ENABLED=false
+
+# Supply credentials.
+export AIS_API_KEY=your-local-dev-api-key
+```
+
+### Running
+
+```bash
+# Defaults: 50 concurrent, 200 total, http://localhost:8000
+python tests/load/run_load_test.py
+
+# Custom scale:
+python tests/load/run_load_test.py --concurrency 100 --requests 500
+
+# Against staging:
+python tests/load/run_load_test.py \
+  --url https://ais-staging.example.com \
+  --api-key $STAGING_API_KEY \
+  --concurrency 50 --requests 200
+```
+
+### Metrics captured
+
+| Metric | Description |
+|---|---|
+| `successful_2xx` | Count and percentage of HTTP 200 responses |
+| `rate_limited_429` | Count of HTTP 429 responses — high values indicate rate-limiter saturation |
+| `network_errors` | Count of connection/timeout failures |
+| `wall_elapsed_s` | Total wall-clock duration of the run |
+| `throughput_rps` | Effective requests per second |
+| `latency_s.min/p50/p75/p95/p99/max` | Latency distribution for successful requests only |
+
+The harness prints a human-readable summary to stdout and writes a
+machine-readable JSON report to `artifacts/load-report.json`.
+
+### Interpreting results
+
+- A 429-heavy run means `RATE_LIMIT_ENABLED=false` was not set, or the
+  `RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS` limit was too low. This is not a
+  capacity signal — it is a configuration signal.
+- p95 latency above 500 ms under 50 concurrent workers suggests the
+  connection pool or worker count needs tuning.
+- If `success_rate_pct` falls below `--fail-under` (default 95), the script
+  exits with code 1 so it can gate a staging deploy.
+
+### What still needs true performance infrastructure
+
+The current harness is intentionally minimal — stdlib `asyncio` + `httpx`.
+Before a trader-facing deployment, replace or supplement it with:
+
+| Gap | Tooling to add |
+|---|---|
+| Sustained ramp (not just burst) | `locust` or `k6` ramp profile |
+| Latency percentile tracking across multiple runs | Grafana + Prometheus or Datadog |
+| DB pool saturation signal | `pg_stat_activity` metrics exported via Postgres exporter |
+| Multi-worker concurrency | Run from separate machines or use a distributed load tool |
+| Baseline comparison | Store `load-report.json` as a CI artifact and diff p95 between runs |
+
 ## What New Code Must Be Tested
 
 At minimum:

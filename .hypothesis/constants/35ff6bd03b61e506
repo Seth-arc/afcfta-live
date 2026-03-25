@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\repositories\rules_repository.py
+# hypothesis_version: 6.151.9
+
+['assessment_date', 'components', 'hs6_code', 'hs6_id', 'hs_version', 'pathways', 'psr', 'psr_components', 'psr_id']

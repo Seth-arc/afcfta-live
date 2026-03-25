@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\repositories\tariffs_repository.py
+# hypothesis_version: 6.151.9
+
+['exporter', 'hs6_code', 'hs_version', 'importer', 'preferential_rate', 'rate_page_ref', 'rate_source_id', 'rate_status', 'requested_year', 'resolved_rate_year', 'schedule_line_id', 'tariff', 'used_fallback_rate', 'year', 'year_end', 'year_rate_id', 'year_start']

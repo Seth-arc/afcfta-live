@@ -145,6 +145,39 @@ class SourcesRepository:
         result = await self.session.execute(statement)
         return result.mappings().first()
 
+    async def get_provisions_for_source(
+        self,
+        source_id: str,
+        limit: int = 5,
+    ) -> list[Mapping[str, Any]]:
+        """Return thin provision summaries for one source, ordered by authority weight.
+
+        Projects only the fields needed for ``ProvisionSummary``; full text is excluded to
+        keep audit responses compact.  Callers follow ``provision_id`` to
+        ``GET /api/v1/provisions/{provision_id}`` for the verbatim text.
+        """
+
+        provision_table = LegalProvision.__table__
+        statement = (
+            select(
+                provision_table.c.provision_id,
+                provision_table.c.instrument_name,
+                provision_table.c.article_ref,
+                provision_table.c.annex_ref,
+                provision_table.c.topic_primary,
+                provision_table.c.page_start,
+                provision_table.c.page_end,
+            )
+            .where(provision_table.c.source_id == source_id)
+            .order_by(
+                provision_table.c.authority_weight.desc(),
+                provision_table.c.created_at.asc(),
+            )
+            .limit(limit)
+        )
+        result = await self.session.execute(statement)
+        return list(result.mappings().all())
+
     async def lookup_by_topic(self, topic: str, limit: int = 10) -> list[Mapping[str, Any]]:
         provision_table = LegalProvision.__table__
         statement = (

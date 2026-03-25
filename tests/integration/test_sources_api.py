@@ -243,3 +243,61 @@ async def test_list_provisions_supports_topic_and_source_filters(async_client: A
     assert str(non_matching_source["provision_id"]) not in returned_ids
     assert all(row["topic_primary"] == "tariff_liberalisation" for row in body)
     assert all(row["source_id"] == str(matching_source["source_id"]) for row in body)
+
+
+@pytest.mark.asyncio
+async def test_provisions_source_id_filter_is_the_traversal_path_from_audit_provenance(
+    async_client: AsyncClient,
+) -> None:
+    """GET /provisions?source_id= must be the canonical traversal path from audit provenance source_id.
+
+    This test pins the contract that a client holding a ``source_id`` from
+    ``final_decision.provenance.rule.source_id`` or
+    ``final_decision.provenance.tariff.schedule_source_id`` can resolve all backing
+    provisions by issuing ``GET /provisions?source_id={source_id}``.
+    """
+
+    source = await _create_source(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        status="current",
+        short_title_suffix=f"traversal-{uuid4()}",
+    )
+    source_id = str(source["source_id"])
+
+    p1 = await _create_provision(
+        source_id=source_id,
+        topic_primary="origin_rules",
+        annex_ref="Annex 2",
+        instrument_name_suffix=f"traversal-a-{uuid4()}",
+    )
+    p2 = await _create_provision(
+        source_id=source_id,
+        topic_primary="tariff_liberalisation",
+        annex_ref="Annex 1",
+        instrument_name_suffix=f"traversal-b-{uuid4()}",
+    )
+
+    # The traversal query: source_id only, no topic filter — returns all provisions for that source
+    response = await async_client.get(
+        "/api/v1/provisions",
+        params={"source_id": source_id, "limit": 10, "offset": 0},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    returned_ids = {row["provision_id"] for row in body}
+    assert str(p1["provision_id"]) in returned_ids
+    assert str(p2["provision_id"]) in returned_ids
+    assert all(row["source_id"] == source_id for row in body)
+
+    # Each provision returned must also resolve individually
+    for row in body:
+        if row["provision_id"] not in {str(p1["provision_id"]), str(p2["provision_id"])}:
+            continue
+        detail_response = await async_client.get(f"/api/v1/provisions/{row['provision_id']}")
+        assert detail_response.status_code == 200, detail_response.text
+        detail = detail_response.json()
+        assert detail["provision_id"] == row["provision_id"]
+        assert detail["source_id"] == source_id
+        assert "provision_text_verbatim" in detail

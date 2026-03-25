@@ -314,6 +314,14 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
     assert trail_body["final_decision"]["provenance"]["tariff"][
         "schedule_source_id"
     ] == trail_body["tariff_outcome"]["schedule_source_id"]
+    assert "supporting_provisions" in trail_body["final_decision"]["provenance"]["rule"]
+    assert "supporting_provisions" in trail_body["final_decision"]["provenance"]["tariff"]
+    assert isinstance(
+        trail_body["final_decision"]["provenance"]["rule"]["supporting_provisions"], list
+    )
+    assert isinstance(
+        trail_body["final_decision"]["provenance"]["tariff"]["supporting_provisions"], list
+    )
 
     check_types = {check["check_type"] for check in trail_body["atomic_checks"]}
     assert {
@@ -824,3 +832,118 @@ async def test_audit_replay_surfaces_complete_document_pack_readiness(
     assert latest_body["final_decision"]["missing_evidence"] == []
     assert latest_body["final_decision"]["readiness_score"] == 1.0
     assert latest_body["final_decision"]["completeness_ratio"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_rule_provenance_supporting_provisions_are_populated(
+    async_client: AsyncClient,
+) -> None:
+    """Rule provenance in the audit trail should embed thin provision summaries for the governing source."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported candidate for provision-linkage test.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code=candidate["hs6_code"],
+            exporter=candidate["exporter"],
+            importer=candidate["importer"],
+            facts=facts,
+        ),
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    _, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    trail_body = trail_response.json()
+
+    provenance = trail_body["final_decision"]["provenance"]
+    assert provenance is not None
+
+    rule_prov = provenance["rule"]
+    assert rule_prov is not None
+    assert "supporting_provisions" in rule_prov
+    rule_provisions = rule_prov["supporting_provisions"]
+    assert isinstance(rule_provisions, list)
+
+    for prov in rule_provisions:
+        assert "provision_id" in prov
+        assert "instrument_name" in prov
+        assert "topic_primary" in prov
+        # Each provision_id must be reachable via the provisions API
+        prov_response = await async_client.get(f"/api/v1/provisions/{prov['provision_id']}")
+        assert prov_response.status_code == 200, (
+            f"Provision {prov['provision_id']} from audit trail was not reachable: "
+            f"{prov_response.text}"
+        )
+        prov_body = prov_response.json()
+        assert prov_body["provision_id"] == prov["provision_id"]
+        assert prov_body["instrument_name"] == prov["instrument_name"]
+        assert prov_body["topic_primary"] == prov["topic_primary"]
+
+    tariff_prov = provenance.get("tariff")
+    if tariff_prov is not None:
+        assert "supporting_provisions" in tariff_prov
+        for prov in tariff_prov["supporting_provisions"]:
+            assert "provision_id" in prov
+            prov_response = await async_client.get(f"/api/v1/provisions/{prov['provision_id']}")
+            assert prov_response.status_code == 200, prov_response.text
+            assert prov_response.json()["provision_id"] == prov["provision_id"]
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_provenance_source_id_resolves_via_sources_api(
+    async_client: AsyncClient,
+) -> None:
+    """Source IDs embedded in audit trail provenance must resolve via GET /sources/{source_id}."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported candidate for source-resolution test.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code=candidate["hs6_code"],
+            exporter=candidate["exporter"],
+            importer=candidate["importer"],
+            facts=facts,
+        ),
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    _, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    trail_body = trail_response.json()
+
+    provenance = trail_body["final_decision"]["provenance"]
+    assert provenance is not None
+
+    rule_source_id = provenance["rule"]["source_id"] if provenance.get("rule") else None
+    if rule_source_id is not None:
+        src_response = await async_client.get(f"/api/v1/sources/{rule_source_id}")
+        assert src_response.status_code == 200, src_response.text
+        assert src_response.json()["source_id"] == rule_source_id
+
+    tariff = provenance.get("tariff") or {}
+    schedule_source_id = tariff.get("schedule_source_id")
+    if schedule_source_id is not None:
+        src_response = await async_client.get(f"/api/v1/sources/{schedule_source_id}")
+        assert src_response.status_code == 200, src_response.text
+        assert src_response.json()["source_id"] == schedule_source_id

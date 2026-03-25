@@ -18,6 +18,24 @@ from app.schemas.rules import PSRRuleResolvedOut
 from app.schemas.status import StatusOverlay
 
 
+class ProvisionSummary(BaseModel):
+    """Thin provision reference enabling traversal from an audit trail to full provision text.
+
+    Clients use ``provision_id`` to call ``GET /api/v1/provisions/{provision_id}`` for the
+    complete verbatim text, normalized text, and all remaining fields.
+    """
+
+    provision_id: UUID
+    instrument_name: str
+    article_ref: str | None = None
+    annex_ref: str | None = None
+    topic_primary: str
+    page_start: int | None = None
+    page_end: int | None = None
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
 class HS6ResolvedSnapshot(BaseModel):
     """Canonical HS6 product detail captured for an assessment trace."""
 
@@ -63,18 +81,29 @@ class GeneralRulesTrace(BaseModel):
 
 
 class RuleProvenanceTrace(BaseModel):
-    """Compact provenance references for one resolved PSR rule."""
+    """Compact provenance references for one resolved PSR rule.
+
+    ``supporting_provisions`` carries thin summaries of the legal provisions belonging to
+    ``source_id``.  Each summary exposes enough to display the citation and allow the client
+    to call ``GET /api/v1/provisions/{provision_id}`` for the full verbatim text.
+    """
 
     source_id: UUID | None = None
     page_ref: int | None = None
     table_ref: str | None = None
     row_ref: str | None = None
+    supporting_provisions: list[ProvisionSummary] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 class TariffProvenanceTrace(BaseModel):
-    """Compact provenance references for one resolved tariff outcome."""
+    """Compact provenance references for one resolved tariff outcome.
+
+    ``supporting_provisions`` carries thin summaries of the legal provisions belonging to
+    ``schedule_source_id``.  Each summary exposes enough to display the citation and allow
+    the client to call ``GET /api/v1/provisions/{provision_id}`` for the full verbatim text.
+    """
 
     schedule_source_id: UUID | None = None
     rate_source_id: UUID | None = None
@@ -82,6 +111,7 @@ class TariffProvenanceTrace(BaseModel):
     rate_page_ref: int | None = None
     table_ref: str | None = None
     row_ref: str | None = None
+    supporting_provisions: list[ProvisionSummary] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 

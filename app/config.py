@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     DB_POOL_TIMEOUT_SECONDS: float = 30.0
     DB_STATEMENT_TIMEOUT_MS: int = 15000
     DB_LOCK_TIMEOUT_MS: int = 5000
+    DB_POOL_SIZE: int = 5
+    DB_POOL_MAX_OVERFLOW: int = 10
+
+    # In-process cache for static reference lookups
+    CACHE_STATIC_LOOKUPS: bool = False
+    CACHE_TTL_SECONDS: int = 300
 
     # API authentication
     API_AUTH_KEY: str

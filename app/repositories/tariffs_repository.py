@@ -9,6 +9,9 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.cache as cache
+from app.config import get_settings
+
 
 class TariffsRepository:
     """Repository for corridor tariff resolution queries."""
@@ -25,6 +28,13 @@ class TariffsRepository:
         year: int,
     ) -> Mapping[str, Any] | None:
         """Resolve the best matching tariff line and year rate for a corridor and HS6."""
+
+        settings = get_settings()
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache_key = ("tariff", exporter, importer, hs_version, hs6_code, year)
+            hit, cached = cache.get(cache.tariff_store, cache_key)
+            if hit:
+                return cached
 
         schedule_statement = text(
             """
@@ -132,5 +142,8 @@ class TariffsRepository:
             payload["rate_status"] = None
             payload["rate_source_id"] = None
             payload["rate_page_ref"] = None
+
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.put(cache.tariff_store, cache_key, payload, settings.CACHE_TTL_SECONDS)
 
         return payload

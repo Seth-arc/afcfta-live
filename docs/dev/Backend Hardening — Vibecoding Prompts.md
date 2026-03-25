@@ -612,7 +612,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/load -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 16 — Add cache and connection-pool tuning only where it is justified
@@ -648,7 +648,7 @@ When done, summarize:
 python -m pytest tests/unit -q
 python -m pytest tests/integration -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 17 — Close the provenance gap for audit replay
@@ -685,7 +685,7 @@ When done, summarize:
 python -m pytest tests/integration/test_audit_api.py -v
 python -m pytest tests/integration/test_sources_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 18 — Write the rollback and production operations runbook
@@ -720,6 +720,180 @@ python -m pytest tests/unit tests/integration --cov
 ```
 
 ---
+Identifed:
+Gap	What is needed
+Ramp profile (not just burst)	
+locust or k6 with a configurable ramp-up curve
+DB pool saturation signal	
+pg_stat_activity exported via Postgres exporter to Grafana
+Cross-run latency baseline	
+Store load-report.json as a CI artifact and diff p95 between runs
+Multi-process concurrency	
+Run the harness from multiple machines or use a distributed load tool
+Worker-count tuning evidence	
+Run with UVICORN_WORKERS=4 and compare throughput vs. single-worker baseline
+
+Supplemental Prompts:
+Prompt 19 — Add a ramp-profile load scenario
+
+Read tests/load/run_load_test.py and tests/load/payloads.py.
+Read docs/dev/testing.md section "Load Testing".
+
+Extend the load test harness with a ramp-profile scenario that increases
+concurrency in steps rather than launching all workers at once.
+
+Work in these files first:
+- tests/load/run_load_test.py
+- docs/dev/testing.md
+
+Requirements:
+1. Add a --mode flag: "burst" (existing behaviour) and "ramp" (new).
+2. Ramp mode increases concurrency in configurable steps
+   (e.g. 10 → 25 → 50 over three stages, each stage running for a
+   configurable duration in seconds).
+3. Record per-stage metrics separately so the report shows where latency
+   or error rate degrades as concurrency grows.
+4. Keep ramp config expressible as CLI args — no config file required.
+5. Write per-stage results into the JSON report under a "stages" key so
+   future tooling can diff individual stages.
+6. Do not introduce locust, k6, or any new dependency.
+   stdlib asyncio + httpx is sufficient.
+
+When done, summarize:
+- the ramp stages and their defaults
+- the new CLI flags
+- what the per-stage report contains
+You run:
+
+
+python tests/load/run_load_test.py --mode ramp --help
+python tests/load/run_load_test.py --mode burst --requests 50 --api-key test
+# (dry-run against a stopped server to confirm args parse and exit cleanly)
+Prompt 20 — Cross-run latency baseline in CI
+
+Read .github/workflows/ci.yml.
+Read tests/load/run_load_test.py and artifacts/load-report.json structure.
+
+Add a CI job that runs the burst load scenario against the integration stack
+and fails if p95 latency or success rate regresses beyond a configurable
+tolerance from the stored baseline.
+
+Work in these files first:
+- .github/workflows/ci.yml
+- tests/load/compare_reports.py  (new file)
+- docs/dev/testing.md
+
+Requirements:
+1. Add a new CI job "load-baseline" that:
+   a. Starts the integration stack (reuse the PostgreSQL service block
+      from the integration-tests job).
+   b. Runs the burst harness with a small, fast configuration
+      (e.g. --concurrency 10 --requests 50) so CI stays under 2 minutes.
+   c. Compares the new report against a committed baseline file
+      (tests/load/baseline.json) using a new compare_reports.py script.
+   d. Fails if p95 latency increases by more than --latency-tolerance-pct
+      (default 25%) or success rate drops below --min-success-rate
+      (default 95%).
+2. Write compare_reports.py as a standalone script with no new dependencies.
+3. Commit an initial tests/load/baseline.json generated from the current
+   codebase so the CI job has something to compare against on the first run.
+4. Document how to update the baseline when a deliberate performance change
+   is made.
+
+When done, summarize:
+- the comparison metrics and tolerances
+- how to update the baseline
+- the CI job name and when it runs
+You run:
+
+
+python tests/load/compare_reports.py --help
+python tests/load/compare_reports.py \
+  --baseline tests/load/baseline.json \
+  --report artifacts/load-report.json
+
+Prompt 21 — DB pool saturation signal
+
+Read app/db/base.py, app/db/session.py, and app/config.py.
+Read app/api/v1/health.py and the existing readiness endpoint.
+Read docs/dev/AFCFTA-LIVE_REPO_AUDIT_2026-03-23.md section "Observability".
+
+Expose pool saturation metrics so operators can see connection pressure
+without requiring an external Postgres exporter.
+
+Work in these files first:
+- app/api/v1/health.py
+- app/db/base.py
+- app/schemas/common.py or a new app/schemas/health.py
+- tests/unit/test_health.py
+- tests/integration/test_health_api.py
+- docs/dev/testing.md
+
+Requirements:
+1. Extend GET /api/v1/health/ready to return a pool_stats block:
+   checked_out, pool_size, overflow, and checked_in connection counts.
+2. Source the counts from SQLAlchemy's engine pool directly
+   (engine.pool.status() or equivalent) — do not add new dependencies.
+3. Add a pool_pressure field: "ok", "elevated" (>= 75% checked out),
+   or "saturated" (>= 95% checked out).
+4. Keep the existing healthy/unhealthy boolean so callers that only check
+   the top-level status field are unaffected.
+5. Do not expose this endpoint without authentication.
+6. Add unit tests for the pressure classification logic.
+7. Add an integration test that hits the readiness endpoint and asserts
+   the pool_stats block is present and structurally valid.
+
+When done, summarize:
+- the new pool_stats fields
+- how pool_pressure is classified
+- what the load harness operator should watch during a load run
+You run:
+
+
+python -m pytest tests/unit/test_health.py -v
+python -m pytest tests/integration/test_health_api.py -v
+
+Prompt 22 — Multi-worker concurrency evidence
+
+Read tests/load/run_load_test.py, docs/dev/testing.md, and README.md.
+Read docker-compose.prod.yml and the Dockerfile.
+
+Document and script the procedure for comparing single-worker vs
+multi-worker throughput using the existing load harness.
+
+Work in these files first:
+- tests/load/run_multi_worker_comparison.py  (new file)
+- docs/dev/testing.md
+- docs/dev/production_runbook.md
+
+Requirements:
+1. Write run_multi_worker_comparison.py as a standalone script that:
+   a. Runs the burst harness twice against a target URL:
+      once labelled "single-worker" and once labelled "multi-worker".
+   b. Accepts --single-url and --multi-url as separate arguments so
+      the caller can point each label at a separately started server
+      instance rather than the script managing uvicorn processes.
+   c. Writes a side-by-side comparison to
+      artifacts/multi-worker-comparison.json and prints it to stdout.
+2. Document the exact commands to start a single-worker and multi-worker
+   server side by side for local comparison (two terminal windows,
+   two ports, same database).
+3. State explicitly what throughput improvement is expected (linear
+   is unlikely; document why) and what the acceptance bar is before
+   raising UVICORN_WORKERS in production.
+4. Do not start or stop server processes from inside the script.
+   Keep it as a measurement harness, not an orchestrator.
+
+When done, summarize:
+- how to run the comparison locally
+- the fields in the comparison report
+- the documented acceptance bar for raising worker count
+You run:
+
+
+python tests/load/run_multi_worker_comparison.py --help
+
+----
 
 ## Recommended Execution Groups
 

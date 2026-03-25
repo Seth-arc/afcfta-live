@@ -41,6 +41,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+norecursedirs = ["tests/load", ".hypothesis"]
 markers = [
     "integration: marks tests that require the integration test stack",
 ]

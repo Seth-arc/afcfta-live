@@ -9,6 +9,9 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.cache as cache
+from app.config import get_settings
+
 
 class RulesRepository:
     """Repository for PSR resolution queries."""
@@ -22,6 +25,13 @@ class RulesRepository:
         assessment_date: date,
     ) -> Mapping[str, Any] | None:
         """Resolve the governing PSR for a canonical HS6 product on an assessment date."""
+
+        settings = get_settings()
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache_key = ("psr", hs6_id, assessment_date.isoformat())
+            hit, cached = cache.get(cache.psr_store, cache_key)
+            if hit:
+                return cached
 
         statement = text(
             """
@@ -43,7 +53,14 @@ class RulesRepository:
             statement,
             {"hs6_id": hs6_id, "assessment_date": assessment_date},
         )
-        return result.mappings().first()
+        row = result.mappings().first()
+
+        if settings.CACHE_STATIC_LOOKUPS:
+            cached_value = dict(row) if row is not None else None
+            cache.put(cache.psr_store, cache_key, cached_value, settings.CACHE_TTL_SECONDS)
+            return cached_value
+
+        return row
 
     async def get_rules_by_hs6(
         self,
@@ -105,6 +122,13 @@ class RulesRepository:
     async def get_psr_components(self, psr_id: str) -> list[Mapping[str, Any]]:
         """Return PSR components ordered by component_order."""
 
+        settings = get_settings()
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache_key = ("psr_components", psr_id)
+            hit, cached = cache.get(cache.psr_store, cache_key)
+            if hit:
+                return cached
+
         statement = text(
             """
             SELECT
@@ -125,7 +149,12 @@ class RulesRepository:
             """
         )
         result = await self.session.execute(statement, {"psr_id": psr_id})
-        return list(result.mappings().all())
+        rows = [dict(r) for r in result.mappings().all()]
+
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.put(cache.psr_store, cache_key, rows, settings.CACHE_TTL_SECONDS)
+
+        return rows
 
     async def get_pathways(
         self,
@@ -133,6 +162,13 @@ class RulesRepository:
         assessment_date: date,
     ) -> list[Mapping[str, Any]]:
         """Return active executable pathways ordered by priority."""
+
+        settings = get_settings()
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache_key = ("pathways", psr_id, assessment_date.isoformat())
+            hit, cached = cache.get(cache.psr_store, cache_key)
+            if hit:
+                return cached
 
         statement = text(
             """
@@ -160,4 +196,9 @@ class RulesRepository:
             statement,
             {"psr_id": psr_id, "assessment_date": assessment_date},
         )
-        return list(result.mappings().all())
+        rows = [dict(r) for r in result.mappings().all()]
+
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.put(cache.psr_store, cache_key, rows, settings.CACHE_TTL_SECONDS)
+
+        return rows

@@ -18,6 +18,7 @@ from app.schemas.audit import (
     GeneralRulesTrace,
     HS6ResolvedSnapshot,
     PathwayEvaluationTrace,
+    ProvisionSummary,
     RuleProvenanceTrace,
     TariffProvenanceTrace,
 )
@@ -36,9 +37,15 @@ logger = logging.getLogger("app.audit")
 class AuditService:
     """Service for audit-trail replay and structured assessment logging."""
 
-    def __init__(self, evaluations_repository: Any, cases_repository: Any) -> None:
+    def __init__(
+        self,
+        evaluations_repository: Any,
+        cases_repository: Any,
+        sources_repository: Any | None = None,
+    ) -> None:
         self.evaluations_repository = evaluations_repository
         self.cases_repository = cases_repository
+        self.sources_repository = sources_repository
 
     async def get_decision_trace(
         self,
@@ -79,6 +86,7 @@ class AuditService:
             else []
         )
 
+        provenance = await self._build_decision_provenance(checks)
         return AuditTrail(
             evaluation=evaluation,
             case=case,
@@ -109,7 +117,7 @@ class AuditService:
                 model_cls=EvidenceReadinessResult,
             ),
             atomic_checks=checks,
-            final_decision=self._build_final_decision(evaluation, checks),
+            final_decision=self._build_final_decision(evaluation, checks, provenance),
         )
 
     async def get_evaluations_for_case(
@@ -365,6 +373,7 @@ class AuditService:
         self,
         evaluation: EligibilityEvaluationResponse,
         checks: Sequence[EligibilityCheckResultResponse],
+        provenance: DecisionProvenanceTrace | None,
     ) -> FinalDecisionTrace:
         """Build the final decision summary from the evaluation row and decision trace."""
 
@@ -404,7 +413,6 @@ class AuditService:
         completeness_ratio = payload.get("completeness_ratio")
         if completeness_ratio is None and evidence_readiness is not None:
             completeness_ratio = evidence_readiness.completeness_ratio
-        provenance = self._build_decision_provenance(checks)
         return FinalDecisionTrace(
             eligible=bool(eligible),
             overall_outcome=evaluation.overall_outcome,
@@ -420,11 +428,16 @@ class AuditService:
             provenance=provenance,
         )
 
-    def _build_decision_provenance(
+    async def _build_decision_provenance(
         self,
         checks: Sequence[EligibilityCheckResultResponse],
     ) -> DecisionProvenanceTrace | None:
-        """Roll rule and tariff provenance into one summary-level decision trace."""
+        """Roll rule and tariff provenance into one summary-level decision trace.
+
+        When a ``sources_repository`` is available, thin provision summaries are fetched
+        for each source reference and embedded directly in the trace so clients can traverse
+        from decision replay to supporting legal text without a separate lookup step.
+        """
 
         rule_payload = self._decode_summary_payload(
             checks,
@@ -441,27 +454,46 @@ class AuditService:
 
         rule_trace = None
         if isinstance(rule_payload, dict):
+            rule_source_id = rule_payload.get("source_id")
+            rule_provisions = await self._fetch_provision_summaries(str(rule_source_id)) \
+                if rule_source_id is not None else []
             rule_trace = RuleProvenanceTrace(
-                source_id=rule_payload.get("source_id"),
+                source_id=rule_source_id,
                 page_ref=rule_payload.get("page_ref"),
                 table_ref=rule_payload.get("table_ref"),
                 row_ref=rule_payload.get("row_ref"),
+                supporting_provisions=rule_provisions,
             )
 
         tariff_trace = None
         if isinstance(tariff_payload, dict):
+            schedule_source_id = tariff_payload.get("schedule_source_id")
+            tariff_provisions = await self._fetch_provision_summaries(str(schedule_source_id)) \
+                if schedule_source_id is not None else []
             tariff_trace = TariffProvenanceTrace(
-                schedule_source_id=tariff_payload.get("schedule_source_id"),
+                schedule_source_id=schedule_source_id,
                 rate_source_id=tariff_payload.get("rate_source_id"),
                 line_page_ref=tariff_payload.get("line_page_ref"),
                 rate_page_ref=tariff_payload.get("rate_page_ref"),
                 table_ref=tariff_payload.get("table_ref"),
                 row_ref=tariff_payload.get("row_ref"),
+                supporting_provisions=tariff_provisions,
             )
 
         if rule_trace is None and tariff_trace is None:
             return None
         return DecisionProvenanceTrace(rule=rule_trace, tariff=tariff_trace)
+
+    async def _fetch_provision_summaries(self, source_id: str) -> list[ProvisionSummary]:
+        """Return thin provision summaries for one source, or an empty list when unavailable."""
+
+        if self.sources_repository is None:
+            return []
+        try:
+            rows = await self.sources_repository.get_provisions_for_source(source_id, limit=5)
+            return [ProvisionSummary.model_validate(dict(row)) for row in rows]
+        except Exception:
+            return []
 
     def _decode_summary_model(
         self,

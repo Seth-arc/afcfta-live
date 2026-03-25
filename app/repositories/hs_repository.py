@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.cache as cache
+from app.config import get_settings
 from app.db.models.hs import HS6Product
 
 
@@ -17,12 +19,25 @@ class HSRepository:
     async def get_by_code(self, hs_version: str, hs6_code: str) -> HS6Product | None:
         """Fetch a canonical HS6 product by version and 6-digit code."""
 
+        settings = get_settings()
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache_key = ("hs6", hs_version, hs6_code)
+            hit, cached = cache.get(cache.hs6_store, cache_key)
+            if hit:
+                return cached
+
         statement = select(HS6Product).where(
             HS6Product.hs_version == hs_version,
             HS6Product.hs6_code == hs6_code,
         )
         result = await self.session.execute(statement)
-        return result.scalar_one_or_none()
+        product = result.scalar_one_or_none()
+
+        if settings.CACHE_STATIC_LOOKUPS and product is not None:
+            self.session.expunge(product)
+            cache.put(cache.hs6_store, cache_key, product, settings.CACHE_TTL_SECONDS)
+
+        return product
 
     async def search_by_description(self, query: str) -> list[HS6Product]:
         """Search canonical HS6 products by description text."""

@@ -359,7 +359,7 @@ async def test_assessment_session_context_applies_repeatable_read_and_wraps_tran
 
     def fake_factory(*, bind: object | None = None):
         captured["bind"] = bind
-        return FakeAsyncContextManager(fake_session)
+        return lambda: FakeAsyncContextManager(fake_session)
 
     monkeypatch.setattr(db_session, "get_engine", lambda: FakeEngine())
     monkeypatch.setattr(db_session, "get_async_session_factory", fake_factory)

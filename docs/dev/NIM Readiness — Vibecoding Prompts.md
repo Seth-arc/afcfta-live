@@ -265,7 +265,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 6 — Implement intake parsing and mapping to the live assessment request
@@ -303,7 +303,7 @@ When done, summarize:
 python -m pytest tests/unit/test_nim_intake_service.py -v
 python -m pytest tests/unit/test_nim_mapping.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 7 — Implement clarification schema and service tied to real missing facts

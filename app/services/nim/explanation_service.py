@@ -25,7 +25,7 @@ blocked by explanation failure.
 from __future__ import annotations
 
 from app.schemas.assessments import EligibilityAssessmentResponse
-from app.schemas.nim.explanation import ExplanationContext, ExplanationResult
+from app.schemas.nim.explanation import ExplanationResult
 from app.services.nim.client import NimClient
 
 

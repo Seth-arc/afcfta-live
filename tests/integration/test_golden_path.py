@@ -587,6 +587,7 @@ def _assert_response_shape(body: Mapping[str, Any]) -> None:
         "readiness_score",
         "completeness_ratio",
         "confidence_class",
+        "audit_persisted",
     }
     if body["tariff_outcome"] is not None:
         assert set(body["tariff_outcome"]) == {"preferential_rate", "base_rate", "status"}

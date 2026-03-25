@@ -26,7 +26,10 @@
       "Read(//c/Users/ssnguna/**)",
       "Bash(.venv/Scripts/python.exe -c \":*)",
       "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_assistant_api.py -q)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_nim_client.py -v)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_nim_client.py -v)",
+      "Bash(python -m pytest tests/unit/test_nim_intake_schema.py -v)",
+      "Bash(python -m pytest tests/unit/test_nim_mapping.py tests/unit/test_nim_intake_service.py -v)",
+      "Bash(python -m ruff check app tests scripts)"
     ]
   }
 }

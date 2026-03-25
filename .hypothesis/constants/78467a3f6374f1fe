@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\api\v1\health.py
+# hypothesis_version: 6.151.9
+
+['/health', '/health/ready', 'checks', 'database', 'degraded', 'ok', 'pool_stats', 'status', 'timestamp', 'unavailable', 'version']

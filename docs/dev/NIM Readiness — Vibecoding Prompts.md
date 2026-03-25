@@ -63,7 +63,7 @@ Before Prompt 1, verify all of these are already true:
 
 - missing tariff coverage is a hard blocker
 - assessment and audit contracts are frozen
-- replay-safe persistence exists for interface-triggered decisions
+- replay-safe persistence exists for interface-triggered decisions (`audit_persisted: bool` in assessment response confirms write succeeded; NIM must not claim audit compliance when `audit_persisted` is false)
 - auth and rate limiting exist on non-health endpoints
 - liveness and readiness checks exist
 

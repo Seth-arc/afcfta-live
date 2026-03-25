@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -39,6 +40,8 @@ from app.services.general_origin_rules_service import GeneralRulesResult
 
 FAILURE_MESSAGES_TO_CODES = {message: code for code, message in FAILURE_CODES.items()}
 PATHWAY_RULE_TYPES = {"WO", "CTH", "CTSH", "VNM", "VA", "PROCESS"}
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -243,7 +246,7 @@ class EligibilityService:
                 ),
             )
             audit_checks.append(self._make_decision_trace_check(response))
-            await self._persist_evaluation_if_possible(
+            response.audit_persisted = await self._persist_evaluation_if_possible(
                 request=request,
                 assessment_date=assessment_date,
                 rule_bundle=rule_bundle,
@@ -342,7 +345,7 @@ class EligibilityService:
             ),
         )
         audit_checks.append(self._make_decision_trace_check(response))
-        await self._persist_evaluation_if_possible(
+        response.audit_persisted = await self._persist_evaluation_if_possible(
             request=request,
             assessment_date=assessment_date,
             rule_bundle=rule_bundle,
@@ -925,11 +928,16 @@ class EligibilityService:
         response: EligibilityAssessmentResponse,
         pathway_used: str | None,
         audit_checks: Sequence[Mapping[str, Any]],
-    ) -> None:
-        """Persist the evaluation plus checks when a case_id and repository are available."""
+    ) -> bool:
+        """Persist the evaluation plus checks when a case_id and repository are available.
+
+        Returns True when the audit record was successfully written, False otherwise.
+        A False return means the assessment result is still valid but is not replayable
+        via the audit layer. NIM must not claim audit compliance when this returns False.
+        """
 
         if self.evaluations_repository is None or request.case_id is None:
-            return
+            return False
 
         evaluation_data = {
             "case_id": request.case_id,
@@ -944,7 +952,16 @@ class EligibilityService:
                 else "incomplete"
             ),
         }
-        await self.evaluations_repository.persist_evaluation(evaluation_data, list(audit_checks))
+        try:
+            await self.evaluations_repository.persist_evaluation(evaluation_data, list(audit_checks))
+            return True
+        except Exception:
+            _logger.error(
+                "evaluation_persistence_failed",
+                exc_info=True,
+                extra={"case_id": request.case_id, "hs6_code": response.hs6_code},
+            )
+            return False
 
     async def _emit_alerts_if_possible(
         self,

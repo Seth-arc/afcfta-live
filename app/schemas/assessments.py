@@ -144,6 +144,7 @@ class EligibilityAssessmentResponse(BaseModel):
     readiness_score: float | None = None
     completeness_ratio: float | None = None
     confidence_class: Literal["complete", "provisional", "incomplete"]
+    audit_persisted: bool = False
 
     model_config = ConfigDict(
         from_attributes=True,

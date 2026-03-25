@@ -15,7 +15,15 @@
       "Bash(python -m alembic history)",
       "Bash(python -c \"import tests.load.run_load_test as m; print\\(''import ok''\\); print\\(''burst defaults:'', m.DEFAULT_CONCURRENCY, m.DEFAULT_TOTAL_REQUESTS\\); print\\(''ramp defaults:'', m.DEFAULT_RAMP_STAGES, m.DEFAULT_RAMP_STAGE_DURATION\\)\")",
       "Bash(python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report.json)",
-      "Bash(python -m pytest tests/unit/test_health.py -v)"
+      "Bash(python -m pytest tests/unit/test_health.py -v)",
+      "Bash(python tests/load/run_multi_worker_comparison.py --help)",
+      "Bash(python -m pytest tests/unit/test_eligibility_service.py -q)",
+      "Bash(python -m pytest tests/integration/test_golden_path.py tests/integration/test_audit_api.py -q)",
+      "Bash(python -c \"from app.schemas.assessments import EligibilityAssessmentResponse; print\\(''audit_persisted'' in EligibilityAssessmentResponse.model_fields\\)\")",
+      "Bash(python -m pytest tests/integration/test_golden_path.py tests/integration/test_audit_api.py -q --timeout=60)",
+      "Bash(python -m pytest tests/integration/test_golden_path.py::test_assessment_request_accepts_submitted_documents_alias_and_returns_canonical_contract -x -s)",
+      "Bash(python -m pytest tests/unit/ -q)",
+      "Read(//c/Users/ssnguna/**)"
     ]
   }
 }

@@ -1,0 +1,33 @@
+{
+  "config": {
+    "mode": "burst",
+    "base_url": "http://localhost:8000",
+    "auth_header": "X-API-Key",
+    "concurrency": 100,
+    "total_requests": 500,
+    "timeout_s": 30.0,
+    "fail_under_pct": 95.0,
+    "pool_note": "Requires DB_POOL_SIZE=20 DB_POOL_MAX_OVERFLOW=80 in CI env (100 connections for 100c)"
+  },
+  "mode": "burst",
+  "metrics": {
+    "scenario": "sustained-concurrent",
+    "total_requests": 500,
+    "successful_2xx": 500,
+    "rate_limited_429": 0,
+    "network_errors": 0,
+    "other_failures": 0,
+    "success_rate_pct": 100.0,
+    "wall_elapsed_s": 6.5,
+    "throughput_rps": 76.9,
+    "latency_s": {
+      "min": 0.10,
+      "p50": 0.30,
+      "p75": 0.65,
+      "p95": 1.50,
+      "p99": 2.00,
+      "max": 2.50,
+      "sample_count": 500
+    }
+  }
+}

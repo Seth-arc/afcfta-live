@@ -1014,19 +1014,24 @@ async def test_corridor_snapshot_date_matches_assessment_evaluation_date(
 
 @pytest.mark.asyncio
 async def test_unsupported_corridor_returns_422(async_client: AsyncClient) -> None:
-    """Assessments on corridors outside the v0.1 scope must return 422, not a 500 or silent wrong answer."""
+    """Assessments on corridors outside the v0.1 scope must return 422, not a 500 or silent wrong answer.
+
+    NGA and CIV are both valid v0.1 countries.  CIV->NGA is a supported directed corridor
+    but NGA->CIV is not, so the engine's corridor-pair check fires (not the schema-level
+    country validator) and raises CorridorNotSupportedError → 422 with the domain error format.
+    """
 
     response = await async_client.post(
         "/api/v1/assessments",
         json=_assessment_payload(
             hs6_code="110311",
-            exporter="GHA",
-            importer="ZAF",  # South Africa — not in V01_CORRIDORS
+            exporter="NGA",
+            importer="CIV",  # both v0.1 countries, but NGA->CIV is not in V01_CORRIDORS
             facts={"direct_transport": True},
         ),
     )
     assert response.status_code == 422, (
-        f"Expected 422 for unsupported corridor GHA->ZAF, got {response.status_code}: {response.text}"
+        f"Expected 422 for unsupported corridor NGA->CIV, got {response.status_code}: {response.text}"
     )
     body = response.json()
     assert body["error"]["code"] == "CORRIDOR_NOT_SUPPORTED"

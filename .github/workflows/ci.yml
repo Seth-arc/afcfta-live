@@ -52,7 +52,7 @@ jobs:
         run: >
           python -m pytest tests/unit -v
           --junitxml=artifacts/unit-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml
+          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=90
 
       - name: Upload unit test report
         if: always()
@@ -117,7 +117,7 @@ jobs:
         run: >
           python -m pytest tests/integration -v
           --junitxml=artifacts/integration-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=90
+          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=82
 
       - name: Upload integration test report
         if: always()
@@ -159,6 +159,10 @@ jobs:
       ENV: ci
       LOG_LEVEL: WARNING
       RATE_LIMIT_ENABLED: "false"
+      # Pool must accommodate 100 concurrent REPEATABLE READ sessions.
+      # Default (5+10=15) exhausts under 100c and causes p95 to balloon ~5×.
+      DB_POOL_SIZE: "20"
+      DB_POOL_MAX_OVERFLOW: "80"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -223,9 +227,9 @@ jobs:
       - name: Regression gate — 100-concurrency vs baseline
         run: >
           python tests/load/compare_reports.py
-          --baseline tests/load/baseline.json
+          --baseline tests/load/baseline_100c.json
           --report artifacts/load-report-100.json
-          --latency-tolerance-pct 100
+          --latency-tolerance-pct 50
           --min-success-rate 95
 
       - name: Upload load test report

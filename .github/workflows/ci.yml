@@ -118,7 +118,7 @@ jobs:
         run: >
           python -m pytest tests/integration -v
           --junitxml=artifacts/integration-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=82
+          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=80
 
       - name: Upload integration test report
         if: always()

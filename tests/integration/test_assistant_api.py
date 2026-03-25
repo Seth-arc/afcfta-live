@@ -55,6 +55,8 @@ REQUIRED_ASSESSMENT_FIELDS = {
     "missing_facts",
     "evidence_required",
     "missing_evidence",
+    "readiness_score",
+    "completeness_ratio",
     "confidence_class",
     "audit_persisted",
 }
@@ -445,6 +447,9 @@ def _override_intake_with_complete_draft(app: FastAPI) -> None:
     mock_svc = MagicMock(spec=IntakeService)
     mock_svc.parse_user_input = AsyncMock(return_value=draft)
     mock_svc.to_eligibility_request = real_svc.to_eligibility_request
+    # nim_client is an instance attribute (set in __init__), not in the class
+    # spec — must be set explicitly so the handler can read .enabled and .model.
+    mock_svc.nim_client = MagicMock(enabled=False, model="")
 
     app.dependency_overrides[get_intake_service] = lambda: mock_svc
 

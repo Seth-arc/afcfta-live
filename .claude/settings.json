@@ -30,7 +30,8 @@
       "Bash(python -m pytest tests/unit/test_nim_intake_schema.py -v)",
       "Bash(python -m pytest tests/unit/test_nim_mapping.py tests/unit/test_nim_intake_service.py -v)",
       "Bash(python -m ruff check app tests scripts)",
-      "Bash(python -m pytest tests/unit/test_nim_clarification_service.py -v)"
+      "Bash(python -m pytest tests/unit/test_nim_clarification_service.py -v)",
+      "Bash(python -m pytest tests/unit/test_nim_explanation_service.py -q)"
     ]
   }
 }

@@ -321,6 +321,46 @@ Build in dependency order. Do not skip ahead.
 
 ---
 
+## NIM Security Constraints
+
+### Prompt-Injection Mitigation
+
+NIM receives raw user text.  Malicious input may attempt to override system
+instructions, exfiltrate engine internals, or inject fabricated eligibility
+outcomes into the model's completion.
+
+Mandatory mitigations:
+
+1. **Input length cap** — `AssistantRequest.user_input` is validated at
+   `max_length=2000` characters before the request reaches NIM.  Inputs
+   exceeding this limit are rejected with HTTP 422 before any model call.
+   Never raise this limit without a reviewed security justification.
+
+2. **Engine fields are immutable after the engine runs** — NIM output is
+   additive only.  The `explanation` field may provide plain-language context
+   but must never alter or contradict any of the following fields produced
+   by the deterministic engine:
+   `eligible`, `pathway_used`, `rule_status`, `tariff_outcome`,
+   `confidence_class`, `failures`, `missing_facts`.
+   These fields are written once by the engine and passed through to the
+   response envelope unchanged.
+
+3. **NIM never sets `audit_persisted`** — Only the persistence layer writes
+   `audit_persisted: true` after confirming the database commit.  NIM must
+   never claim audit compliance.
+
+4. **No raw NIM output in decision fields** — Any field that affects a
+   downstream eligibility decision (corridor, HS6 code, declared facts) must
+   come from structured Pydantic-validated input, not from free-form model
+   text.  Parse NIM completions through the intake service schema; never
+   `eval()` or `json.loads()` them directly into engine input.
+
+5. **Log input length, not content** — When `NIM_LOG_IO=true`, log only
+   `user_input_char_count` (integer).  Never log the raw `user_input` string
+   in production; it may contain PII or injected payloads.
+
+---
+
 ## Shell Command Restrictions
 
 Do NOT run these commands — I will run them myself in my local environment:

@@ -11,10 +11,11 @@ from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
-from app.api.deps import InMemoryRateLimiter
+from app.api.deps import InMemoryRateLimiter, RedisRateLimiter
 from app.config import get_settings
 from app.core.exceptions import AISBaseException
 from app.core.http_status import DOMAIN_STATUS_CODES
@@ -179,7 +180,38 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     settings = app.state.settings
     logger.info("%s v%s starting", settings.APP_TITLE, settings.APP_VERSION)
+
+    if settings.UVICORN_WORKERS > 1 and not settings.REDIS_URL:
+        raise RuntimeError(
+            f"UVICORN_WORKERS={settings.UVICORN_WORKERS} requires REDIS_URL to be set. "
+            "InMemoryRateLimiter is per-process: each worker maintains independent buckets, "
+            "making the effective rate limit UVICORN_WORKERS × the configured max. "
+            "Set REDIS_URL to a live Redis instance or keep UVICORN_WORKERS=1."
+        )
+
+    redis_client = None
+    if settings.REDIS_URL:
+        try:
+            import redis.asyncio as aioredis  # type: ignore[import-untyped]
+
+            redis_client = aioredis.from_url(settings.REDIS_URL, decode_responses=False)
+            await redis_client.ping()
+            app.state.rate_limiter = RedisRateLimiter(redis_client)
+            logger.info("Redis-backed sliding-window rate limiter active at %s", settings.REDIS_URL)
+        except Exception as exc:
+            logger.warning(
+                "Redis unavailable (%s); falling back to in-process rate limiter — "
+                "keep UVICORN_WORKERS=1 until Redis is reachable",
+                exc,
+            )
+            if redis_client is not None:
+                await redis_client.aclose()
+                redis_client = None
+
     yield
+
+    if redis_client is not None:
+        await redis_client.aclose()
 
 
 def create_app() -> FastAPI:
@@ -195,6 +227,16 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = InMemoryRateLimiter()
     app.state.error_tracker = _configure_error_tracker(settings)
+
+    if settings.CORS_ALLOW_ORIGINS:
+        origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST"],
+            allow_headers=["Content-Type", settings.API_AUTH_HEADER_NAME, "X-Request-ID"],
+        )
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next):  # type: ignore[no-untyped-def]

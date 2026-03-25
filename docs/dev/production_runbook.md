@@ -379,6 +379,51 @@ Before removing the failed container:
 docker compose -f ./docker-compose.prod.yml logs api > /tmp/ais-failed-deploy.log
 ```
 
+### 6.6 Migrations with data changes
+
+Some Alembic revisions are schema-only (add/drop a column); these are safe to downgrade with
+`alembic downgrade -1` as described above.  Revisions that also **move or transform data** (e.g.
+backfilling a column, renaming a foreign key, splitting a table) require extra care:
+
+**Before deploying any data-migration revision:**
+
+1. Review the migration file under `alembic/versions/` for `op.execute(...)` or `INSERT/UPDATE`
+   calls in the `upgrade()` function.
+2. Confirm that the `downgrade()` function reverses the data change, not just the schema change.
+   If it does not, mark the revision as non-reversible in its docstring:
+   ```python
+   # NOTE: This migration is NOT safely reversible. Downgrade requires restoring from backup.
+   ```
+3. Take a manual database snapshot **immediately** before running `alembic upgrade head`.
+
+**During rollback of a data-migration revision:**
+
+```bash
+# Check what the current head is
+python -m alembic current
+
+# Inspect the downgrade() function before running it
+python -m alembic show <revision-id>
+
+# If downgrade() is safe, proceed
+DATABASE_URL_SYNC=postgresql://afcfta:<password>@<host>:5432/afcfta \
+  python -m alembic downgrade -1
+
+# If downgrade() is NOT safe (marked non-reversible above), restore from backup instead:
+# 1. Stop the API container (step 6.1)
+# 2. Drop and recreate the database from the pre-deploy snapshot
+# 3. Restart with the previous image (step 6.3)
+```
+
+**After a data-migration rollback, re-run the seeder if reference data was affected:**
+
+```bash
+DATABASE_URL_SYNC=postgresql://afcfta:<password>@<host>:5432/afcfta \
+  python scripts/seed_data.py
+```
+
+Then re-run all acceptance checks in section 4.
+
 ---
 
 ## 7. Parser and tariff-schedule promotion

@@ -49,7 +49,8 @@
       "Bash(python -m pytest tests/unit/ -q --tb=no)",
       "Bash(python -m pytest tests/integration/ --collect-only -q)",
       "Bash(python -m pytest tests/integration/test_nim_full_flow.py tests/integration/test_assistant_api.py -q --tb=no)",
-      "Bash(python -m pytest tests/integration/test_assistant_api.py -q --tb=line)"
+      "Bash(python -m pytest tests/integration/test_assistant_api.py -q --tb=line)",
+      "Bash(ls \"c:\\\\Users\\\\ssnguna\\\\Local Sites\\\\afcfta-live\\\\docs\\\\dev\"\" 2>/dev/null || echo \"NOT FOUND \")"
     ]
   }
 }

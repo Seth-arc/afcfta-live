@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -33,6 +34,7 @@ class IntelligenceService:
         tariff_result: TariffResolutionResult | None,
         corridor_overlay: StatusOverlay,
         response: EligibilityAssessmentResponse,
+        assessment_date: date | None = None,
     ) -> list[Mapping[str, Any]]:
         """Persist advisory alerts for the supported assessment trigger conditions."""
 

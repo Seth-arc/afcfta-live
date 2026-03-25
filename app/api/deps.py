@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+import uuid
 from dataclasses import dataclass
 from secrets import compare_digest
 from threading import Lock
@@ -67,7 +69,7 @@ class InMemoryRateLimiter:
         self._lock = Lock()
         self._buckets: dict[tuple[str, str], tuple[float, int]] = {}
 
-    def check(self, *, subject: str, policy: RateLimitPolicy) -> dict[str, int | bool]:
+    async def check(self, *, subject: str, policy: RateLimitPolicy) -> dict[str, int | bool]:
         """Consume one slot from the caller's bucket or report retry timing."""
 
         now = monotonic()
@@ -94,6 +96,71 @@ class InMemoryRateLimiter:
                 "retry_after_seconds": 0,
                 "remaining": max(policy.max_requests - count, 0),
             }
+
+
+# Lua script: atomic sliding-window check-and-consume for Redis.
+# KEYS[1] = rate-limit key, ARGV[1..5] = now, window_start, max_requests, window_seconds, member
+_SLIDING_WINDOW_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local window_start = tonumber(ARGV[2])
+local max_requests = tonumber(ARGV[3])
+local window_seconds = tonumber(ARGV[4])
+
+redis.call('ZREMRANGEBYSCORE', key, '-inf', window_start)
+local count = redis.call('ZCARD', key)
+
+if count >= max_requests then
+    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+    local retry_after = 1
+    if oldest[2] then
+        retry_after = math.max(1, math.ceil(window_seconds - (now - tonumber(oldest[2]))))
+    end
+    return {0, retry_after, 0}
+end
+
+redis.call('ZADD', key, now, ARGV[5])
+redis.call('EXPIRE', key, window_seconds + 1)
+return {1, 0, max_requests - count - 1}
+"""
+
+
+class RedisRateLimiter:
+    """Sliding-window rate limiter backed by Redis; safe for multi-worker deployments.
+
+    Uses an atomic Lua script to perform check-and-consume in one round-trip.
+    Each request is recorded as a member in a sorted set keyed by (policy, subject)
+    with its Unix timestamp as the score.  Entries outside the current window are
+    removed before counting so the window truly slides rather than resets.
+    """
+
+    def __init__(self, redis_client: object) -> None:
+        self._redis = redis_client
+
+    async def check(self, *, subject: str, policy: RateLimitPolicy) -> dict[str, int | bool]:
+        """Consume one slot or report retry timing via a Redis atomic Lua script."""
+
+        now = time.time()
+        window_start = now - policy.window_seconds
+        key = f"rl:{policy.policy_name}:{subject}"
+        member = str(uuid.uuid4())
+
+        result = await self._redis.eval(  # type: ignore[union-attr]
+            _SLIDING_WINDOW_LUA,
+            1,
+            key,
+            str(now),
+            str(window_start),
+            str(policy.max_requests),
+            str(policy.window_seconds),
+            member,
+        )
+        allowed, retry_after, remaining = int(result[0]), int(result[1]), int(result[2])
+        return {
+            "allowed": bool(allowed),
+            "retry_after_seconds": retry_after,
+            "remaining": remaining,
+        }
 
 
 async def require_authenticated_principal(
@@ -171,7 +238,7 @@ def require_rate_limit(policy_name: str):
 
         policy = _rate_limit_policy(policy_name, settings)
         limiter = request.app.state.rate_limiter
-        result = limiter.check(subject=principal_id, policy=policy)
+        result = await limiter.check(subject=principal_id, policy=policy)
         if bool(result["allowed"]):
             request.state.rate_limit_policy = policy.policy_name
             request.state.rate_limit_remaining = result["remaining"]

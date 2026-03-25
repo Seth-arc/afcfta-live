@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import get_intelligence_repository
@@ -19,6 +21,7 @@ router = APIRouter()
 async def get_corridor_profile(
     exporter: str,
     importer: str,
+    as_of_date: date | None = Query(None, description="Snapshot date (YYYY-MM-DD). Defaults to today."),
     intelligence_repository: IntelligenceRepository = Depends(get_intelligence_repository),
 ) -> CorridorProfileOut:
     """Return the active corridor profile for one exporter-importer pair."""
@@ -26,6 +29,7 @@ async def get_corridor_profile(
     row = await intelligence_repository.get_corridor_profile(
         exporter=exporter.upper(),
         importer=importer.upper(),
+        as_of_date=as_of_date,
     )
     if row is None:
         raise HTTPException(

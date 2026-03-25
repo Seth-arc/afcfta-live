@@ -10,8 +10,23 @@ services:
       - ./.env.prod
     ports:
       - "8000:8000"
+    # CONSTRAINT: workers=1 until REDIS_URL is set in .env.prod.
+    # InMemoryRateLimiter state is per-process; multiple workers would each
+    # maintain independent rate-limit buckets, multiplying the effective
+    # request ceiling by the worker count. Once REDIS_URL points to the
+    # redis service below, the rate limiter switches to a shared sliding-window
+    # implementation and --workers can safely be raised.
+    command:
+      [
+        "uvicorn", "app.main:app",
+        "--host", "0.0.0.0",
+        "--port", "8000",
+        "--workers", "1",
+      ]
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3); sys.exit(0)"]
@@ -36,6 +51,17 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   pgdata_prod:

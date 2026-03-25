@@ -12,10 +12,12 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.core.countries import V01_CORRIDORS
 from app.core.entity_keys import make_entity_key
 from app.core.enums import LegalOutcome
 from app.core.exceptions import (
     CaseNotFoundError,
+    CorridorNotSupportedError,
     EvaluationPersistenceError,
     InsufficientFactsError,
     TariffNotFoundError,
@@ -137,6 +139,19 @@ class EligibilityService:
 
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
+
+        corridor = (request.exporter.upper(), request.importer.upper())
+        if corridor not in V01_CORRIDORS:
+            raise CorridorNotSupportedError(
+                f"Corridor '{request.exporter.upper()}->{request.importer.upper()}' "
+                "is not supported in v0.1.",
+                detail={
+                    "exporter": request.exporter.upper(),
+                    "importer": request.importer.upper(),
+                    "supported_corridors": [f"{e}->{i}" for e, i in V01_CORRIDORS],
+                },
+            )
+
         audit_checks: list[dict[str, Any]] = []
         product = await self.classification_service.resolve_hs6(
             request.hs6_code,
@@ -260,6 +275,7 @@ class EligibilityService:
                 tariff_result=tariff_result,
                 corridor_overlay=corridor_overlay,
                 response=response,
+                assessment_date=assessment_date,
             )
             self._log_assessment(
                 request=request,
@@ -359,6 +375,7 @@ class EligibilityService:
             tariff_result=tariff_result,
             corridor_overlay=corridor_overlay,
             response=response,
+            assessment_date=assessment_date,
         )
         self._log_assessment(
             request=request,
@@ -971,6 +988,7 @@ class EligibilityService:
         tariff_result: TariffResolutionResult | None,
         corridor_overlay: StatusOverlay,
         response: EligibilityAssessmentResponse,
+        assessment_date: date,
     ) -> None:
         """Persist advisory intelligence alerts without altering the assessment result."""
 
@@ -983,6 +1001,7 @@ class EligibilityService:
             tariff_result=tariff_result,
             corridor_overlay=corridor_overlay,
             response=response,
+            assessment_date=assessment_date,
         )
 
     @staticmethod

@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_DEFAULT_MAX_REQUESTS: int = 120
     RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS: int = 10
 
+    # Redis (optional — enables multi-worker rate limiting when set)
+    # When empty the API falls back to InMemoryRateLimiter (UVICORN_WORKERS=1 only).
+    REDIS_URL: str = ""
+
     # Deployment/runtime mode
     ENV: str = "development"
 
@@ -68,6 +72,16 @@ class Settings(BaseSettings):
     # When True, logs user_input_char_count (integer only — never the raw text).
     # Leave False in production unless a redaction-safe logging pipeline is in place.
     NIM_LOG_IO: bool = False
+
+    # Uvicorn worker count — read by the app at startup to validate Redis requirement.
+    # When UVICORN_WORKERS > 1 and REDIS_URL is empty the startup guard in _lifespan
+    # raises RuntimeError because InMemoryRateLimiter is per-process only.
+    UVICORN_WORKERS: int = 1
+
+    # CORS — set CORS_ALLOW_ORIGINS to a comma-separated list of allowed origins.
+    # Leave empty to disable CORS headers (suitable for pure API / non-browser clients).
+    # Example: CORS_ALLOW_ORIGINS=https://trader.afcfta.example,https://staging.afcfta.example
+    CORS_ALLOW_ORIGINS: str = ""
 
     # Application metadata
     APP_TITLE: str = "AfCFTA Intelligence API"

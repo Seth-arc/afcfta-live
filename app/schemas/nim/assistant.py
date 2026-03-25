@@ -43,7 +43,7 @@ class AssistantContext(BaseModel):
 class AssistantRequest(BaseModel):
     """NIM assistant request: natural-language user input with optional context hints."""
 
-    user_input: str = Field(min_length=1, max_length=4000)
+    user_input: str = Field(min_length=1, max_length=2000)
     context: AssistantContext | None = None
 
     model_config = ConfigDict(

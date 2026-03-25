@@ -22,10 +22,18 @@ class IntelligenceRepository:
         self,
         exporter: str,
         importer: str,
+        as_of_date: date | None = None,
     ) -> Mapping[str, Any] | None:
-        """Return the current active corridor profile for an exporter-importer pair."""
+        """Return the active corridor profile for an exporter-importer pair as of a given date.
 
-        as_of_date = date.today()
+        ``as_of_date`` defaults to today when not supplied so callers that only need the
+        current profile can omit it.  Assessment paths must pass the engine's
+        ``assessment_date`` so the corridor snapshot is consistent with all other
+        date-parameterised lookups in the same evaluation.
+        """
+
+        if as_of_date is None:
+            as_of_date = date.today()
         statement = text(
             """
             SELECT

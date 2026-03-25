@@ -117,7 +117,7 @@ jobs:
         run: >
           python -m pytest tests/integration -v
           --junitxml=artifacts/integration-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=60
+          --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=90
 
       - name: Upload integration test report
         if: always()
@@ -211,12 +211,31 @@ jobs:
           --latency-tolerance-pct 25
           --min-success-rate 95
 
+      - name: Run 100-concurrency load test
+        run: >
+          python tests/load/run_load_test.py
+          --mode burst
+          --concurrency 100
+          --requests 500
+          --api-key ci-load-test-key
+          --report artifacts/load-report-100.json
+
+      - name: Regression gate — 100-concurrency vs baseline
+        run: >
+          python tests/load/compare_reports.py
+          --baseline tests/load/baseline.json
+          --report artifacts/load-report-100.json
+          --latency-tolerance-pct 100
+          --min-success-rate 95
+
       - name: Upload load test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: load-baseline-report
-          path: artifacts/load-report-ci.json
+          path: |
+            artifacts/load-report-ci.json
+            artifacts/load-report-100.json
 
   docker-build:
     name: Docker Build
@@ -227,3 +246,9 @@ jobs:
 
       - name: Build production image
         run: docker build -t afcfta-intelligence:ci .
+
+      - name: Scan image for critical vulnerabilities (trivy)
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+          trivy image --exit-code 1 --severity CRITICAL --ignore-unfixed afcfta-intelligence:ci

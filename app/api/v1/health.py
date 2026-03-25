@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.config import get_settings
-from app.core.exceptions import ReadinessCheckError
-from app.db.base import check_database_readiness
+from app.core.exceptions import AISBaseException, ReadinessCheckError
+from app.db.base import check_database_readiness, get_pool_stats
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,10 +24,28 @@ async def health_check() -> dict[str, str]:
 
 
 @router.get("/health/ready")
-async def readiness_check() -> dict[str, object]:
-    """Return dependency readiness information for operators and container probes."""
+async def readiness_check(request: Request) -> dict[str, object]:
+    """Return dependency readiness information for operators and container probes.
+
+    Pool stats are included only for authenticated callers.  Unauthenticated
+    container probes receive the same ``status`` and ``checks`` fields as before
+    so existing health-check tooling is unaffected.
+    """
+
+    from app.api.deps import require_authenticated_principal
 
     settings = get_settings()
+
+    # Collect pool stats before the DB check.  check_database_readiness()
+    # calls engine.dispose() which drains the pool, so reading stats after
+    # would always show zero checked-out connections.
+    pool_stats: dict[str, object] | None = None
+    try:
+        await require_authenticated_principal(request, settings)
+        pool_stats = get_pool_stats()
+    except AISBaseException:
+        pass
+
     try:
         await check_database_readiness()
     except Exception as exc:
@@ -40,9 +58,12 @@ async def readiness_check() -> dict[str, object]:
             },
         ) from exc
 
-    return {
+    result: dict[str, object] = {
         "status": "ok",
         "version": settings.APP_VERSION,
         "checks": {"database": "ok"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if pool_stats is not None:
+        result["pool_stats"] = pool_stats
+    return result

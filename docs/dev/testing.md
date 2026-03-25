@@ -458,6 +458,38 @@ Ramp:
 - If `success_rate_pct` falls below `--fail-under` (default 95) the script
   exits with code 1, making it usable as a staging gate.
 
+### Watching pool saturation during a load run
+
+Poll `GET /api/v1/health/ready` with your API key during or after a load run
+to read the `pool_stats` block:
+
+```bash
+curl -s -H "X-API-Key: $AIS_API_KEY" http://localhost:8000/api/v1/health/ready \
+  | python -m json.tool
+```
+
+Key fields in `pool_stats`:
+
+| Field | What it tells you |
+|---|---|
+| `checked_out` | Connections currently in use by active requests |
+| `pool_size` | Configured steady-state pool capacity (`DB_POOL_SIZE`) |
+| `overflow` | Connections using the overflow buffer beyond `pool_size` |
+| `checked_in` | Idle connections currently sitting in the pool |
+| `pool_pressure` | `"ok"` / `"elevated"` / `"saturated"` (see below) |
+
+Pressure thresholds (based on `checked_out / pool_size`):
+
+| Value | Threshold | Action |
+|---|---|---|
+| `ok` | < 75 % | Normal — no action needed |
+| `elevated` | ≥ 75 % | Consider increasing `DB_POOL_SIZE` or `UVICORN_WORKERS` |
+| `saturated` | ≥ 95 % | Pool is at capacity — requests are queuing for connections |
+
+If `pool_pressure` is `saturated` and p95 latency is high, the bottleneck
+is the connection pool, not the application logic.  Increase `DB_POOL_SIZE`
+(and `DB_POOL_MAX_OVERFLOW`) or add Uvicorn workers before scaling load further.
+
 ### What still needs true performance infrastructure
 
 The harness is intentionally minimal — stdlib `asyncio` + `httpx`.

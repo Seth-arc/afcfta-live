@@ -14,7 +14,8 @@
       "Bash(python -m pytest tests/integration -q)",
       "Bash(python -m alembic history)",
       "Bash(python -c \"import tests.load.run_load_test as m; print\\(''import ok''\\); print\\(''burst defaults:'', m.DEFAULT_CONCURRENCY, m.DEFAULT_TOTAL_REQUESTS\\); print\\(''ramp defaults:'', m.DEFAULT_RAMP_STAGES, m.DEFAULT_RAMP_STAGE_DURATION\\)\")",
-      "Bash(python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report.json)"
+      "Bash(python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report.json)",
+      "Bash(python -m pytest tests/unit/test_health.py -v)"
     ]
   }
 }

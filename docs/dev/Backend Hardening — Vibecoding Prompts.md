@@ -770,6 +770,7 @@ python tests/load/run_load_test.py --mode burst --requests 50 --api-key test
 # Completed 24 March
 
 # (dry-run against a stopped server to confirm args parse and exit cleanly)
+
 # Prompt 20 — Cross-run latency baseline in CI
 
 Read .github/workflows/ci.yml.
@@ -806,12 +807,12 @@ When done, summarize:
 - how to update the baseline
 - the CI job name and when it runs
 You run:
-
-
 python tests/load/compare_reports.py --help
 python tests/load/compare_reports.py \
   --baseline tests/load/baseline.json \
   --report artifacts/load-report.json
+# Completed 24 March
+
 
 # Prompt 21 — DB pool saturation signal
 
@@ -849,10 +850,9 @@ When done, summarize:
 - how pool_pressure is classified
 - what the load harness operator should watch during a load run
 You run:
-
-
 python -m pytest tests/unit/test_health.py -v
 python -m pytest tests/integration/test_health_api.py -v
+
 
 # Prompt 22 — Multi-worker concurrency evidence
 

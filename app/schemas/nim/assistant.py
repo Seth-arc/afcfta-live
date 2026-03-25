@@ -132,6 +132,7 @@ class AssistantResponseEnvelope(BaseModel):
     assessment: EligibilityAssessmentResponse | None = None
     clarification: ClarificationResponse | None = None
     explanation: str | None = None  # additive only; never contradicts assessment
+    explanation_fallback_used: bool = False  # True when deterministic fallback replaced NIM text
     error: AssistantError | None = None
 
     model_config = ConfigDict(

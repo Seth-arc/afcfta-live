@@ -417,7 +417,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_assistant_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 10 — Add NIM fallback behavior that never blocks deterministic assessments
@@ -446,7 +446,7 @@ When done, summarize:
 python -m pytest tests/unit -q
 python -m pytest tests/integration/test_assistant_api.py -v
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 11 — Add NIM-specific logging and audit correlation without polluting legal audit trails
@@ -480,7 +480,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit -q
 ```
-
+# Completed 24 March
 ---
 
 ## Prompt 12 — Add end-to-end NIM full-flow validation

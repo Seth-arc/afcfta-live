@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\schemas\nim\assistant.py
+# hypothesis_version: 6.151.9
+
+[1.0, 2020, 2025, 2040, 4000, '0.0000', '110311', '15.0000', '999999', 'CTH', 'GHA', 'INPUT_REJECTED', 'NGA', 'agreed', 'assessment', 'audit_persisted', 'audit_url', 'base_rate', 'case_id', 'clarification', 'code', 'complete', 'completeness_ratio', 'confidence_class', 'context', 'detail', 'eligible', 'error', 'evaluation_id', 'evidence_required', 'examples', 'explanation', 'exporter', 'failures', 'forbid', 'hs6_code', 'importer', 'in_force', 'message', 'missing_evidence', 'missing_facts', 'pathway_used', 'persona_mode', 'preferential_rate', 'question', 'readiness_score', 'response_type', 'rule_status', 'status', 'tariff_outcome', 'user_input', 'year']

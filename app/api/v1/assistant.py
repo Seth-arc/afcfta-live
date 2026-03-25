@@ -23,6 +23,7 @@ Early-exit conditions (no DB connection, no engine call):
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import APIRouter, Depends, Response
 from pydantic import ValidationError
@@ -34,6 +35,7 @@ from app.api.deps import (
     get_intake_service,
     require_assessment_rate_limit,
 )
+from app.config import Settings, get_settings
 from app.schemas.nim.assistant import (
     AssistantError,
     AssistantRequest,
@@ -43,6 +45,12 @@ from app.schemas.nim.clarification import ClarificationContext
 from app.services.nim.clarification_service import ClarificationService
 from app.services.nim.explanation_service import ExplanationService
 from app.services.nim.intake_service import IntakeService
+from app.services.nim.logging import (
+    log_nim_assessment_completed,
+    log_nim_clarification_sent,
+    log_nim_input_rejected,
+    log_nim_intake_parsed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +67,7 @@ async def assistant_assess(
     intake_service: IntakeService = Depends(get_intake_service),
     clarification_service: ClarificationService = Depends(get_clarification_service),
     explanation_service: ExplanationService = Depends(get_explanation_service),
+    settings: Settings = Depends(get_settings),
 ) -> AssistantResponseEnvelope:
     """NIM-assisted eligibility assessment.
 
@@ -79,15 +88,34 @@ async def assistant_assess(
        fallback always fires; explanation never alters assessment fields).
     6. Return combined AssistantResponseEnvelope.
     """
+    t_start = time.monotonic()
+
     # -------------------------------------------------------------------------
     # Step 1: Parse natural-language input into a structured draft
     # -------------------------------------------------------------------------
+    t_intake = time.monotonic()
     draft = await intake_service.parse_user_input(payload.user_input, payload.context)
+    intake_latency_ms = int((time.monotonic() - t_intake) * 1000)
+
+    missing_facts = draft.missing_required_facts()
+
+    log_nim_intake_parsed(
+        nim_enabled=intake_service.nim_client.enabled,
+        nim_model=intake_service.nim_client.model,
+        latency_ms=intake_latency_ms,
+        draft_complete=len(missing_facts) == 0,
+        missing_required_facts=missing_facts,
+        nim_confidence_overall=(
+            draft.nim_confidence.overall if draft.nim_confidence is not None else None
+        ),
+        has_context_hints=payload.context is not None,
+        io_logging_enabled=settings.NIM_LOG_IO,
+        user_input_char_count=len(payload.user_input) if settings.NIM_LOG_IO else None,
+    )
 
     # -------------------------------------------------------------------------
     # Step 2: Completeness and confidence gate → clarification (no DB)
     # -------------------------------------------------------------------------
-    missing_facts = draft.missing_required_facts()
     low_confidence = (
         draft.nim_confidence is not None
         and draft.nim_confidence.overall < _MIN_NIM_CONFIDENCE
@@ -100,9 +128,21 @@ async def assistant_assess(
         clarification_context = ClarificationContext(
             missing_draft_facts=clarification_missing
         )
+
+        t_clr = time.monotonic()
         clarification = await clarification_service.generate_clarification(
             clarification_context
         )
+        clr_latency_ms = int((time.monotonic() - t_clr) * 1000)
+
+        log_nim_clarification_sent(
+            latency_ms=clr_latency_ms,
+            missing_required_facts=clarification_missing,
+            low_confidence_trigger=low_confidence and not missing_facts,
+            gap_key_asked=clarification_missing[0],
+            nim_enabled=clarification_service.nim_client.enabled,
+        )
+
         return AssistantResponseEnvelope(
             response_type="clarification",
             audit_persisted=False,
@@ -116,6 +156,7 @@ async def assistant_assess(
         eligibility_request = intake_service.to_eligibility_request(draft)
     except (ValueError, ValidationError) as exc:
         logger.warning("NIM draft mapping rejected: %s", exc)
+        log_nim_input_rejected(exc_type=type(exc).__name__)
         return AssistantResponseEnvelope(
             response_type="error",
             audit_persisted=False,
@@ -131,8 +172,10 @@ async def assistant_assess(
     # assess_interface_request() ensures an evaluation row exists before
     # returning. Persistence failure raises EvaluationPersistenceError → 500.
     # -------------------------------------------------------------------------
+    t_engine = time.monotonic()
     async with assessment_eligibility_service_context() as eligibility_service:
         result = await eligibility_service.assess_interface_request(eligibility_request)
+    engine_latency_ms = int((time.monotonic() - t_engine) * 1000)
 
     audit_url = f"/api/v1/audit/evaluations/{result.evaluation_id}"
     response.headers["X-AIS-Case-Id"] = result.case_id
@@ -149,8 +192,27 @@ async def assistant_assess(
     elif draft.context is not None and draft.context.persona_mode is not None:
         persona_mode_str = draft.context.persona_mode.value
 
+    t_expl = time.monotonic()
     explanation_result = await explanation_service.generate_explanation(
         result.response, persona_mode_str
+    )
+    expl_latency_ms = int((time.monotonic() - t_expl) * 1000)
+
+    total_latency_ms = int((time.monotonic() - t_start) * 1000)
+
+    log_nim_assessment_completed(
+        nim_model=explanation_service.nim_client.model,
+        case_id=result.case_id,
+        evaluation_id=result.evaluation_id,
+        audit_url=audit_url,
+        engine_latency_ms=engine_latency_ms,
+        explanation_latency_ms=expl_latency_ms,
+        total_latency_ms=total_latency_ms,
+        eligible=result.response.eligible,
+        confidence_class=result.response.confidence_class,
+        pathway_used=result.response.pathway_used,
+        explanation_fallback_used=explanation_result.fallback_used,
+        persona_mode=persona_mode_str,
     )
 
     # -------------------------------------------------------------------------
@@ -164,4 +226,5 @@ async def assistant_assess(
         audit_persisted=result.response.audit_persisted,
         assessment=result.response,
         explanation=explanation_result.text,
+        explanation_fallback_used=explanation_result.fallback_used,
     )

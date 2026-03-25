@@ -35,7 +35,13 @@
       "Bash(python -m pytest tests/integration/test_assistant_api.py -v)",
       "Bash(python -m pytest \"tests/integration/test_assistant_api.py::test_assistant_rejects_empty_user_input\" -v --tb=short)",
       "Bash(python -m pytest \"tests/integration/test_assistant_api.py::test_assistant_rejects_empty_user_input\" -v --tb=long)",
-      "Bash(python -m pytest tests/integration/test_assistant_api.py -v --tb=short)"
+      "Bash(python -m pytest tests/integration/test_assistant_api.py -v --tb=short)",
+      "Bash(python -m pytest tests/unit/ -q --tb=short)",
+      "Bash(python -m pytest tests/integration/test_assistant_api.py -q --tb=short -k \"not happy_path and not explanation_timeout and not explanation_invalid\")",
+      "Bash(python -m pytest tests/integration/test_assistant_api.py -q --tb=short -k \"timeout or invalid_json or schema_mismatch\")",
+      "Bash(python -m pytest tests/integration/test_assistant_api.py --collect-only -q)",
+      "Bash(python -m pytest tests/integration/test_assistant_api.py -q --tb=no)",
+      "Bash(python -m pytest tests/unit/test_nim_logging.py -v --tb=short)"
     ]
   }
 }

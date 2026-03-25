@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     NIM_MODEL: str = ""
     NIM_TIMEOUT_SECONDS: float = 30.0
     NIM_MAX_RETRIES: int = 2
+    # When True, logs user_input_char_count (integer only — never the raw text).
+    # Leave False in production unless a redaction-safe logging pipeline is in place.
+    NIM_LOG_IO: bool = False
 
     # Application metadata
     APP_TITLE: str = "AfCFTA Intelligence API"

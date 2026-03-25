@@ -39,6 +39,7 @@ REQUIRED_ENVELOPE_FIELDS = {
     "assessment",
     "clarification",
     "explanation",
+    "explanation_fallback_used",
     "error",
 }
 
@@ -589,3 +590,193 @@ async def test_assessment_fields_not_altered_by_explanation(
             assert "submitted_documents" not in asmnt
     finally:
         _remove_intake_override(app)
+
+
+# ---------------------------------------------------------------------------
+# NIM failure mode fallback: intake service — no DB touched
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nim_intake_timeout_returns_clarification_not_500(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """NIM intake timeout must produce a clarification response, never a 500.
+
+    IntakeService catches NimClientError and falls back to an empty draft.
+    The clarification gate fires immediately (all facts missing).
+    ClarificationService also catches the timeout and returns a deterministic
+    question. No DB connection is opened.
+    """
+    from app.api.deps import get_nim_client
+    from app.services.nim.client import NimClientError
+
+    mock_nim = MagicMock()
+    mock_nim.generate_json = AsyncMock(
+        side_effect=NimClientError("timed out after 30s", reason="timeout")
+    )
+    app.dependency_overrides[get_nim_client] = lambda: mock_nim
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_minimal_request())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "clarification", (
+            "NIM intake timeout must fall back to clarification, not crash"
+        )
+        assert body["audit_persisted"] is False
+        assert body["case_id"] is None
+        assert body["evaluation_id"] is None
+        # Clarification must contain a deterministic question (not empty)
+        assert body["clarification"] is not None
+        assert isinstance(body["clarification"]["question"], str)
+        assert len(body["clarification"]["question"]) > 0
+        assert len(body["clarification"]["missing_facts"]) > 0
+    finally:
+        app.dependency_overrides.pop(get_nim_client, None)
+
+
+@pytest.mark.asyncio
+async def test_nim_intake_invalid_json_returns_clarification_not_500(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """NIM intake returning invalid JSON must fall back to clarification, not 500.
+
+    IntakeService catches JSONDecodeError and returns an empty draft.
+    ClarificationService returns a deterministic question because the NIM
+    phrasing call also receives invalid JSON and falls through to its own
+    fallback. No DB connection is opened.
+    """
+    from app.api.deps import get_nim_client
+
+    mock_nim = MagicMock()
+    mock_nim.generate_json = AsyncMock(return_value="{{not-valid-json-at-all")
+    app.dependency_overrides[get_nim_client] = lambda: mock_nim
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_minimal_request())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "clarification", (
+            "NIM intake invalid JSON must fall back to clarification"
+        )
+        assert body["audit_persisted"] is False
+        assert body["clarification"] is not None
+        assert len(body["clarification"]["question"]) > 0
+    finally:
+        app.dependency_overrides.pop(get_nim_client, None)
+
+
+@pytest.mark.asyncio
+async def test_nim_intake_schema_mismatch_returns_clarification_not_500(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """NIM returning JSON that fails NimAssessmentDraft validation must
+    fall back to an empty draft and return clarification.
+
+    NimAssessmentDraft uses extra='forbid'; an unrecognised top-level key
+    raises ValidationError which IntakeService catches. No DB is opened.
+    """
+    import json as _json
+
+    from app.api.deps import get_nim_client
+
+    # Parseable JSON but extra='forbid' rejects unknown top-level keys
+    bad_payload = _json.dumps({"unrecognised_nim_field": True, "product": None})
+    mock_nim = MagicMock()
+    mock_nim.generate_json = AsyncMock(return_value=bad_payload)
+    app.dependency_overrides[get_nim_client] = lambda: mock_nim
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_minimal_request())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "clarification", (
+            "NIM draft ValidationError must fall back to clarification"
+        )
+        assert body["audit_persisted"] is False
+        assert body["clarification"] is not None
+    finally:
+        app.dependency_overrides.pop(get_nim_client, None)
+
+
+# ---------------------------------------------------------------------------
+# NIM failure mode fallback: explanation service — engine result preserved
+# (Requires DB — passes in CI where Postgres runs as a service)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_nim_explanation_timeout_does_not_block_assessment(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """NIM explanation timeout must not block the assessment result.
+
+    The engine decision is returned unchanged. The explanation falls back to
+    the minimal deterministic summary and explanation_fallback_used is True.
+    """
+    from app.api.deps import get_nim_client
+    from app.services.nim.client import NimClientError
+
+    _override_intake_with_complete_draft(app)
+    mock_nim = MagicMock()
+    mock_nim.generate_json = AsyncMock(
+        side_effect=NimClientError("timed out after 30s", reason="timeout")
+    )
+    app.dependency_overrides[get_nim_client] = lambda: mock_nim
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "assessment", (
+            "Explanation timeout must not block the assessment result"
+        )
+        # Deterministic engine output is untouched
+        assert body["assessment"] is not None
+        assert isinstance(body["assessment"]["eligible"], bool)
+        # Fallback explanation must be present — never fabricated, never None
+        assert body["explanation"] is not None
+        assert len(body["explanation"]) > 0
+        # Caller-visible fallback signal
+        assert body["explanation_fallback_used"] is True
+    finally:
+        _remove_intake_override(app)
+        app.dependency_overrides.pop(get_nim_client, None)
+
+
+@pytest.mark.asyncio
+async def test_nim_explanation_invalid_json_does_not_block_assessment(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """NIM explanation returning invalid JSON must not block the assessment.
+
+    The deterministic fallback text is used; explanation_fallback_used is True.
+    The engine assessment fields are returned exactly as produced by the engine.
+    """
+    from app.api.deps import get_nim_client
+
+    _override_intake_with_complete_draft(app)
+    mock_nim = MagicMock()
+    mock_nim.generate_json = AsyncMock(return_value="{{not-valid-json")
+    app.dependency_overrides[get_nim_client] = lambda: mock_nim
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "assessment", (
+            "Explanation invalid JSON must not block the assessment result"
+        )
+        assert body["assessment"] is not None
+        assert body["explanation"] is not None
+        assert len(body["explanation"]) > 0
+        assert body["explanation_fallback_used"] is True
+    finally:
+        _remove_intake_override(app)
+        app.dependency_overrides.pop(get_nim_client, None)

@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\services\nim\logging.py
+# hypothesis_version: 6.151.9
+
+['INPUT_REJECTED', 'app.nim', 'draft_complete', 'has_context_hints', 'intake_latency_ms', 'nim.input_rejected', 'nim.intake_parsed', 'nim_enabled', 'nim_model']

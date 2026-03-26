@@ -46,4 +46,4 @@ EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3); sys.exit(0)"
 
-CMD ["sh", "-c", "test -n \"$DATABASE_URL\" && test -n \"$API_AUTH_KEY\" && test -n \"$ENV\" || { echo 'Missing mandatory production settings: DATABASE_URL, API_AUTH_KEY, ENV' >&2; exit 1; }; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}"]
+CMD ["sh", "-c", "test -n \"$DATABASE_URL\" && test -n \"$API_AUTH_KEY\" && test -n \"$ENV\" || { echo 'Missing mandatory production settings: DATABASE_URL, API_AUTH_KEY, ENV' >&2; exit 1; }; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:?UVICORN_WORKERS must be set explicitly — do not rely on the default. Set 1 for InMemoryRateLimiter deployments, higher only after REDIS_URL is configured}"]

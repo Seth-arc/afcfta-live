@@ -8,12 +8,16 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.cache as cache
+from app.config import get_settings
 from app.db.base import get_async_session_factory
 from app.db.models.hs import HS6Product
 from app.repositories.hs_repository import HSRepository
+from tests.fixtures.golden_cases import GOLDEN_CASES
 
 
 pytestmark = pytest.mark.integration
@@ -68,6 +72,62 @@ def _extract_search_term(description: str) -> str:
     if not tokens:
         pytest.skip("No HS description with a stable alphabetic token is available in the test database.")
     return tokens[0].lower()
+
+
+def _golden_case(name_fragment: str) -> Mapping[str, Any]:
+    """Return one locked golden case by a stable name fragment."""
+
+    for case in GOLDEN_CASES:
+        if name_fragment in str(case["name"]):
+            return case
+    raise AssertionError(f"Golden case not found for fragment: {name_fragment}")
+
+
+def _fact_payload(fact_key: str, value: Any) -> dict[str, Any]:
+    """Convert one golden-case fact into the live assessment payload shape."""
+
+    payload: dict[str, Any] = {
+        "fact_type": fact_key,
+        "fact_key": fact_key,
+    }
+    if isinstance(value, bool):
+        payload["fact_value_type"] = "boolean"
+        payload["fact_value_boolean"] = value
+        return payload
+    if isinstance(value, int | float):
+        payload["fact_value_type"] = "number"
+        payload["fact_value_number"] = value
+        return payload
+    if isinstance(value, list):
+        payload["fact_value_type"] = "list"
+        payload["fact_value_json"] = value
+        return payload
+    if isinstance(value, dict):
+        payload["fact_value_type"] = "json"
+        payload["fact_value_json"] = value
+        return payload
+
+    payload["fact_value_type"] = "text"
+    payload["fact_value_text"] = value
+    return payload
+
+
+def _assessment_payload(case: Mapping[str, Any]) -> dict[str, Any]:
+    """Build one live assessment request from a locked golden case."""
+
+    case_input = case["input"]
+    facts = case_input["facts"]
+    return {
+        "hs6_code": case_input["hs6_code"],
+        "hs_version": case_input["hs_version"],
+        "exporter": case_input["exporter"],
+        "importer": case_input["importer"],
+        "year": case_input["year"],
+        "persona_mode": "exporter",
+        "production_facts": [
+            _fact_payload(fact_key, value) for fact_key, value in facts.items()
+        ],
+    }
 
 
 async def _seed_multi_version_fixture(session: AsyncSession) -> str:
@@ -276,3 +336,47 @@ async def test_list_all_respects_limit_offset_and_repository_order(
     assert [(row.hs_version, row.hs6_code) for row in results] == [
         (str(row["hs_version"]), str(row["hs6_code"])) for row in expected_rows
     ]
+
+
+@pytest.mark.asyncio
+async def test_static_lookup_cache_preserves_hs_resolution_and_assessment_outcome(
+    hs_repository: tuple[AsyncSession, HSRepository],
+    async_client: AsyncClient,
+) -> None:
+    """Cold-cache and warm-cache reads must return the same repository row and assessment output."""
+
+    _session, repository = hs_repository
+    settings = get_settings()
+    case = _golden_case("groats CTH pass")
+    hs_version = str(case["input"]["hs_version"])
+    hs6_code = str(case["input"]["hs6_code"])
+    cache_key = ("hs6", hs_version, hs6_code)
+
+    assert settings.CACHE_STATIC_LOOKUPS is True
+
+    cache.clear_all()
+
+    first_product = await repository.get_by_code(hs_version, hs6_code)
+    second_product = await repository.get_by_code(hs_version, hs6_code)
+
+    assert first_product is not None
+    assert second_product is not None
+    assert cache_key in cache.hs6_store
+    assert str(first_product.hs6_id) == str(second_product.hs6_id)
+    assert first_product.hs_version == second_product.hs_version
+    assert first_product.hs6_code == second_product.hs6_code
+    assert first_product.hs6_display == second_product.hs6_display
+    assert first_product.description == second_product.description
+
+    cache.clear_all()
+
+    payload = _assessment_payload(case)
+    first_response = await async_client.post("/api/v1/assessments", json=payload)
+    second_response = await async_client.post("/api/v1/assessments", json=payload)
+
+    assert first_response.status_code == 200, first_response.text
+    assert second_response.status_code == 200, second_response.text
+    assert cache.hs6_store
+    assert cache.psr_store
+    assert cache.tariff_store
+    assert first_response.json() == second_response.json()

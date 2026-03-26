@@ -14,6 +14,7 @@ from app.core.enums import (
     AlertStatusEnum,
     AlertTypeEnum,
     HsLevelEnum,
+    PersonaModeEnum,
     RuleStatusEnum,
     ScheduleStatusEnum,
     TariffCategoryEnum,
@@ -362,11 +363,12 @@ async def test_eligible_product_pathway_and_general_rules_pass() -> None:
         call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),
     ]
     deps["evidence_service"].build_readiness.assert_awaited_once_with(
-        "pathway",
-        f"PATHWAY:{_uuid(12)}",
-        "exporter",
-        [],
-        "complete",
+        entity_type="pathway",
+        entity_key=f"PATHWAY:{_uuid(12)}",
+        persona_mode=request.persona_mode,
+        existing_documents=[],
+        confidence_class="complete",
+        assessment_date=date(2025, 1, 1),
     )
 
 
@@ -993,11 +995,12 @@ async def test_assess_case_loads_stored_facts_and_reuses_direct_path() -> None:
     persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
     assert persisted_evaluation["case_id"] == case_id
     deps["evidence_service"].build_readiness.assert_awaited_once_with(
-        "pathway",
-        f"PATHWAY:{_uuid(12)}",
-        "exporter",
-        ["certificate_of_origin"],
-        "complete",
+        entity_type="pathway",
+        entity_key=f"PATHWAY:{_uuid(12)}",
+        persona_mode=PersonaModeEnum.EXPORTER,
+        existing_documents=["certificate_of_origin"],
+        confidence_class="complete",
+        assessment_date=date(2025, 1, 1),
     )
 
 
@@ -1392,7 +1395,28 @@ async def test_assessment_falls_back_to_rule_type_evidence_when_specific_targets
     assert result.readiness_score == 0.0
     assert result.completeness_ratio == 0.0
     assert deps["evidence_service"].build_readiness.await_args_list == [
-        call("pathway", f"PATHWAY:{_uuid(12)}", "exporter", [], "complete"),
-        call("hs6_rule", f"HS6_RULE:{_uuid(10)}", "exporter", [], "complete"),
-        call("rule_type", "CTH", "exporter", [], "complete"),
+        call(
+            entity_type="pathway",
+            entity_key=f"PATHWAY:{_uuid(12)}",
+            persona_mode=request.persona_mode,
+            existing_documents=[],
+            confidence_class="complete",
+            assessment_date=date(2025, 1, 1),
+        ),
+        call(
+            entity_type="hs6_rule",
+            entity_key=f"HS6_RULE:{_uuid(10)}",
+            persona_mode=request.persona_mode,
+            existing_documents=[],
+            confidence_class="complete",
+            assessment_date=date(2025, 1, 1),
+        ),
+        call(
+            entity_type="rule_type",
+            entity_key="CTH",
+            persona_mode=request.persona_mode,
+            existing_documents=[],
+            confidence_class="complete",
+            assessment_date=date(2025, 1, 1),
+        ),
     ]

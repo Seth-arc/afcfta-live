@@ -49,6 +49,36 @@ _DRAFT_FACT_LABELS: dict[str, str] = {
     "persona_mode": "user role — exporter, customs officer, or trade analyst",
 }
 
+_ENGINE_FACT_LABELS: dict[str, str] = {
+    "ex_works": "the ex-works value of the finished goods",
+    "non_originating": "the value of the non-originating materials used",
+    "tariff_heading_input": (
+        "the tariff heading of the imported materials before processing"
+    ),
+    "tariff_heading_output": (
+        "the tariff heading of the finished goods after processing"
+    ),
+    "wholly_obtained": (
+        "whether the goods are wholly obtained in the exporting country"
+    ),
+    "direct_transport": (
+        "whether the goods were shipped directly from the exporting country "
+        "to the importing country"
+    ),
+    "cumulation_claimed": (
+        "whether you are claiming cumulation with materials or processing "
+        "from another AfCFTA country"
+    ),
+    "va_percent": (
+        "the percentage of the finished goods' value added in the exporting "
+        "country"
+    ),
+    "vnom_percent": (
+        "the percentage of the ex-works value that comes from "
+        "non-originating materials"
+    ),
+}
+
 # ---------------------------------------------------------------------------
 # Deterministic fallback question templates
 # ---------------------------------------------------------------------------
@@ -73,7 +103,8 @@ _DRAFT_FACT_QUESTIONS: dict[str, str] = {
 }
 
 _ENGINE_FACT_QUESTION = (
-    "Please provide the value for the following production fact: {fact_key}."
+    "To continue the assessment, I need to know {readable_label}. "
+    "Could you provide that?"
 )
 _EVIDENCE_QUESTION = (
     "Do you have the following document available: {evidence_key}?"
@@ -127,6 +158,23 @@ Rules:
 Return ONLY a JSON object: {"question": "<your single focused question>"}
 """
 
+_NIM_MULTI_GAP_SYSTEM_PROMPT = """\
+You are an assistant for the AfCFTA trade eligibility service.
+Your task is to ask for all of the listed missing intake fields in ONE short
+message.
+
+Rules:
+- Ask only for the listed intake fields and nothing else.
+- Ask for all listed items in one clear message.
+- Do NOT state or imply what the eligibility outcome might be.
+- Do NOT promise that providing the information will lead to approval.
+- Do NOT use language like "eligible", "qualifies", "compliant", or similar.
+- Keep the message short, clear, and suitable for a trader or customs official.
+- Keep the listed items in the same order they are provided below.
+
+Return ONLY a JSON object: {"question": "<your short message asking for all listed items>"}
+"""
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -139,7 +187,7 @@ def _gap_context_lines(gap_key: str, context: ClarificationContext) -> str:
         label = _DRAFT_FACT_LABELS.get(gap_key, gap_key.replace("_", " "))
         gap_type = "required intake field"
     elif gap_key in context.missing_engine_facts:
-        label = gap_key.replace("_", " ")
+        label = _ENGINE_FACT_LABELS.get(gap_key, gap_key.replace("_", " "))
         gap_type = "production fact needed by the engine"
     else:
         label = gap_key.replace("_", " ")
@@ -148,12 +196,40 @@ def _gap_context_lines(gap_key: str, context: ClarificationContext) -> str:
     return f"Gap type: {gap_type}\nGap key: {gap_key}\nDescription: {label}"
 
 
+def _multi_gap_context_lines(gap_keys: list[str]) -> str:
+    """Build the user-input text describing multiple required draft gaps."""
+    labels = [
+        _DRAFT_FACT_LABELS.get(gap_key, gap_key.replace("_", " "))
+        for gap_key in gap_keys
+    ]
+    descriptions = "\n".join(
+        f"- {gap_key}: {label}" for gap_key, label in zip(gap_keys, labels)
+    )
+    return (
+        "Gap type: required intake fields\n"
+        f"Gap keys: {', '.join(gap_keys)}\n"
+        f"Descriptions:\n{descriptions}"
+    )
+
+
+def _multi_gap_fallback_question(gap_keys: list[str]) -> str:
+    """Return the deterministic fallback for multiple missing draft facts."""
+    labels = [
+        _DRAFT_FACT_LABELS.get(gap_key, gap_key.replace("_", " "))
+        for gap_key in gap_keys
+    ]
+    return f"To get started, I need a few things: {', '.join(labels)}."
+
+
 def _deterministic_question(gap_key: str) -> str:
     """Return a deterministic fallback question for the given gap key."""
     if gap_key in _DRAFT_FACT_QUESTIONS:
         return _DRAFT_FACT_QUESTIONS[gap_key]
-    if gap_key in PRODUCTION_FACTS:
-        return _ENGINE_FACT_QUESTION.format(fact_key=gap_key.replace("_", " "))
+    if gap_key in PRODUCTION_FACTS or gap_key in _ENGINE_FACT_LABELS:
+        readable_label = _ENGINE_FACT_LABELS.get(
+            gap_key, gap_key.replace("_", " ")
+        )
+        return _ENGINE_FACT_QUESTION.format(readable_label=readable_label)
     return _EVIDENCE_QUESTION.format(evidence_key=gap_key.replace("_", " "))
 
 
@@ -207,13 +283,16 @@ class ClarificationService:
             )
 
         # 1. Deterministic gap selection — not model-driven
-        gap_key = context.highest_priority_gap()
-        # gap_key cannot be None here because ClarificationContext validates
-        # that at least one gap is present
-        assert gap_key is not None  # schema invariant
-
-        # 2. NIM phrasing attempt with full fallback chain
-        question = await self._phrase_question(gap_key, context)
+        if len(context.missing_draft_facts) > 1:
+            question = await self._phrase_multi_gap_question(
+                context.missing_draft_facts
+            )
+        else:
+            gap_key = context.highest_priority_gap()
+            # gap_key cannot be None here because ClarificationContext validates
+            # that at least one gap is present
+            assert gap_key is not None  # schema invariant
+            question = await self._phrase_question(gap_key, context)
 
         # 3. Assemble full missing-item lists for the response
         all_missing_facts = context.missing_draft_facts + context.missing_engine_facts
@@ -255,5 +334,37 @@ class ClarificationService:
                     question,
                 )
             return _deterministic_question(gap_key)
+
+        return question
+
+    async def _phrase_multi_gap_question(self, gap_keys: list[str]) -> str:
+        """Ask NIM to phrase one message covering multiple required draft facts."""
+        user_input = _multi_gap_context_lines(gap_keys)
+
+        try:
+            raw = await self.nim_client.generate_json(
+                _NIM_MULTI_GAP_SYSTEM_PROMPT, user_input
+            )
+        except NimClientError as exc:
+            logger.warning("NIM clarification multi-gap phrasing failed: %s", exc)
+            return _multi_gap_fallback_question(gap_keys)
+
+        if raw is None:
+            return _multi_gap_fallback_question(gap_keys)
+
+        try:
+            data = json.loads(raw)
+            question = str(data.get("question", "")).strip()
+        except (json.JSONDecodeError, TypeError, AttributeError) as exc:
+            logger.warning("NIM clarification multi-gap response parse error: %s", exc)
+            return _multi_gap_fallback_question(gap_keys)
+
+        if not question or _question_implies_outcome(question):
+            if question:
+                logger.warning(
+                    "NIM clarification multi-gap question implies outcome, using fallback: %r",
+                    question,
+                )
+            return _multi_gap_fallback_question(gap_keys)
 
         return question

@@ -47,6 +47,7 @@ from app.services.nim.explanation_service import (
 
 
 def _assessment(
+    hs6_code: str = "110311",
     eligible: bool = True,
     pathway_used: str | None = "CTH",
     rule_status: str = "agreed",
@@ -65,7 +66,7 @@ def _assessment(
             base_rate=Decimal("15.00"),
         )
     return EligibilityAssessmentResponse(
-        hs6_code="110311",
+        hs6_code=hs6_code,
         eligible=eligible,
         pathway_used=pathway_used,
         rule_status=RuleStatusEnum(rule_status),
@@ -309,13 +310,20 @@ class TestContradictionGuard:
 
 
 class TestBuildFallbackText:
-    def test_includes_outcome_word(self) -> None:
+    def test_eligible_fallback_uses_natural_opening(self) -> None:
         text = _build_fallback_text(_assessment(eligible=True))
-        assert "eligible" in text.lower()
+        assert (
+            "based on the information provided, this product qualifies "
+            "for afcfta preferential treatment."
+        ) in text.lower()
+        assert "assessment outcome" not in text.lower()
 
-    def test_includes_not_eligible_for_ineligible(self) -> None:
+    def test_ineligible_fallback_uses_currently_qualify_phrase(self) -> None:
         text = _build_fallback_text(_assessment(eligible=False))
-        assert "not eligible" in text.lower()
+        assert (
+            "based on the information provided, this product does not currently "
+            "qualify for afcfta preferential treatment."
+        ) in text.lower()
 
     def test_includes_pathway_when_present(self) -> None:
         text = _build_fallback_text(_assessment(pathway_used="CTH"))
@@ -335,7 +343,7 @@ class TestBuildFallbackText:
 
     def test_includes_missing_facts(self) -> None:
         text = _build_fallback_text(_assessment(missing_facts=["ex_works"]))
-        assert "ex_works" in text
+        assert "ex works" in text.lower()
 
     def test_is_non_empty_string(self) -> None:
         text = _build_fallback_text(_assessment())
@@ -346,10 +354,12 @@ class TestBuildNextSteps:
     def test_missing_evidence_generates_obtain_step(self) -> None:
         steps = _build_next_steps(_assessment(missing_evidence=["certificate_of_origin"]))
         assert any("certificate of origin" in s.lower() for s in steps)
+        assert any("required to claim the preferential tariff rate" in s.lower() for s in steps)
 
     def test_missing_facts_generates_provide_step(self) -> None:
         steps = _build_next_steps(_assessment(missing_facts=["ex_works"]))
         assert any("ex works" in s.lower() for s in steps)
+        assert any("origin assessment can continue" in s.lower() for s in steps)
 
     def test_eligible_with_evidence_required_and_no_missing_generates_prepare_step(self) -> None:
         steps = _build_next_steps(
@@ -437,7 +447,7 @@ async def test_fallback_text_echoes_eligible_outcome() -> None:
     svc = _service(return_value=None)
     result = await svc.generate_explanation(_assessment(eligible=True))
     assert result.text is not None
-    assert "eligible" in result.text.lower()
+    assert "qualifies for afcfta preferential treatment" in result.text.lower()
 
 
 @pytest.mark.asyncio
@@ -588,6 +598,24 @@ async def test_system_prompt_includes_pathway_used() -> None:
 
 
 @pytest.mark.asyncio
+async def test_system_prompt_includes_trade_context_when_provided() -> None:
+    client = _mock_client(_nim_text_json("The goods qualify."))
+    svc = ExplanationService(client)
+    await svc.generate_explanation(
+        _assessment(hs6_code="110311"),
+        hs6_code="220710",
+        exporter="GHA",
+        importer="NGA",
+    )
+
+    _, call_args, _ = client.generate_json.mock_calls[0]
+    prompt = call_args[0]
+    assert "Trade context:" in prompt
+    assert "HS6 product 220710" in prompt
+    assert "corridor GHA to NGA" in prompt
+
+
+@pytest.mark.asyncio
 async def test_system_prompt_persona_exporter_sets_audience() -> None:
     client = _mock_client(_nim_text_json("You qualify."))
     svc = ExplanationService(client)
@@ -596,6 +624,8 @@ async def test_system_prompt_persona_exporter_sets_audience() -> None:
     _, call_args, _ = client.generate_json.mock_calls[0]
     prompt = call_args[0]
     assert "exporter" in prompt.lower()
+    assert "practical" in prompt.lower()
+    assert "supportive" in prompt.lower()
 
 
 @pytest.mark.asyncio

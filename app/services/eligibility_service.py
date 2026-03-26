@@ -328,11 +328,16 @@ class EligibilityService:
         )
         audit_checks.extend(self._serialize_status_overlay(rule_overlay))
 
+        confidence_class = self._combine_confidence_class(
+            base_confidence=rule_overlay.confidence_class,
+            missing_facts=missing_facts,
+        )
         evidence_result = await self._build_evidence_readiness(
             rule_bundle=rule_bundle,
             selected_pathway=selected_pathway,
             persona_mode=request.persona_mode,
             existing_documents=request.existing_documents,
+            confidence_class=confidence_class,
         )
         audit_checks.append(self._make_evidence_trace_check(evidence_result))
 
@@ -356,10 +361,7 @@ class EligibilityService:
             missing_evidence=evidence_result.missing_items,
             readiness_score=evidence_result.readiness_score,
             completeness_ratio=evidence_result.completeness_ratio,
-            confidence_class=self._combine_confidence_class(
-                base_confidence=rule_overlay.confidence_class,
-                missing_facts=missing_facts,
-            ),
+            confidence_class=confidence_class,
         )
         audit_checks.append(self._make_decision_trace_check(response))
         response.audit_persisted = await self._persist_evaluation_if_possible(
@@ -893,6 +895,7 @@ class EligibilityService:
         selected_pathway: RulePathwayOut | None,
         persona_mode: str,
         existing_documents: Sequence[str],
+        confidence_class: str | None,
     ) -> Any:
         """Resolve readiness from the most specific evidence target with compatibility fallbacks."""
 
@@ -906,6 +909,7 @@ class EligibilityService:
                 entity_key,
                 persona_mode,
                 list(existing_documents),
+                confidence_class,
             )
             if fallback_result is None:
                 fallback_result = result

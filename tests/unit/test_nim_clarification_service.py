@@ -28,11 +28,13 @@ from pydantic import ValidationError
 from app.schemas.nim.clarification import ClarificationContext
 from app.services.nim.clarification_service import (
     ClarificationService,
+    _INPUT_TOO_LONG_QUESTION,
     _deterministic_question,
     _question_implies_outcome,
     _NIM_PHRASING_SYSTEM_PROMPT,
 )
 from app.services.nim.client import NimClientError
+from app.services.nim.intake_service import NIM_REJECTION_REASON_INPUT_TOO_LONG
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +91,12 @@ class TestClarificationContextValidation:
     def test_missing_evidence_alone_is_valid(self) -> None:
         ctx = ClarificationContext(missing_evidence=["certificate_of_origin"])
         assert ctx.missing_evidence == ["certificate_of_origin"]
+
+    def test_nim_rejection_reason_alone_is_valid(self) -> None:
+        ctx = ClarificationContext(
+            nim_rejection_reason=NIM_REJECTION_REASON_INPUT_TOO_LONG
+        )
+        assert ctx.nim_rejection_reason == NIM_REJECTION_REASON_INPUT_TOO_LONG
 
     def test_failure_codes_only_still_raises(self) -> None:
         """failure_codes alone does not count as a gap."""
@@ -237,6 +245,22 @@ async def test_returns_nim_phrased_question_when_valid_json_received() -> None:
     result = await svc.generate_clarification(ctx)
 
     assert result.question == nim_q
+
+
+@pytest.mark.asyncio
+async def test_returns_shorter_input_clarification_for_oversized_input() -> None:
+    ctx = ClarificationContext(
+        nim_rejection_reason=NIM_REJECTION_REASON_INPUT_TOO_LONG
+    )
+    client = _mock_client(_nim_question_json("unused"))
+    svc = ClarificationService(client)
+
+    result = await svc.generate_clarification(ctx)
+
+    client.generate_json.assert_not_called()
+    assert result.question == _INPUT_TOO_LONG_QUESTION
+    assert result.missing_facts == []
+    assert result.missing_evidence == []
 
 
 @pytest.mark.asyncio

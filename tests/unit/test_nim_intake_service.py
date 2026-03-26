@@ -14,13 +14,24 @@ Tests cover:
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.schemas.nim.intake import NimAssessmentDraft
+from app.schemas.nim.intake import (
+    AssessmentContext,
+    HS6Candidate,
+    NimAssessmentDraft,
+    NimConfidence,
+    TradeFlow,
+)
 from app.services.nim.client import NimClientError
-from app.services.nim.intake_service import IntakeService
+from app.services.nim.intake_service import (
+    IntakeService,
+    NIM_MAX_INPUT_CHARS,
+    NIM_REJECTION_REASON_INPUT_TOO_LONG,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +178,38 @@ async def test_parse_passes_user_input_to_generate_json() -> None:
 
     _, call_args, _ = client.generate_json.mock_calls[0]
     assert call_args[1] == "export wheat from Ghana to Nigeria"
+
+
+@pytest.mark.asyncio
+async def test_parse_sends_input_exactly_at_2000_char_boundary_to_nim() -> None:
+    """Input at the AGENTS.md boundary is still sent to NIM unchanged."""
+    user_input = "x" * NIM_MAX_INPUT_CHARS
+    client = _mock_client(_nim_json())
+
+    await IntakeService(client).parse_user_input(user_input)
+
+    client.generate_json.assert_awaited_once()
+    _, call_args, _ = client.generate_json.mock_calls[0]
+    assert call_args[1] == user_input
+
+
+@pytest.mark.asyncio
+async def test_parse_rejects_input_one_char_over_boundary_without_calling_nim(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Input above the AGENTS.md boundary returns an empty draft for clarification."""
+    user_input = "x" * (NIM_MAX_INPUT_CHARS + 1)
+    client = _mock_client(_nim_json())
+
+    with caplog.at_level(logging.WARNING):
+        draft = await IntakeService(client).parse_user_input(user_input)
+
+    client.generate_json.assert_not_called()
+    assert draft == NimAssessmentDraft(
+        nim_rejection_reason=NIM_REJECTION_REASON_INPUT_TOO_LONG
+    )
+    assert draft.nim_rejection_reason == NIM_REJECTION_REASON_INPUT_TOO_LONG
+    assert "user_input_char_count=2001" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -319,3 +362,41 @@ async def test_nim_confidence_preserved_on_draft() -> None:
 
     assert draft.nim_confidence is not None
     assert draft.nim_confidence.overall == pytest.approx(0.87)
+
+
+def test_to_eligibility_request_model_dump_excludes_nim_confidence_and_assumptions() -> None:
+    """EligibilityRequest must never expose NIM-only metadata keys."""
+    draft = NimAssessmentDraft(
+        product=HS6Candidate(hs6_code="110311"),
+        trade_flow=TradeFlow(exporter="GHA", importer="NGA", year=2025),
+        context=AssessmentContext(persona_mode="exporter"),
+        nim_confidence=NimConfidence(overall=0.95),
+        nim_assumptions=["assumed corridor from phrasing"],
+    )
+
+    request_payload = IntakeService(_mock_client()).to_eligibility_request(draft).model_dump()
+
+    assert "nim_confidence" not in request_payload
+    assert "nim_assumptions" not in request_payload
+
+
+def test_to_eligibility_request_strips_nim_metadata_without_model_call() -> None:
+    """Manual draft mapping must drop all NIM-only metadata to catch contract drift."""
+    draft = NimAssessmentDraft(
+        product=HS6Candidate(
+            hs6_code="110311",
+            product_description_parsed="wheat groats",
+        ),
+        trade_flow=TradeFlow(exporter="GHA", importer="NGA", year=2025),
+        context=AssessmentContext(persona_mode="exporter"),
+        nim_confidence=NimConfidence(overall=0.88),
+        nim_assumptions=["used trade context"],
+        nim_rejection_reason=NIM_REJECTION_REASON_INPUT_TOO_LONG,
+    )
+
+    request_payload = IntakeService(_mock_client()).to_eligibility_request(draft).model_dump()
+
+    assert "nim_confidence" not in request_payload
+    assert "nim_assumptions" not in request_payload
+    assert "nim_rejection_reason" not in request_payload
+    assert "product_description_parsed" not in request_payload

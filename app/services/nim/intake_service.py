@@ -9,8 +9,9 @@ Responsibility boundary:
 - Does NOT decide eligibility.
 - Does NOT access the database.
 
-The mapping layer drops `nim_confidence`, `nim_assumptions`, and
-`product.product_description_parsed` before constructing EligibilityRequest.
+The mapping layer drops `nim_confidence`, `nim_assumptions`,
+`nim_rejection_reason`, and `product.product_description_parsed` before
+constructing EligibilityRequest.
 
 Field-name rule: always map to `existing_documents`. Never pass
 `submitted_documents` to the engine or include it in any returned schema.
@@ -36,6 +37,11 @@ from app.schemas.nim.intake import (
 from app.services.nim.client import NimClient, NimClientError
 
 logger = logging.getLogger(__name__)
+
+# AGENTS.md / NIM Security Constraints: user_input must be capped at 2000
+# characters before any request is sent to the NIM model.
+NIM_MAX_INPUT_CHARS = 2000
+NIM_REJECTION_REASON_INPUT_TOO_LONG = "INPUT_TOO_LONG"
 
 # ---------------------------------------------------------------------------
 # System prompt
@@ -203,7 +209,8 @@ class IntakeService:
         hints (if supplied) are merged into the draft after validation, filling
         only the fields the model left as None.
 
-        When NIM is disabled or the model call fails, returns an empty
+        When NIM is disabled, the model call fails, or the raw user input
+        exceeds the AGENTS.md length boundary, returns an empty
         NimAssessmentDraft so the caller can proceed to clarification.
 
         Returns:
@@ -211,6 +218,16 @@ class IntakeService:
             call to_eligibility_request() to strip that metadata before
             passing the draft to the engine.
         """
+        if len(user_input) > NIM_MAX_INPUT_CHARS:
+            logger.warning(
+                "NIM intake rejected oversized user_input: user_input_char_count=%d max_input_chars=%d",
+                len(user_input),
+                NIM_MAX_INPUT_CHARS,
+            )
+            return NimAssessmentDraft(
+                nim_rejection_reason=NIM_REJECTION_REASON_INPUT_TOO_LONG
+            )
+
         # Append context hints to the system prompt when available
         system_prompt = _NIM_INTAKE_SYSTEM_PROMPT
         if context is not None:
@@ -248,8 +265,8 @@ class IntakeService:
         """Map a validated NimAssessmentDraft to a live EligibilityRequest.
 
         Strips all NIM-only metadata (nim_confidence, nim_assumptions,
-        product.product_description_parsed) — these fields never reach
-        the deterministic engine.
+        nim_rejection_reason, product.product_description_parsed) — these
+        fields never reach the deterministic engine.
 
         Raises:
             ValueError: If required engine fields (hs6_code, exporter, importer,
@@ -278,5 +295,6 @@ class IntakeService:
             persona_mode=draft.context.persona_mode,  # type: ignore[union-attr]
             production_facts=case_facts,
             existing_documents=draft.existing_documents,
-            # nim_confidence, nim_assumptions, product_description_parsed DROPPED here
+            # nim_confidence, nim_assumptions, nim_rejection_reason,
+            # product_description_parsed DROPPED here
         )

@@ -289,8 +289,28 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_nim_intake_service.py -v
 python -m pytest tests/unit/test_nim_mapping.py -v
-```
 
+Audit item: enable static reference TTL cache by default
+Status: CLOSED
+
+Evidence:
+1. CACHE_STATIC_LOOKUPS default changed to true in app/config.py.
+2. .env.example and docs/dev/setup.md now document:
+   - default TTL = 5 minutes
+   - rolling restart after parser promotion
+   - strict immediate-consistency path using CACHE_STATIC_LOOKUPS=false plus restart
+3. New integration regression test passed:
+   test_static_lookup_cache_preserves_hs_resolution_and_assessment_outcome
+4. Full integration suite passed after the change:
+   206 passed
+
+Conclusion:
+- Static lookup caching is enabled by default for production.
+- Repository lookups and deterministic assessment outcomes remain identical across
+  cache-miss and cache-hit paths.
+- Eligibility decisions are still not cached.
+```
+## Completed 26 March 2026
 ---
 
 ## Prompt 4 — Wire the evidence risk-tier filter from assessment context
@@ -355,8 +375,64 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_evidence_service.py -v
 python -m pytest tests/integration/test_golden_path.py -v
-```
 
+Audit item: Evidence verification-question risk filter wiring
+Date: 2026-03-26
+Status: CLOSED
+
+Issue:
+`app/services/evidence_service.py` always passed `risk_category=None` into
+`get_verification_questions()`. The repository supports filtering by
+`verification_question.risk_category` when a value is supplied, but the caller
+never supplied one. That meant the confidence/risk wiring was absent and the
+behavior depended on an implicit no-filter path.
+
+Fix:
+1. Added an explicit `_CONFIDENCE_TO_RISK` mapping in `app/services/evidence_service.py`.
+2. Threaded `confidence_class` through `build_readiness()` and `get_readiness()`.
+3. Passed the mapped value into `get_verification_questions()`.
+4. Threaded `confidence_class` from `EligibilityService` into the evidence call site.
+
+Mapping decision:
+A safe stub was implemented:
+- `complete` -> `None`
+- `incomplete` -> `None`
+- `insufficient` -> `None`
+- `provisional` -> `None`
+
+Rationale:
+The current database model does not use severity values like `MEDIUM` or `HIGH`
+for `verification_question.risk_category`. The actual enum is domain-specific
+(`origin_claim`, `documentary_gap`, `valuation_risk`, etc.). Activating a real
+confidence-based filter would require explicit DB-backed mapping data. The code
+now documents that requirement with a TODO instead of silently hardcoding
+`None` with no explanation.
+
+Evidence:
+- Unit tests passed:
+  `python -m pytest tests/unit/test_evidence_service.py -v`
+  Result: 15 passed
+- Golden-path integration tests passed:
+  `python -m pytest tests/integration/test_golden_path.py -v`
+  Result: 18 passed
+
+Regression coverage added:
+1. Evidence-service unit tests now verify the repository receives the explicit
+   `risk_category` argument for:
+   - `complete`
+   - `incomplete`
+   - `insufficient`
+   - missing `confidence_class`
+2. Eligibility-service unit tests now verify `confidence_class` is forwarded
+   into evidence readiness calls.
+3. Golden-path integration coverage confirms no live assessment regressions.
+
+Conclusion:
+The silent `None` passthrough has been removed as an undocumented behavior.
+The confidence-to-risk decision is now explicit, wired, and tested. A future
+DB/data-model change can activate real filtering without reintroducing ambiguity.
+```
+## Completed 26 March 2026
 ---
 
 ## Prompt 5 — Expand the golden-case corridor corpus for hackathon readiness

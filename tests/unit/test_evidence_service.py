@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 
 from app.repositories.evidence_repository import EvidenceRepository
 from app.schemas.evidence import EvidenceReadinessRequest, EvidenceReadinessResult
-from app.services.evidence_service import EvidenceService
+from app.services.evidence_service import EvidenceService, _CONFIDENCE_TO_RISK
 
 # ---------------------------------------------------------------------------
 # Strategies for property tests
@@ -44,6 +44,7 @@ def _run_readiness(
     requirements: list[dict],
     documents: list[str],
     persona_mode: str = "exporter",
+    confidence_class: str | None = None,
 ) -> EvidenceReadinessResult:
     """Run the async build_readiness call synchronously inside a property test."""
 
@@ -56,6 +57,7 @@ def _run_readiness(
             entity_key="HS6_RULE:prop-test",
             persona_mode=persona_mode,
             existing_documents=documents,
+            confidence_class=confidence_class,
         )
 
     return asyncio.run(_inner())
@@ -271,6 +273,42 @@ async def test_build_readiness_uses_non_temporal_repository_contract() -> None:
         entity_type="pathway",
         entity_key="PATHWAY:pathway-999",
         risk_category=None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("confidence_class", "expected_risk"),
+    [
+        ("complete", _CONFIDENCE_TO_RISK["complete"]),
+        ("incomplete", _CONFIDENCE_TO_RISK["incomplete"]),
+        ("insufficient", _CONFIDENCE_TO_RISK["insufficient"]),
+        (None, None),
+    ],
+)
+async def test_build_readiness_maps_confidence_class_to_repository_risk_filter(
+    confidence_class: str | None,
+    expected_risk: str | None,
+) -> None:
+    """Confidence-based question filtering must be explicit, even when the DB mapping is a safe stub."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    repository.get_verification_questions.return_value = []
+    service = EvidenceService(repository)
+
+    await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-risk",
+        persona_mode="exporter",
+        existing_documents=[],
+        confidence_class=confidence_class,
+    )
+
+    repository.get_verification_questions.assert_awaited_once_with(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-risk",
+        risk_category=expected_risk,
     )
 
 

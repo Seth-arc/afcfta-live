@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from collections.abc import AsyncIterator, Mapping
 from datetime import date
 from typing import Any
@@ -13,6 +14,7 @@ from sqlalchemy import text
 
 from app.api import deps as api_deps
 from app.core.countries import V01_CORRIDORS
+from app.core.entity_keys import make_entity_key
 from app.core.enums import (
     AuthorityTierEnum,
     HsLevelEnum,
@@ -457,6 +459,186 @@ async def _seed_not_operational_candidate() -> dict[str, str]:
     )
 
 
+def _golden_pathway_expression(pathway_code: str) -> tuple[dict[str, Any], HsLevelEnum, int | None]:
+    """Return the minimal executable pathway expression for one golden scenario."""
+
+    if pathway_code == "WO":
+        return (
+            {"op": "fact_eq", "fact": "wholly_obtained", "value": True},
+            HsLevelEnum.SUBHEADING,
+            None,
+        )
+    if pathway_code == "CTH":
+        return (
+            {"op": "fact_ne", "fact": "tariff_heading_input", "ref_fact": "tariff_heading_output"},
+            HsLevelEnum.HEADING,
+            None,
+        )
+    if pathway_code == "VNM":
+        return (
+            {"op": "formula_lte", "formula": "vnom_percent", "value": 40},
+            HsLevelEnum.SUBHEADING,
+            40,
+        )
+    raise AssertionError(f"Unsupported golden pathway: {pathway_code}")
+
+
+async def _seed_expanded_golden_candidate(case: Mapping[str, Any]) -> dict[str, str]:
+    """Seed one isolated live-backed product/rule/tariff/status slice for a new golden scenario."""
+
+    seed = case.get("seed")
+    if not isinstance(seed, Mapping):
+        raise AssertionError("Expanded golden scenario is missing seed metadata")
+
+    pathway_code = str(seed["pathway_code"])
+    expression_json, tariff_shift_level, threshold_percent = _golden_pathway_expression(
+        pathway_code
+    )
+    heading = str(seed["heading"])
+    hs6_code = f"{heading}{int(uuid4().hex[:4], 16) % 100:02d}"
+    exporter = str(case["input"]["exporter"])
+    importer = str(case["input"]["importer"])
+    tag = str(seed["scenario_tag"])
+
+    rule_source = _build_source(f"{tag}-rule", source_type=SourceTypeEnum.APPENDIX)
+    tariff_source = _build_source(f"{tag}-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
+    status_source = _build_source(f"{tag}-status", source_type=SourceTypeEnum.STATUS_NOTICE)
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        product = HS6Product(
+            hs_version="HS2017",
+            hs6_code=hs6_code,
+            hs6_display=f"{hs6_code} {seed['description']}",
+            chapter=str(seed["chapter"]),
+            heading=heading,
+            description=str(seed["description"]),
+            section="XI",
+            section_name="Golden fixture expansion",
+        )
+        session.add_all([rule_source, tariff_source, status_source, product])
+        await session.flush()
+
+        rule = PSRRule(
+            source_id=rule_source.source_id,
+            appendix_version="pytest-fixture",
+            hs_version="HS2017",
+            hs_code=hs6_code,
+            hs_level=HsLevelEnum.SUBHEADING,
+            product_description=str(seed["description"]),
+            legal_rule_text_verbatim=f"Synthetic {pathway_code} golden rule.",
+            legal_rule_text_normalized=pathway_code,
+            rule_status=RuleStatusEnum.AGREED,
+            effective_date=date(2025, 1, 1),
+            row_ref=f"{tag}-{hs6_code}",
+        )
+        session.add(rule)
+        await session.flush()
+
+        pathway = EligibilityRulePathway(
+            psr_id=rule.psr_id,
+            pathway_code=pathway_code,
+            pathway_label=pathway_code,
+            pathway_type="specific",
+            expression_json=expression_json,
+            threshold_percent=threshold_percent,
+            threshold_basis=None,
+            tariff_shift_level=tariff_shift_level,
+            required_process_text=None,
+            priority_rank=1,
+            effective_date=date(2025, 1, 1),
+        )
+
+        session.add_all(
+            [
+                HS6PSRApplicability(
+                    hs6_id=product.hs6_id,
+                    psr_id=rule.psr_id,
+                    applicability_type="direct",
+                    priority_rank=1,
+                    effective_date=date(2025, 1, 1),
+                ),
+                pathway,
+                StatusAssertion(
+                    source_id=status_source.source_id,
+                    entity_type="corridor",
+                    entity_key=make_entity_key(
+                        "corridor",
+                        exporter=exporter,
+                        importer=importer,
+                        hs6_code=hs6_code,
+                    ),
+                    status_type=StatusTypeEnum.IN_FORCE,
+                    status_text_verbatim="Corridor is operational.",
+                    effective_from=date(2025, 1, 1),
+                    effective_to=None,
+                ),
+                StatusAssertion(
+                    source_id=status_source.source_id,
+                    entity_type="psr_rule",
+                    entity_key=make_entity_key("psr_rule", psr_id=rule.psr_id),
+                    status_type=StatusTypeEnum.AGREED,
+                    status_text_verbatim="Rule is agreed.",
+                    effective_from=date(2025, 1, 1),
+                    effective_to=None,
+                ),
+            ]
+        )
+
+        schedule_header = TariffScheduleHeader(
+            source_id=tariff_source.source_id,
+            importing_state=importer,
+            exporting_scope=exporter,
+            schedule_status=ScheduleStatusEnum.OFFICIAL,
+            publication_date=date(2025, 1, 1),
+            effective_date=date(2025, 1, 1),
+            hs_version="HS2017",
+            category_system="pytest",
+        )
+        session.add(schedule_header)
+        await session.flush()
+
+        schedule_line = TariffScheduleLine(
+            schedule_id=schedule_header.schedule_id,
+            hs_code=hs6_code,
+            product_description=str(seed["description"]),
+            tariff_category=TariffCategoryEnum.LIBERALISED,
+            mfn_base_rate=15,
+            base_year=2025,
+            target_rate=0,
+            target_year=2025,
+            staging_type=StagingTypeEnum.IMMEDIATE,
+            row_ref=f"{tag}-{hs6_code}",
+        )
+        session.add(schedule_line)
+        await session.flush()
+
+        session.add(
+            TariffScheduleRateByYear(
+                schedule_line_id=schedule_line.schedule_line_id,
+                calendar_year=2025,
+                preferential_rate=0,
+                rate_status=RateStatusEnum.IN_FORCE,
+                source_id=tariff_source.source_id,
+            )
+        )
+        await session.commit()
+
+    return {
+        "hs6_code": hs6_code,
+        "exporter": exporter,
+        "importer": importer,
+    }
+
+
+def _case_with_seeded_hs6(case: Mapping[str, Any], hs6_code: str) -> dict[str, Any]:
+    """Return a golden case copy pointing at the isolated seeded HS6 code."""
+
+    seeded_case = deepcopy(case)
+    seeded_case["input"]["hs6_code"] = hs6_code
+    return seeded_case
+
+
 def _assessment_payload(
     case: Mapping[str, Any],
     facts: Mapping[str, Any],
@@ -884,6 +1066,48 @@ async def test_expanded_live_slice_golden_cases(
     body = response.json()
     _assert_response_shape(body)
     _assert_expected_subset(body, case["expected"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pass_case_fragment", "fail_case_fragment"),
+    [
+        (
+            "CIV->NGA apparel WO pass",
+            "CIV->NGA apparel WO fail - direct transport broken",
+        ),
+        (
+            "CIV->SEN coffee CTH pass",
+            "CIV->SEN coffee CTH fail - no tariff shift",
+        ),
+        (
+            "NGA->GHA iron VNM within threshold",
+            "NGA->GHA iron VNM fail - over threshold",
+        ),
+    ],
+)
+async def test_seeded_expanded_corridor_golden_cases(
+    async_client: AsyncClient,
+    pass_case_fragment: str,
+    fail_case_fragment: str,
+) -> None:
+    """Each new corridor/chapter scenario seeds its own isolated live-backed slice."""
+
+    pass_case = _golden_case(pass_case_fragment)
+    fail_case = _golden_case(fail_case_fragment)
+    seeded_candidate = await _seed_expanded_golden_candidate(pass_case)
+
+    for case in (pass_case, fail_case):
+        seeded_case = _case_with_seeded_hs6(case, seeded_candidate["hs6_code"])
+        response = await async_client.post(
+            "/api/v1/assessments",
+            json=_assessment_payload(seeded_case, await _prepared_case_facts(seeded_case)),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        _assert_response_shape(body)
+        _assert_expected_subset(body, case["expected"])
 
 
 @pytest.mark.asyncio

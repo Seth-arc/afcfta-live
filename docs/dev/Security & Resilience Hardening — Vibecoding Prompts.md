@@ -629,7 +629,7 @@ Runbook requirements:
 **You run** (stack must be running with Redis enabled from Prompt 6):
 ```bash
 export AIS_BASE_URL=http://localhost:8000
-export AIS_API_KEY=sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii
+export AIS_API_KEY=""
 export RATE_LIMIT_ENABLED=false   # disable limiter for the load run only
 export DB_POOL_SIZE=20
 export DB_POOL_MAX_OVERFLOW=80

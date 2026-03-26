@@ -132,6 +132,16 @@ class CaseCreateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CaseStatusResponse(BaseModel):
+    """Read model for case evaluation presence without reconstructing an audit trail."""
+
+    case_id: UUID
+    has_evaluation: bool
+    latest_evaluation_id: UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class CaseDetailResponse(BaseModel):
     """Full case payload with facts."""
 

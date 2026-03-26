@@ -61,6 +61,12 @@ def _legacy_case_latest_path(case_id: str) -> str:
     return f"/api/v1/audit/cases/{case_id}/latest"
 
 
+def _case_status_path(case_id: str) -> str:
+    """Return the case-evaluation status route for one case id."""
+
+    return f"/api/v1/audit/cases/{case_id}/status"
+
+
 def _assert_assessment_replay_headers(
     response,
     *,
@@ -418,6 +424,102 @@ async def test_create_case_with_assess_true_auto_persists_and_returns_replay_ids
     latest_body = latest_response.json()
     _assert_audit_trail_contract(latest_body)
     assert latest_body["evaluation"]["evaluation_id"] == body["evaluation_id"]
+
+
+@pytest.mark.asyncio
+async def test_case_status_returns_no_evaluation_immediately_after_case_creation(
+    async_client: AsyncClient,
+) -> None:
+    """A newly created case should surface the orphan-safe pending status shape."""
+
+    response = await async_client.post(
+        "/api/v1/cases",
+        json={
+            "case_external_ref": f"IT-CASE-STATUS-{uuid4()}",
+            "persona_mode": "exporter",
+            "exporter_state": "CIV",
+            "importer_state": "NGA",
+            "hs6_code": "080111",
+            "hs_version": "HS2017",
+            "declared_origin": "CIV",
+            "title": "Case status pending test",
+            "production_facts": [
+                _fact_payload("wholly_obtained", True),
+                _fact_payload("direct_transport", True),
+                _fact_payload("cumulation_claimed", False),
+            ],
+        },
+    )
+    assert response.status_code == 201, response.text
+    case_id = response.json()["case_id"]
+
+    status_response = await async_client.get(_case_status_path(case_id))
+    assert status_response.status_code == 200, status_response.text
+    assert status_response.json() == {
+        "case_id": case_id,
+        "has_evaluation": False,
+        "latest_evaluation_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_case_status_returns_latest_evaluation_after_successful_assessment(
+    async_client: AsyncClient,
+) -> None:
+    """Once an assessment persists, the status route should point at the newest evaluation."""
+
+    create_response = await async_client.post(
+        "/api/v1/cases",
+        json={
+            "case_external_ref": f"IT-CASE-STATUS-ASSESSED-{uuid4()}",
+            "persona_mode": "exporter",
+            "exporter_state": "CIV",
+            "importer_state": "NGA",
+            "hs6_code": "080111",
+            "hs_version": "HS2017",
+            "declared_origin": "CIV",
+            "title": "Case status assessed test",
+            "production_facts": [
+                _fact_payload("wholly_obtained", True),
+                _fact_payload("direct_transport", True),
+                _fact_payload("cumulation_claimed", False),
+            ],
+        },
+    )
+    assert create_response.status_code == 201, create_response.text
+    case_id = create_response.json()["case_id"]
+
+    assessment_response = await async_client.post(
+        _case_assess_path(case_id),
+        json={"year": 2025, "existing_documents": ["certificate_of_origin"]},
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    _, evaluation_id = _assert_assessment_replay_headers(
+        assessment_response,
+        expected_case_id=case_id,
+    )
+
+    status_response = await async_client.get(_case_status_path(case_id))
+    assert status_response.status_code == 200, status_response.text
+    assert status_response.json() == {
+        "case_id": case_id,
+        "has_evaluation": True,
+        "latest_evaluation_id": evaluation_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_case_status_returns_404_for_unknown_case(
+    async_client: AsyncClient,
+) -> None:
+    """Unknown cases should return the standard case-not-found envelope."""
+
+    unknown_case_id = str(uuid4())
+    response = await async_client.get(_case_status_path(unknown_case_id))
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "CASE_NOT_FOUND"
+    assert response.json()["error"]["details"] == {"case_id": unknown_case_id}
 
 
 @pytest.mark.asyncio

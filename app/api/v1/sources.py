@@ -14,6 +14,7 @@ router = APIRouter()
 
 @router.get("/sources", response_model=list[SourceRegistryOut])
 async def list_sources(
+    topic: str | None = Query(None),
     source_type: SourceTypeEnum | None = Query(None),
     authority_tier: AuthorityTierEnum | None = Query(None),
     status: SourceStatusEnum | None = Query(None),
@@ -23,13 +24,26 @@ async def list_sources(
 ) -> list[SourceRegistryOut]:
     """Return source registry rows, optionally filtered by provenance metadata."""
 
-    rows = await sources_repository.list_sources(
-        source_type=source_type.value if source_type is not None else None,
-        authority_tier=authority_tier.value if authority_tier is not None else None,
-        status=status.value if status is not None else None,
-        limit=limit,
-        offset=offset,
-    )
+    source_type_value = source_type.value if source_type is not None else None
+    authority_tier_value = authority_tier.value if authority_tier is not None else None
+    status_value = status.value if status is not None else None
+    if topic is not None:
+        rows = await sources_repository.list_sources_by_topic(
+            topic=topic,
+            source_type=source_type_value,
+            authority_tier=authority_tier_value,
+            status=status_value,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        rows = await sources_repository.list_sources(
+            source_type=source_type_value,
+            authority_tier=authority_tier_value,
+            status=status_value,
+            limit=limit,
+            offset=offset,
+        )
     return [SourceRegistryOut.model_validate(row) for row in rows]
 
 
@@ -48,6 +62,7 @@ async def get_source_detail(
 
 @router.get("/provisions", response_model=list[LegalProvisionOut])
 async def list_provisions(
+    topic: str | None = Query(None),
     topic_primary: str | None = Query(None),
     source_id: str | None = Query(None),
     annex_ref: str | None = Query(None),
@@ -58,7 +73,7 @@ async def list_provisions(
     """Return legal provisions filtered by topic, source, or annex metadata."""
 
     rows = await sources_repository.list_provisions(
-        topic_primary=topic_primary,
+        topic_primary=topic_primary if topic_primary is not None else topic,
         annex_ref=annex_ref,
         source_id=source_id,
         limit=limit,

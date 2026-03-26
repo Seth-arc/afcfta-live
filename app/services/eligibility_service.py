@@ -85,6 +85,7 @@ class EligibilityService:
         self.evaluations_repository = evaluations_repository
         self.intelligence_service = intelligence_service
         self.audit_service = audit_service
+        self._last_persisted_evaluation_id: str | None = None
 
     async def assess_case(
         self,
@@ -110,9 +111,10 @@ class EligibilityService:
     ) -> InterfaceAssessmentResult:
         """Guarantee a replayable persisted evaluation for interface-triggered direct runs."""
 
+        self._last_persisted_evaluation_id = None
         replayable_request = await self._ensure_replayable_request(request)
         response = await self.assess(replayable_request)
-        evaluation_id = await self._get_latest_evaluation_id_for_case(replayable_request.case_id)
+        evaluation_id = self._require_persisted_evaluation_id(replayable_request.case_id)
         return InterfaceAssessmentResult(
             response=response,
             case_id=str(replayable_request.case_id),
@@ -126,8 +128,9 @@ class EligibilityService:
     ) -> InterfaceAssessmentResult:
         """Return a case-backed assessment together with explicit replay identifiers."""
 
+        self._last_persisted_evaluation_id = None
         response = await self.assess_case(case_id, request)
-        evaluation_id = await self._get_latest_evaluation_id_for_case(case_id)
+        evaluation_id = self._require_persisted_evaluation_id(case_id)
         return InterfaceAssessmentResult(
             response=response,
             case_id=case_id,
@@ -137,6 +140,7 @@ class EligibilityService:
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
         """Execute one full assessment inside the caller's request-scoped DB snapshot."""
 
+        self._last_persisted_evaluation_id = None
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
 
@@ -169,10 +173,11 @@ class EligibilityService:
                 details_json={"product": product.model_dump(mode="json")},
             )
         )
-        rule_bundle = await self.rule_resolution_service.resolve_rule_bundle(
-            request.hs_version,
-            product.hs6_code,
-            assessment_date,
+        rule_bundle = await self.rule_resolution_service.resolve_rule_bundle_by_hs6_id(
+            str(product.hs6_id),
+            hs_version=request.hs_version,
+            hs6_code=product.hs6_code,
+            assessment_date=assessment_date,
         )
         audit_checks.append(
             self._make_audit_check(
@@ -185,12 +190,6 @@ class EligibilityService:
                 explanation="Resolved the governing PSR rule bundle",
                 details_json={
                     "psr_rule": rule_bundle.psr_rule.model_dump(mode="json"),
-                    "components": [
-                        component.model_dump(mode="json") for component in rule_bundle.components
-                    ],
-                    "pathways": [
-                        pathway.model_dump(mode="json") for pathway in rule_bundle.pathways
-                    ],
                     "applicability_type": rule_bundle.applicability_type,
                 },
             )
@@ -505,6 +504,7 @@ class EligibilityService:
             await self.cases_repository.add_facts(
                 case_id,
                 [fact.model_dump(by_alias=True) for fact in request.production_facts],
+                return_ids=False,
             )
         except Exception as exc:
             self._log_interface_persistence_failure(
@@ -524,8 +524,8 @@ class EligibilityService:
             ) from exc
         return request.model_copy(update={"case_id": case_id})
 
-    async def _get_latest_evaluation_id_for_case(self, case_id: str | None) -> str:
-        """Return the newest persisted evaluation id for a replayable interface assessment."""
+    def _require_persisted_evaluation_id(self, case_id: str | None) -> str:
+        """Return the in-transaction evaluation id captured during persistence."""
 
         if case_id is None:
             raise EvaluationPersistenceError(
@@ -533,33 +533,12 @@ class EligibilityService:
                 detail={"reason": "missing_case_id"},
             )
 
-        if self.evaluations_repository is None:
-            raise EvaluationPersistenceError(
-                "Interface assessment cannot confirm replay persistence because evaluation storage is unavailable",
-                detail={"case_id": case_id, "reason": "evaluations_repository_unavailable"},
-            )
-
-        try:
-            evaluation_row = await self.evaluations_repository.get_latest_evaluation_for_case(case_id)
-        except Exception as exc:
-            self._log_interface_persistence_failure(
-                boundary="evaluation_lookup",
-                reason="evaluation_lookup_failed",
-                hs6_code=None,
-                case_id=case_id,
-                exc=exc,
-            )
-            raise EvaluationPersistenceError(
-                "Interface assessment could not confirm replay persistence",
-                detail={"case_id": case_id, "reason": "evaluation_lookup_failed"},
-            ) from exc
-
-        if evaluation_row is None:
+        if self._last_persisted_evaluation_id is None:
             raise EvaluationPersistenceError(
                 "Interface assessment did not produce a replayable evaluation trail",
                 detail={"case_id": case_id, "reason": "evaluation_not_persisted"},
             )
-        return str(evaluation_row["evaluation_id"])
+        return self._last_persisted_evaluation_id
 
     def _log_interface_persistence_failure(
         self,
@@ -1036,6 +1015,7 @@ class EligibilityService:
         """
 
         if self.evaluations_repository is None or request.case_id is None:
+            self._last_persisted_evaluation_id = None
             return False
 
         evaluation_data = {
@@ -1052,9 +1032,30 @@ class EligibilityService:
             ),
         }
         try:
-            await self.evaluations_repository.persist_evaluation(evaluation_data, list(audit_checks))
+            persisted = await self.evaluations_repository.persist_evaluation(
+                evaluation_data,
+                list(audit_checks),
+                lock_case=False,
+                return_inserted_checks=False,
+            )
+            evaluation_row = (
+                persisted.get("evaluation")
+                if isinstance(persisted, Mapping)
+                else None
+            )
+            evaluation_id = (
+                evaluation_row.get("evaluation_id")
+                if isinstance(evaluation_row, Mapping)
+                else None
+            )
+            self._last_persisted_evaluation_id = (
+                str(evaluation_id) if evaluation_id is not None else None
+            )
+            if isinstance(persisted, Mapping) and evaluation_id is None:
+                return False
             return True
         except Exception:
+            self._last_persisted_evaluation_id = None
             _logger.error(
                 "evaluation_persistence_failed",
                 exc_info=True,

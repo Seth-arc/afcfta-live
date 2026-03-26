@@ -34,8 +34,14 @@ class CasesRepository:
         result = await self.session.execute(statement)
         return str(result.scalar_one())
 
-    async def add_facts(self, case_id: str, facts: Sequence[Mapping[str, Any]]) -> list[str]:
-        """Insert case_input_fact rows for a case and return the fact ids."""
+    async def add_facts(
+        self,
+        case_id: str,
+        facts: Sequence[Mapping[str, Any]],
+        *,
+        return_ids: bool = True,
+    ) -> list[str]:
+        """Insert case_input_fact rows for a case and optionally return fact ids."""
 
         if not facts:
             return []
@@ -86,6 +92,10 @@ class CasesRepository:
                     if key in insertable_columns and key in fact_table.c
                 }
             )
+
+        if not return_ids:
+            await self.session.execute(insert(fact_table).values(rows))
+            return []
 
         statement = insert(fact_table).values(rows).returning(fact_table.c.fact_id)
         result = await self.session.execute(statement)

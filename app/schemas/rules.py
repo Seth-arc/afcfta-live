@@ -147,8 +147,8 @@ class RuleLookupResponse(PSRRuleResolvedOut):
                 continue
             flat_payload = cls._flatten_rule_bundle(cls._coerce_to_dict(nested_bundle))
             product = cls._coerce_to_dict(payload.get("product"))
-            if isinstance(product, dict):
-                flat_payload.setdefault("hs6_code", product.get("hs6_code"))
+            if isinstance(product, dict) and flat_payload.get("hs6_code") is None:
+                flat_payload["hs6_code"] = product.get("hs6_code")
             return flat_payload
 
         if "hs6_code" not in payload and "hs_code" in payload:

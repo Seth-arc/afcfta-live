@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\schemas\rules.py
+# hypothesis_version: 6.151.9
+
+['_mapping', 'applicability_type', 'before', 'components', 'hs6_code', 'hs_code', 'ignore', 'model_dump', 'pathways', 'product', 'provenance_ids', 'psr_rule', 'python', 'result', 'rule_bundle', 'rule_resolution', 'source_id']

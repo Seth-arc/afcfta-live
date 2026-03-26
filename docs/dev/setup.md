@@ -100,6 +100,29 @@ Mandatory versus optional guidance:
 - Optional local conveniences: `DATABASE_URL_SYNC`, logging controls, rate-limit overrides, and error-tracking settings
 - Optional production integrations: Sentry-related settings remain optional unless external error aggregation is part of the deployment
 
+## CORS And Browser Clients
+
+Before any Decision Renderer or other browser-based trader UI development begins, add the staging and production Decision Renderer origins to `CORS_ALLOW_ORIGINS`. Use the assigned browser origins in the format `https://decision-renderer-staging.afcfta.example` and `https://decision-renderer.afcfta.example`; do not rely on `http://localhost:3000` beyond local placeholder or development use.
+
+For the full setting contract and example values, see [app/config.py](../../app/config.py) and [.env.example](../../.env.example).
+
+## Metrics And Observability
+
+Prometheus scraping is disabled by default. Set `METRICS_ENABLED=true` to expose the scrape endpoint at `/metrics` on the root app path. When the flag is left at `false`, `/metrics` is not mounted and returns `404`.
+
+The metrics endpoint is intended for pull-based collectors such as Prometheus or Grafana Agent. It is intentionally unauthenticated, so expose it only on trusted internal network paths or behind infrastructure controls. The environment setting is defined in [app/config.py](../../app/config.py), and the example env block lives in [.env.example](../../.env.example).
+
+Recommended Prometheus scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: afcfta-intelligence-api
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - api.internal.afcfta.example:8000
+```
+
 ## 4. Install Dependencies
 
 Use an editable install with dev dependencies:

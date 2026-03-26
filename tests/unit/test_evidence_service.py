@@ -11,7 +11,7 @@ from hypothesis import strategies as st
 
 from app.repositories.evidence_repository import EvidenceRepository
 from app.schemas.evidence import EvidenceReadinessRequest, EvidenceReadinessResult
-from app.services.evidence_service import EvidenceService, _CONFIDENCE_TO_RISK
+from app.services.evidence_service import EvidenceService
 
 # ---------------------------------------------------------------------------
 # Strategies for property tests
@@ -80,12 +80,18 @@ def build_requirement(
     }
 
 
-def build_question(question_text: str, *, persona_mode: str) -> dict[str, object]:
+def build_question(
+    question_text: str,
+    *,
+    persona_mode: str,
+    risk_category: str = "general",
+) -> dict[str, object]:
     """Build a minimal verification question row mapping."""
 
     return {
         "question_text": question_text,
         "persona_mode": persona_mode,
+        "risk_category": risk_category,
     }
 
 
@@ -280,17 +286,16 @@ async def test_build_readiness_uses_non_temporal_repository_contract() -> None:
 @pytest.mark.parametrize(
     ("confidence_class", "expected_risk"),
     [
-        ("complete", _CONFIDENCE_TO_RISK["complete"]),
-        ("incomplete", _CONFIDENCE_TO_RISK["incomplete"]),
-        ("insufficient", _CONFIDENCE_TO_RISK["insufficient"]),
+        ("complete", None),
+        ("provisional", None),
         (None, None),
     ],
 )
-async def test_build_readiness_maps_confidence_class_to_repository_risk_filter(
+async def test_build_readiness_skips_risk_filter_for_unfiltered_confidence_classes(
     confidence_class: str | None,
     expected_risk: str | None,
 ) -> None:
-    """Confidence-based question filtering must be explicit, even when the DB mapping is a safe stub."""
+    """Complete and provisional confidence do not narrow verification questions by risk."""
 
     repository = AsyncMock(spec=EvidenceRepository)
     repository.get_requirements.return_value = []
@@ -310,6 +315,107 @@ async def test_build_readiness_maps_confidence_class_to_repository_risk_filter(
         entity_key="HS6_RULE:psr-risk",
         risk_category=expected_risk,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("confidence_class", "expected_risk"),
+    [
+        ("incomplete", "general"),
+        ("insufficient", "origin_claim"),
+    ],
+)
+async def test_build_readiness_maps_confidence_class_to_seeded_risk_category(
+    confidence_class: str,
+    expected_risk: str,
+) -> None:
+    """Confidence classes that imply evidence risk must use the DB-backed category names."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    repository.get_verification_questions.return_value = []
+    service = EvidenceService(repository)
+
+    await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-risk",
+        persona_mode="exporter",
+        existing_documents=[],
+        confidence_class=confidence_class,
+    )
+
+    repository.get_verification_questions.assert_awaited_once_with(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-risk",
+        risk_category=expected_risk,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("confidence_class", "expected_questions"),
+    [
+        ("incomplete", ["General documentary check"]),
+        ("insufficient", ["Origin claim check"]),
+    ],
+)
+async def test_build_readiness_excludes_questions_outside_resolved_risk_category(
+    confidence_class: str,
+    expected_questions: list[str],
+) -> None:
+    """The repository risk filter should remove questions from non-matching categories."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    all_questions = [
+        build_question(
+            "General documentary check",
+            persona_mode="system",
+            risk_category="general",
+        ),
+        build_question(
+            "Origin claim check",
+            persona_mode="system",
+            risk_category="origin_claim",
+        ),
+        build_question(
+            "Valuation support check",
+            persona_mode="system",
+            risk_category="valuation_risk",
+        ),
+        build_question(
+            "Officer-only documentary check",
+            persona_mode="officer",
+            risk_category="general",
+        ),
+    ]
+
+    async def get_verification_questions(
+        *,
+        entity_type: str,
+        entity_key: str,
+        risk_category: str | None,
+    ) -> list[dict[str, object]]:
+        assert entity_type == "hs6_rule"
+        assert entity_key == "HS6_RULE:psr-risk"
+        return [
+            question
+            for question in all_questions
+            if risk_category is None or question["risk_category"] == risk_category
+        ]
+
+    repository.get_verification_questions.side_effect = get_verification_questions
+    service = EvidenceService(repository)
+
+    result = await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-risk",
+        persona_mode="exporter",
+        existing_documents=[],
+        confidence_class=confidence_class,
+    )
+
+    assert result.verification_questions == expected_questions
 
 
 def test_evidence_readiness_request_uses_existing_documents_vocabulary() -> None:

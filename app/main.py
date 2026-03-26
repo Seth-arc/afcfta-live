@@ -74,6 +74,46 @@ def _configure_error_tracker(settings) -> ErrorTracker:
     return ErrorTracker(capture_exception=sentry_sdk.capture_exception)
 
 
+def _configure_metrics(app: FastAPI, settings) -> None:
+    """Register Prometheus scraping only when metrics are explicitly enabled."""
+
+    if not settings.METRICS_ENABLED:
+        return
+
+    try:
+        from prometheus_fastapi_instrumentator import Instrumentator, metrics
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "METRICS_ENABLED=true requires prometheus-fastapi-instrumentator to be installed."
+        ) from exc
+
+    instrumentator = Instrumentator(
+        should_group_status_codes=False,
+        excluded_handlers=["/metrics"],
+    )
+    instrumentator.add(
+        metrics.latency(
+            metric_name="http_request_duration_seconds",
+            should_include_handler=True,
+            should_include_method=False,
+            should_include_status=True,
+        )
+    )
+    instrumentator.add(
+        metrics.requests(
+            metric_name="http_requests_total",
+            should_include_handler=True,
+            should_include_method=True,
+            should_include_status=True,
+        )
+    )
+    instrumentator.instrument(app).expose(
+        app,
+        include_in_schema=False,
+        should_gzip=True,
+    )
+
+
 def _request_id(request: Request) -> str:
     """Return the current request id, generating one if needed."""
 
@@ -227,6 +267,9 @@ def create_app() -> FastAPI:
     app.state.settings = settings
     app.state.rate_limiter = InMemoryRateLimiter()
     app.state.error_tracker = _configure_error_tracker(settings)
+    # Register root-level operational endpoints before versioned routers so they
+    # remain outside the API-key protected router dependencies.
+    _configure_metrics(app, settings)
 
     if settings.CORS_ALLOW_ORIGINS:
         origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]

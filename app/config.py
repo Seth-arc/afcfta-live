@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     LOG_REQUESTS_ENABLED: bool = True
     LOG_DISABLE_UVICORN_ACCESS_LOG: bool = True
 
+    # Prometheus metrics scraping
+    # When True, expose Prometheus-compatible metrics at /metrics for scrapers.
+    # Leave False unless a Prometheus-compatible collector is configured.
+    METRICS_ENABLED: bool = False
+
     # Optional external error tracking
     ERROR_TRACKING_BACKEND: str = "none"
     SENTRY_DSN: str | None = None

@@ -14,6 +14,7 @@ app/api/deps.py
 app/api/router.py
 app/api/v1/__init__.py
 app/api/v1/assessments.py
+app/api/v1/assistant.py
 app/api/v1/audit.py
 app/api/v1/cases.py
 app/api/v1/evidence.py
@@ -23,6 +24,7 @@ app/api/v1/rules.py
 app/api/v1/sources.py
 app/api/v1/tariffs.py
 app/core/__init__.py
+app/core/cache.py
 app/core/countries.py
 app/core/entity_keys.py
 app/core/enums.py
@@ -62,12 +64,18 @@ app/schemas/cases.py
 app/schemas/common.py
 app/schemas/evaluations.py
 app/schemas/evidence.py
+app/schemas/health.py
 app/schemas/hs.py
 app/schemas/intelligence.py
 app/schemas/rules.py
 app/schemas/sources.py
 app/schemas/status.py
 app/schemas/tariffs.py
+app/schemas/nim/__init__.py
+app/schemas/nim/assistant.py
+app/schemas/nim/clarification.py
+app/schemas/nim/explanation.py
+app/schemas/nim/intake.py
 app/services/__init__.py
 app/services/audit_service.py
 app/services/classification_service.py
@@ -80,3 +88,9 @@ app/services/intelligence_service.py
 app/services/rule_resolution_service.py
 app/services/status_service.py
 app/services/tariff_resolution_service.py
+app/services/nim/__init__.py
+app/services/nim/clarification_service.py
+app/services/nim/client.py
+app/services/nim/explanation_service.py
+app/services/nim/intake_service.py
+app/services/nim/logging.py

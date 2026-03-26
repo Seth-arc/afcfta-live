@@ -18,15 +18,15 @@
     "network_errors": 0,
     "other_failures": 0,
     "success_rate_pct": 100.0,
-    "wall_elapsed_s": 0.562,
-    "throughput_rps": 88.97,
+    "wall_elapsed_s": 1.103,
+    "throughput_rps": 45.32,
     "latency_s": {
-      "min": 0.046,
-      "p50": 0.078,
-      "p75": 0.094,
-      "p95": 0.266,
-      "p99": 0.266,
-      "max": 0.266,
+      "min": 0.1041,
+      "p50": 0.1353,
+      "p75": 0.1422,
+      "p95": 0.5746,
+      "p99": 0.5841,
+      "max": 0.5841,
       "sample_count": 50
     }
   }

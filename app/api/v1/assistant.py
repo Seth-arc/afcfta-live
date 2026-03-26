@@ -217,7 +217,11 @@ async def assistant_assess(
 
     t_expl = time.monotonic()
     explanation_result = await explanation_service.generate_explanation(
-        result.response, persona_mode_str
+        assessment=result.response,
+        persona_mode=persona_mode_str,
+        hs6_code=eligibility_request.hs6_code,
+        exporter=eligibility_request.exporter,
+        importer=eligibility_request.importer,
     )
     expl_latency_ms = int((time.monotonic() - t_expl) * 1000)
 

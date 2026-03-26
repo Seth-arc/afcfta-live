@@ -29,9 +29,10 @@ from app.schemas.nim.clarification import ClarificationContext
 from app.services.nim.clarification_service import (
     ClarificationService,
     _INPUT_TOO_LONG_QUESTION,
+    _NIM_MULTI_GAP_SYSTEM_PROMPT,
+    _NIM_PHRASING_SYSTEM_PROMPT,
     _deterministic_question,
     _question_implies_outcome,
-    _NIM_PHRASING_SYSTEM_PROMPT,
 )
 from app.services.nim.client import NimClientError
 from app.services.nim.intake_service import NIM_REJECTION_REASON_INPUT_TOO_LONG
@@ -218,13 +219,20 @@ class TestDeterministicQuestion:
         q = _deterministic_question("persona_mode")
         assert any(role in q.lower() for role in ("exporter", "officer", "analyst"))
 
-    def test_known_engine_fact_question_contains_fact_name(self) -> None:
+    def test_known_engine_fact_question_uses_human_readable_label(self) -> None:
         q = _deterministic_question("ex_works")
-        assert "ex works" in q.lower()
+        assert "ex-works value" in q.lower()
+        assert "to continue the assessment" in q.lower()
 
-    def test_known_engine_fact_question_contains_direct_transport(self) -> None:
+    def test_known_engine_fact_question_describes_direct_shipping(self) -> None:
         q = _deterministic_question("direct_transport")
-        assert "direct transport" in q.lower()
+        assert "shipped directly" in q.lower()
+        assert "importing country" in q.lower()
+
+    def test_unlabelled_engine_fact_question_falls_back_to_split_key_words(self) -> None:
+        q = _deterministic_question("tariff_subheading_input")
+        assert "tariff subheading input" in q.lower()
+        assert "to continue the assessment" in q.lower()
 
     def test_unknown_key_returns_generic_evidence_question(self) -> None:
         q = _deterministic_question("bill_of_lading")
@@ -272,6 +280,25 @@ async def test_nim_question_string_is_stripped_of_whitespace() -> None:
     result = await svc.generate_clarification(ctx)
 
     assert result.question == "What is the HS6 code?"
+
+
+@pytest.mark.asyncio
+async def test_multiple_draft_gaps_use_multi_gap_prompt() -> None:
+    nim_q = (
+        "To get started, please share the HS6 product code and the exporting "
+        "country ISO code."
+    )
+    ctx = ClarificationContext(missing_draft_facts=["hs6_code", "exporter"])
+    client = _mock_client(_nim_question_json(nim_q))
+    svc = ClarificationService(client)
+
+    result = await svc.generate_clarification(ctx)
+
+    _, call_args, _ = client.generate_json.mock_calls[0]
+    assert call_args[0] == _NIM_MULTI_GAP_SYSTEM_PROMPT
+    assert "hs6_code" in call_args[1]
+    assert "exporter" in call_args[1]
+    assert result.question == nim_q
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +383,21 @@ async def test_falls_back_to_deterministic_when_nim_says_eligible() -> None:
     result = await svc.generate_clarification(ctx)
 
     assert "eligible" not in result.question.lower()
+
+
+@pytest.mark.asyncio
+async def test_multiple_draft_gaps_fall_back_to_single_message_when_nim_disabled() -> None:
+    ctx = ClarificationContext(
+        missing_draft_facts=["hs6_code", "exporter", "year"]
+    )
+    svc = _service(return_value=None)
+
+    result = await svc.generate_clarification(ctx)
+
+    assert result.question.startswith("To get started, I need a few things:")
+    assert "HS6 product code" in result.question
+    assert "exporting country ISO alpha-3 code" in result.question
+    assert "assessment year" in result.question
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +488,7 @@ async def test_engine_fact_gap_asked_before_evidence() -> None:
 
     result = await svc.generate_clarification(ctx)
 
-    assert "ex works" in result.question.lower()
+    assert "ex-works value" in result.question.lower()
 
 
 @pytest.mark.asyncio
@@ -515,6 +557,21 @@ async def test_user_input_describes_gap_type_for_engine_fact() -> None:
     _, call_args, _ = client.generate_json.mock_calls[0]
     user_input = call_args[1]
     assert "production" in user_input.lower() or "engine" in user_input.lower()
+
+
+@pytest.mark.asyncio
+async def test_engine_fact_user_input_falls_back_to_split_key_words_when_label_missing() -> None:
+    ctx = ClarificationContext(missing_engine_facts=["tariff_subheading_input"])
+    client = _mock_client(
+        _nim_question_json("What is the tariff subheading for the input materials?")
+    )
+    svc = ClarificationService(client)
+
+    await svc.generate_clarification(ctx)
+
+    _, call_args, _ = client.generate_json.mock_calls[0]
+    user_input = call_args[1]
+    assert "Description: tariff subheading input" in user_input
 
 
 @pytest.mark.asyncio

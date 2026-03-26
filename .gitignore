@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 artifacts/
 tests/*-test-report/
+.env
+.env.prod
+.env.local
+.env.*.local

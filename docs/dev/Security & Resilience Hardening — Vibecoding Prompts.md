@@ -629,7 +629,7 @@ Runbook requirements:
 **You run** (stack must be running with Redis enabled from Prompt 6):
 ```bash
 export AIS_BASE_URL=http://localhost:8000
-export AIS_API_KEY=<your-api-key>
+export AIS_API_KEY=sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii
 export RATE_LIMIT_ENABLED=false   # disable limiter for the load run only
 export DB_POOL_SIZE=20
 export DB_POOL_MAX_OVERFLOW=80
@@ -637,13 +637,23 @@ export DB_POOL_MAX_OVERFLOW=80
 # 10c baseline
 python tests/load/run_load_test.py \
   --mode burst --concurrency 10 --requests 50 \
-  --api-key "$AIS_API_KEY" \
+  --api-key sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii \
   --report tests/load/baseline.json
+
+python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --api-key sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii --report tests/load/baseline.json
+export AIS_BASE_URL=http://localhost:8000
+read -s -p "AIS API key: " AIS_API_KEY; export AIS_API_KEY; echo
+mkdir -p artifacts
+
+ALTER ROLE afcfta WITH PASSWORD 'eNIrdkxuHA17H4gxWgqHMdOy';
+
+read -s -p "sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii: " AIS_API_KEY; export AIS_API_KEY; echo
+
 
 # 100c baseline
 python tests/load/run_load_test.py \
   --mode burst --concurrency 100 --requests 500 \
-  --api-key "$AIS_API_KEY" \
+  --api-key sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii \
   --report tests/load/baseline_100c.json
 
 # Commit both files

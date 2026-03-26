@@ -12,7 +12,8 @@
 > **Primary references**:
 > - docs/dev/AFCFTA-LIVE_REPO_AUDIT_2026-03-26.md (audit findings this book closes)
 > - docs/dev/Production Gate — Vibecoding Prompts.md (completed prerequisite)
-> - docs/dev/Decision Renderer — Vibecoding Prompts (2).md (next book after this one)
+> - docs/dev/Security & Resilience Hardening — Vibecoding Prompts.md (next book after this one)
+> - docs/dev/Decision Renderer — Vibecoding Prompts (2).md (follows Security & Resilience Hardening)
 > - AGENTS.md for architecture invariants, shell restrictions, and locked scope
 >
 > **Targets covered**:
@@ -372,7 +373,7 @@ When done, summarize:
 ```bash
 grep -n "SENTRY\|ERROR_TRACKING" .env.prod docs/dev/production_runbook.md
 ```
-
+## Completed 26 March
 ---
 
 ## Prompt 6 — Document and validate the Redis multi-worker upgrade path
@@ -440,7 +441,7 @@ When done, summarize:
 docker compose -f docker-compose.prod.yml config
 grep -n "REDIS\|UVICORN_WORKERS" .env.prod .env.example docs/dev/production_runbook.md
 ```
-
+## Completed 26 March
 ---
 
 ## Recommended Execution Groups

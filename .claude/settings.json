@@ -54,7 +54,11 @@
       "Bash(find /c/Users/ssnguna/Local Sites/afcfta-live/app -type f -name *.py)",
       "Bash(find /c/Users/ssnguna/Local Sites/afcfta-live/tests -type f -name *.py)",
       "Bash(find /c/Users/ssnguna/Local Sites/afcfta-live/scripts -type f -name *.py)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Read(//c/Users/ssnguna/Local Sites/afcfta-live/app/api/**)",
+      "Bash(python -m pytest tests/ --co -q)",
+      "Bash(python -m pytest tests/unit/ --co -q)",
+      "Bash(python -c \"from tests.fixtures.golden_cases import GOLDEN_CASES; print\\(f''Golden cases: {len\\(GOLDEN_CASES\\)}''\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\ssnguna\\.claude\\projects\\c--Users-ssnguna-Local-Sites-afcfta-live"

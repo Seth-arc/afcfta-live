@@ -12,6 +12,8 @@ does not yet exist.
 
 1. [Prerequisites](#1-prerequisites)
 2. [Required environment variables](#2-required-environment-variables)
+- [Error Tracking](#error-tracking)
+- [Scaling to multiple workers](#scaling-to-multiple-workers)
 3. [Deployment path](#3-deployment-path)
 4. [Post-deploy acceptance checks](#4-post-deploy-acceptance-checks)
 5. [Rollback triggers](#5-rollback-triggers)
@@ -75,10 +77,67 @@ Recommended production overrides (all optional, but review each before first dep
 | `DB_LOCK_TIMEOUT_MS` | `5000` | Server-side lock wait timeout |
 | `RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS` | `10` | Per-principal, per-60s window; raise for known clients |
 | `RATE_LIMIT_DEFAULT_MAX_REQUESTS` | `120` | All other routes |
-| `UVICORN_WORKERS` | `2` | Increase on multi-core hosts; each worker holds its own pool |
+| `UVICORN_WORKERS` | `1` | Safe baseline until Redis-backed rate limiting is enabled; raise only after `REDIS_URL` is live |
 | `CACHE_STATIC_LOOKUPS` | `false` | Enable only after establishing a no-cache baseline |
 | `LOG_LEVEL` | `INFO` | Do not ship `DEBUG` to production |
 | `LOG_FORMAT` | `json` | Keep `json` for log aggregation pipelines |
+
+---
+
+## Error Tracking
+
+The supported production error-tracking backend is **Sentry**. The `SENTRY_DSN`
+in `.env.prod` applies to the production API deployment and is consumed by
+`_configure_error_tracker()` in [app/main.py](../../app/main.py).
+
+Set:
+
+- `ERROR_TRACKING_BACKEND=sentry`
+- `SENTRY_DSN=<production-project-dsn>`
+- `SENTRY_TRACES_SAMPLE_RATE=0.05`
+
+`SENTRY_TRACES_SAMPLE_RATE=0.05` means 5% transaction trace sampling. Raise it if
+you need more distributed-tracing coverage and can absorb the additional event
+volume and cost; lower it if trace volume is too high. Exception capture still
+depends on the backend being enabled and the DSN being valid.
+
+`sentry-sdk` must be installed separately in the runtime environment. The app
+loads it via `importlib.import_module("sentry_sdk")`, so it is an optional runtime
+dependency and is intentionally not pinned in `pyproject.toml`.
+
+If the DSN is not yet provisioned, keep `ERROR_TRACKING_BACKEND=none` and leave
+the TODO placeholder visible in `.env.prod` until the production Sentry project
+is ready.
+
+---
+
+## Scaling to multiple workers
+
+The API must stay on a single Uvicorn worker until Redis-backed rate limiting is
+active. `_lifespan()` in [app/main.py](../../app/main.py) raises `RuntimeError`
+when `UVICORN_WORKERS > 1` and `REDIS_URL` is empty, because `InMemoryRateLimiter`
+is per-process and would otherwise multiply the effective request ceiling.
+
+Promotion sequence:
+
+1. Provision a Redis instance for the deployment, or uncomment the `redis` service
+   block and the commented `depends_on` entry in [docker-compose.prod.yml](../../docker-compose.prod.yml).
+2. Set `REDIS_URL` in `.env.prod`. For the bundled compose service, use
+   `redis://redis:6379/0`.
+3. Before changing worker count, ensure database pool sizing is adequate:
+   `DB_POOL_SIZE + DB_POOL_MAX_OVERFLOW` must accommodate
+   `UVICORN_WORKERS × peak concurrent REPEATABLE READ sessions`.
+   The CI 100-concurrency baseline uses `DB_POOL_SIZE=20` and `DB_POOL_MAX_OVERFLOW=80`.
+4. Raise `UVICORN_WORKERS` in `.env.prod` for direct image/runtime parity, and
+   raise the `--workers` value in [docker-compose.prod.yml](../../docker-compose.prod.yml)
+   from `1` to the tested target.
+5. Restart all API workers so the new Redis-backed limiter and worker count take effect.
+6. Confirm the startup log line
+   `Redis-backed sliding-window rate limiter active`
+   appears before declaring the promotion complete.
+
+After step 6, re-run the health and assessment acceptance checks from section 4
+before routing higher traffic volume through the multi-worker deployment.
 
 ---
 
@@ -705,14 +764,16 @@ public access.
 
 ## 10. Tuning UVICORN_WORKERS
 
-The default `UVICORN_WORKERS=2` is a conservative starting point for a single-host
-deployment.  Do not raise this value without first running the multi-worker comparison
-harness described in [docs/dev/testing.md](testing.md#multi-worker-comparison).
+The default production baseline is `UVICORN_WORKERS=1`. Do not raise this value
+until the Redis-backed rate-limiter path in [Scaling to multiple workers](#scaling-to-multiple-workers)
+is complete. After Redis is active, use this section to validate and tune a higher
+worker count with a measured comparison rather than treating `2` as a default.
 
 ### 10.1 Run the comparison harness
 
-Before changing `UVICORN_WORKERS` in `.env.prod`, validate on staging or on the
-production host before routing live traffic:
+Before changing `UVICORN_WORKERS` in `.env.prod`, first complete the Redis
+enablement steps in [Scaling to multiple workers](#scaling-to-multiple-workers).
+Then validate on staging or on the production host before routing live traffic:
 
 1. Start a single-worker instance on port 8001 and a multi-worker instance on
    port 8002 pointing at the same database (see testing.md for exact commands).
@@ -745,15 +806,17 @@ connections.  Confirm your PostgreSQL `max_connections` setting can accommodate
 
 ### 10.3 Apply the change
 
-Once the comparison run passes:
+Once Redis is active and the comparison run passes:
 
 ```bash
 # Update .env.prod
 UVICORN_WORKERS=4   # or whichever value was tested
 
-# Restart the API service (zero downtime requires a load balancer)
+# Ensure REDIS_URL is set in .env.prod, update docker-compose.prod.yml
+# --workers from 1 to the tested value, then restart the API service.
 docker compose -f ./docker-compose.prod.yml up -d api
 ```
 
-Verify the readiness endpoint returns healthy and re-run the operator checklist
-from section 4.
+Verify the readiness endpoint returns healthy, confirm the startup log line
+`Redis-backed sliding-window rate limiter active` appears, and re-run the
+operator checklist from section 4.

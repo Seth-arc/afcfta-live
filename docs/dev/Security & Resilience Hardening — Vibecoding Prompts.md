@@ -166,7 +166,7 @@ git commit -m "chore: stop tracking .env.prod and document credential rotation"
 # 5. Confirm .env.prod is absent from the next push
 git log --oneline -3
 ```
-
+## Completed 26 March 2026
 ---
 
 ## Prompt 2 — Fix enum None-crash in sources.py
@@ -217,7 +217,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_sources_api.py -v
 ```
-
+## Completed 26 March 2026
 ---
 
 ## Prompt 3 — Year-range validation in EligibilityRequest
@@ -273,7 +273,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_assessments_api.py tests/unit/test_contract_freeze.py -v
 ```
-
+## Completed 26 March 2026
 ---
 
 ## Prompt 4 — Handle orphaned cases on one-step create+assess failure

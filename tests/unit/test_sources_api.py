@@ -65,11 +65,16 @@ async def test_list_sources_passes_string_filters_to_repository(
     async_client: AsyncClient,
 ) -> None:
     source_row = _source_row()
-    calls: list[dict[str, object]] = []
+    list_calls: list[dict[str, object]] = []
+    topic_calls: list[dict[str, object]] = []
 
     class FakeSourcesRepository:
         async def list_sources(self, **kwargs) -> list[dict[str, object]]:
-            calls.append(kwargs)
+            list_calls.append(kwargs)
+            return [source_row]
+
+        async def list_sources_by_topic(self, **kwargs) -> list[dict[str, object]]:
+            topic_calls.append(kwargs)
             return [source_row]
 
     async def override_sources_repository() -> FakeSourcesRepository:
@@ -93,13 +98,57 @@ async def test_list_sources_passes_string_filters_to_repository(
 
     assert response.status_code == 200, response.text
     assert response.json()[0]["source_id"] == str(source_row["source_id"])
-    assert calls == [
+    assert list_calls == [
         {
             "source_type": "appendix",
             "authority_tier": "binding",
             "status": "current",
             "limit": 5,
             "offset": 2,
+        }
+    ]
+    assert topic_calls == []
+
+
+@pytest.mark.asyncio
+async def test_list_sources_with_valid_topic_returns_200(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    source_row = _source_row()
+    topic_calls: list[dict[str, object]] = []
+
+    class FakeSourcesRepository:
+        async def list_sources_by_topic(self, **kwargs) -> list[dict[str, object]]:
+            topic_calls.append(kwargs)
+            return [source_row]
+
+    async def override_sources_repository() -> FakeSourcesRepository:
+        return FakeSourcesRepository()
+
+    app.dependency_overrides[get_sources_repository] = override_sources_repository
+
+    try:
+        response = await async_client.get(
+            "/api/v1/sources",
+            params={
+                "topic": "origin_rules",
+                "source_type": "appendix",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_sources_repository, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["source_id"] == str(source_row["source_id"])
+    assert topic_calls == [
+        {
+            "topic": "origin_rules",
+            "source_type": "appendix",
+            "authority_tier": None,
+            "status": None,
+            "limit": 100,
+            "offset": 0,
         }
     ]
 
@@ -199,6 +248,46 @@ async def test_list_provisions_passes_filters_to_repository(
             "source_id": str(source_row["source_id"]),
             "limit": 10,
             "offset": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_provisions_without_source_id_returns_200(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    source_row = _source_row()
+    provision_row = _provision_row(source_row["source_id"])
+    calls: list[dict[str, object]] = []
+
+    class FakeSourcesRepository:
+        async def list_provisions(self, **kwargs) -> list[dict[str, object]]:
+            calls.append(kwargs)
+            return [provision_row]
+
+    async def override_sources_repository() -> FakeSourcesRepository:
+        return FakeSourcesRepository()
+
+    app.dependency_overrides[get_sources_repository] = override_sources_repository
+
+    try:
+        response = await async_client.get(
+            "/api/v1/provisions",
+            params={"topic_primary": "origin_rules"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_sources_repository, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["source_id"] == str(source_row["source_id"])
+    assert calls == [
+        {
+            "topic_primary": "origin_rules",
+            "annex_ref": None,
+            "source_id": None,
+            "limit": 100,
+            "offset": 0,
         }
     ]
 

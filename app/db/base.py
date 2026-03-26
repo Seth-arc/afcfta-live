@@ -97,9 +97,5 @@ def get_pool_stats() -> dict[str, object]:
 async def check_database_readiness() -> None:
     """Verify the configured database accepts a lightweight readiness query."""
 
-    engine = get_engine()
-    try:
-        async with engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
-    finally:
-        await engine.dispose()
+    async with get_engine().connect() as connection:
+        await connection.execute(text("SELECT 1"))

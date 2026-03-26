@@ -281,7 +281,7 @@ def test_get_pool_stats_falls_back_when_pool_has_no_standard_counters(
 
 
 @pytest.mark.asyncio
-async def test_check_database_readiness_executes_probe_and_disposes_engine(
+async def test_check_database_readiness_executes_probe_without_disposing_engine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executed: list[str] = []
@@ -310,7 +310,7 @@ async def test_check_database_readiness_executes_probe_and_disposes_engine(
     await db_base.check_database_readiness()
 
     assert executed == ["SELECT 1"]
-    assert disposed == ["dispose"]
+    assert disposed == []
 
 
 @pytest.mark.asyncio

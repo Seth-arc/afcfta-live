@@ -52,3 +52,21 @@ async def test_readiness_endpoint_returns_pool_stats_for_authenticated_caller(
     assert stats["pool_size"] >= 0
     assert stats["overflow"] >= 0
     assert stats["checked_in"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_readiness_endpoint_remains_stable_across_repeated_authenticated_probes(
+    async_client: AsyncClient,
+) -> None:
+    """Repeated authenticated probes must keep returning pool stats and DB-ok status."""
+
+    first = await async_client.get("/api/v1/health/ready")
+    second = await async_client.get("/api/v1/health/ready")
+
+    for response in (first, second):
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["checks"] == {"database": "ok"}
+        assert body["timestamp"]
+        assert "pool_stats" in body

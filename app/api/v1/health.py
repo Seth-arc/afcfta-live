@@ -36,9 +36,8 @@ async def readiness_check(request: Request) -> dict[str, object]:
 
     settings = get_settings()
 
-    # Collect pool stats before the DB check.  check_database_readiness()
-    # calls engine.dispose() which drains the pool, so reading stats after
-    # would always show zero checked-out connections.
+    # Collect pool stats before the probe so the readiness query itself does
+    # not perturb the counters returned to authenticated operators.
     pool_stats: dict[str, object] | None = None
     try:
         await require_authenticated_principal(request, settings)

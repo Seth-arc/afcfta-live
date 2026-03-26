@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from collections.abc import AsyncIterator, Mapping
 from datetime import date
@@ -12,7 +13,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, text
 
-from app.api import deps as api_deps
 from app.core.countries import V01_CORRIDORS
 from app.core.entity_keys import make_entity_key
 from app.core.enums import (
@@ -1163,34 +1163,32 @@ async def test_parser_era_or_alternative_golden_shape(async_client: AsyncClient)
 
 @pytest.mark.asyncio
 async def test_assessments_route_uses_assessment_scoped_db(
-    app,
+    monkeypatch: pytest.MonkeyPatch,
     async_client: AsyncClient,
 ) -> None:
-    """The assessment endpoint should resolve through the assessment-specific DB dependency."""
+    """The assessment endpoint should enter the lazy assessment service context once per call."""
 
     case = _golden_case("groats CTH pass")
     payload = _assessment_payload(case, await _prepared_case_facts(case))
-    calls = {"assessment_db": 0}
+    calls = {"entered": 0, "exited": 0}
 
-    async def tracked_assessment_db() -> AsyncIterator[Any]:
-        calls["assessment_db"] += 1
+    from app.api.deps import _build_eligibility_service
+
+    @asynccontextmanager
+    async def tracked_context() -> AsyncIterator[Any]:
+        calls["entered"] += 1
         async with assessment_session_context() as session:
-            yield session
+            try:
+                yield _build_eligibility_service(session)
+            finally:
+                calls["exited"] += 1
 
-    async def forbidden_general_db() -> AsyncIterator[Any]:
-        raise AssertionError("Assessment route should not depend on get_db().")
-        yield
+    monkeypatch.setattr("app.api.v1.assessments.assessment_eligibility_service_context", tracked_context)
 
-    app.dependency_overrides[api_deps.get_assessment_db] = tracked_assessment_db
-    app.dependency_overrides[api_deps.get_db] = forbidden_general_db
-
-    try:
-        response = await async_client.post("/api/v1/assessments", json=payload)
-    finally:
-        app.dependency_overrides.clear()
+    response = await async_client.post("/api/v1/assessments", json=payload)
 
     assert response.status_code == 200
-    assert calls["assessment_db"] == 1
+    assert calls == {"entered": 1, "exited": 1}
 
 
 @pytest.mark.asyncio

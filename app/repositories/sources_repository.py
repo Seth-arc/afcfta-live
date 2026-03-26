@@ -54,6 +54,47 @@ class SourcesRepository:
         result = await self.session.execute(statement)
         return list(result.mappings().all())
 
+    async def list_sources_by_topic(
+        self,
+        *,
+        topic: str,
+        source_type: str | None = None,
+        authority_tier: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Mapping[str, Any]]:
+        """Return distinct sources that back provisions tagged to the requested topic."""
+
+        source_table = SourceRegistry.__table__
+        provision_table = LegalProvision.__table__
+
+        statement = (
+            select(*source_table.c)
+            .distinct()
+            .join(
+                provision_table,
+                provision_table.c.source_id == source_table.c.source_id,
+            )
+            .where(
+                (provision_table.c.topic_primary == topic)
+                | provision_table.c.topic_secondary.contains([topic])
+            )
+        )
+        if source_type is not None:
+            statement = statement.where(source_table.c.source_type == source_type)
+        if authority_tier is not None:
+            statement = statement.where(source_table.c.authority_tier == authority_tier)
+        if status is not None:
+            statement = statement.where(source_table.c.status == status)
+        statement = statement.order_by(
+            source_table.c.effective_date.desc(),
+            source_table.c.created_at.desc(),
+        )
+        statement = statement.limit(limit).offset(offset)
+        result = await self.session.execute(statement)
+        return list(result.mappings().all())
+
     async def update_source(
         self,
         source_id: str,

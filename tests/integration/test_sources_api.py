@@ -163,6 +163,55 @@ async def test_list_sources_supports_filtered_queries(async_client: AsyncClient)
 
 
 @pytest.mark.asyncio
+async def test_list_sources_supports_topic_traversal(async_client: AsyncClient) -> None:
+    """GET /sources?topic= should return distinct backing sources for that provenance topic."""
+
+    matching_source = await _create_source(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        status="current",
+        short_title_suffix=f"topic-source-match-{uuid4()}",
+    )
+    other_source = await _create_source(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        status="current",
+        short_title_suffix=f"topic-source-other-{uuid4()}",
+    )
+
+    await _create_provision(
+        source_id=str(matching_source["source_id"]),
+        topic_primary="origin_rules",
+        annex_ref="Annex 2",
+        instrument_name_suffix=f"topic-source-match-a-{uuid4()}",
+    )
+    await _create_provision(
+        source_id=str(matching_source["source_id"]),
+        topic_primary="origin_rules",
+        annex_ref="Annex 3",
+        instrument_name_suffix=f"topic-source-match-b-{uuid4()}",
+    )
+    await _create_provision(
+        source_id=str(other_source["source_id"]),
+        topic_primary="tariff_liberalisation",
+        annex_ref="Annex 1",
+        instrument_name_suffix=f"topic-source-other-{uuid4()}",
+    )
+
+    response = await async_client.get(
+        "/api/v1/sources",
+        params={"topic": "origin_rules", "limit": 25, "offset": 0},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    returned_ids = [row["source_id"] for row in body]
+    assert str(matching_source["source_id"]) in returned_ids
+    assert str(other_source["source_id"]) not in returned_ids
+    assert returned_ids.count(str(matching_source["source_id"])) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_provision_detail_returns_legal_provision_row(async_client: AsyncClient) -> None:
     """GET /provisions/{provision_id} should return one legal provision using the provenance response schema."""
 
@@ -243,6 +292,80 @@ async def test_list_provisions_supports_topic_and_source_filters(async_client: A
     assert str(non_matching_source["provision_id"]) not in returned_ids
     assert all(row["topic_primary"] == "tariff_liberalisation" for row in body)
     assert all(row["source_id"] == str(matching_source["source_id"]) for row in body)
+
+
+@pytest.mark.asyncio
+async def test_list_provisions_supports_topic_alias(async_client: AsyncClient) -> None:
+    """GET /provisions?topic= should behave as a thin alias for topic_primary."""
+
+    source = await _create_source(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        status="current",
+        short_title_suffix=f"topic-alias-source-{uuid4()}",
+    )
+    matching_provision = await _create_provision(
+        source_id=str(source["source_id"]),
+        topic_primary="origin_rules",
+        annex_ref="Annex 2",
+        instrument_name_suffix=f"topic-alias-match-{uuid4()}",
+    )
+    await _create_provision(
+        source_id=str(source["source_id"]),
+        topic_primary="tariff_liberalisation",
+        annex_ref="Annex 1",
+        instrument_name_suffix=f"topic-alias-other-{uuid4()}",
+    )
+
+    response = await async_client.get(
+        "/api/v1/provisions",
+        params={"topic": "origin_rules", "source_id": str(source["source_id"])},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    returned_ids = {row["provision_id"] for row in body}
+    assert str(matching_provision["provision_id"]) in returned_ids
+    assert all(row["topic_primary"] == "origin_rules" for row in body)
+
+
+@pytest.mark.asyncio
+async def test_list_provisions_topic_primary_backwards_compatible_with_topic_alias(
+    async_client: AsyncClient,
+) -> None:
+    """GET /provisions?topic_primary= must remain equivalent to the new topic alias."""
+
+    source = await _create_source(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        status="current",
+        short_title_suffix=f"topic-primary-source-{uuid4()}",
+    )
+    await _create_provision(
+        source_id=str(source["source_id"]),
+        topic_primary="origin_rules",
+        annex_ref="Annex 2",
+        instrument_name_suffix=f"topic-primary-match-{uuid4()}",
+    )
+    await _create_provision(
+        source_id=str(source["source_id"]),
+        topic_primary="customs_cooperation",
+        annex_ref="Annex 5",
+        instrument_name_suffix=f"topic-primary-other-{uuid4()}",
+    )
+
+    alias_response = await async_client.get(
+        "/api/v1/provisions",
+        params={"topic": "origin_rules", "source_id": str(source["source_id"])},
+    )
+    canonical_response = await async_client.get(
+        "/api/v1/provisions",
+        params={"topic_primary": "origin_rules", "source_id": str(source["source_id"])},
+    )
+
+    assert alias_response.status_code == 200, alias_response.text
+    assert canonical_response.status_code == 200, canonical_response.text
+    assert canonical_response.json() == alias_response.json()
 
 
 @pytest.mark.asyncio

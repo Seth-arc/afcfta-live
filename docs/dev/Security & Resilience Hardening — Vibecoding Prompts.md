@@ -499,7 +499,7 @@ docker compose -f docker-compose.prod.yml logs api | grep -i "redis\|rate.limit\
 # Health check
 curl -sf http://localhost:8000/api/v1/health/ready | python -m json.tool
 ```
-
+## Completed 26 March 2026
 ---
 
 ## Prompt 7 — Property-based tests for the expression evaluator

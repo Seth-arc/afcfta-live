@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
+import logging
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 
+from app.core.enums import AuthorityTierEnum, InstrumentTypeEnum, SourceTypeEnum
 from app.db.base import get_async_session_factory
 from app.repositories.cases_repository import CasesRepository
 from app.repositories.evaluations_repository import EvaluationsRepository
+from app.repositories.sources_repository import SourcesRepository
+from app.services.audit_service import AuditService
 from tests.fixtures.golden_cases import GOLDEN_CASES
 from tests.integration.test_golden_path import _assert_response_shape, _prepared_case_facts
 from tests.integration.test_quick_slice_e2e import (
@@ -206,6 +211,113 @@ def _evaluation_payload(
         "rule_status_at_evaluation": rule_status_at_evaluation,
         "tariff_status_at_evaluation": tariff_status_at_evaluation,
     }
+
+
+async def _create_source_fixture(
+    *,
+    source_type: SourceTypeEnum,
+    authority_tier: AuthorityTierEnum,
+    short_title_suffix: str,
+) -> dict[str, object]:
+    """Create one source row for provenance hardening tests."""
+
+    checksum = uuid4().hex + uuid4().hex
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        repository = SourcesRepository(session)
+        row = await repository.create_source(
+            {
+                "title": f"Audit source fixture {short_title_suffix}",
+                "short_title": f"AUD-{short_title_suffix}",
+                "source_group": "pytest-audit",
+                "source_type": source_type,
+                "authority_tier": authority_tier,
+                "issuing_body": "pytest",
+                "jurisdiction_scope": "test",
+                "country_code": None,
+                "customs_union_code": None,
+                "publication_date": date(2025, 1, 1),
+                "effective_date": date(2025, 1, 1),
+                "expiry_date": None,
+                "version_label": "pytest-v1",
+                "status": "current",
+                "language": "en",
+                "hs_version": "HS2017",
+                "file_path": f"tests/{short_title_suffix}.txt",
+                "mime_type": "text/plain",
+                "source_url": f"https://example.test/{short_title_suffix}",
+                "checksum_sha256": checksum,
+                "supersedes_source_id": None,
+                "superseded_by_source_id": None,
+                "citation_preferred": f"Audit fixture citation {short_title_suffix}",
+                "notes": "pytest audit fixture",
+            }
+        )
+        await session.commit()
+        return dict(row)
+
+
+async def _create_provision_fixture(
+    *,
+    source_id: str,
+    topic_primary: str,
+    instrument_name_suffix: str,
+) -> dict[str, object]:
+    """Create one legal provision row for provenance hardening tests."""
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        repository = SourcesRepository(session)
+        row = await repository.create_provision(
+            {
+                "source_id": source_id,
+                "instrument_name": f"Audit Instrument {instrument_name_suffix}",
+                "instrument_type": InstrumentTypeEnum.APPENDIX,
+                "article_ref": "Art. 7",
+                "annex_ref": "Appendix IV",
+                "appendix_ref": "Appendix IV",
+                "section_ref": "Section 1",
+                "subsection_ref": None,
+                "page_start": 1,
+                "page_end": 2,
+                "topic_primary": topic_primary,
+                "topic_secondary": ["origin", topic_primary],
+                "provision_text_verbatim": f"Audit provision text {instrument_name_suffix}",
+                "provision_text_normalized": f"Audit normalized text {instrument_name_suffix}",
+                "effective_date": date(2025, 1, 1),
+                "expiry_date": None,
+                "status": "in_force",
+                "cross_reference_refs": ["Appendix IV"],
+                "authority_weight": Decimal("1.000"),
+            }
+        )
+        await session.commit()
+        return dict(row)
+
+
+class _ContaminatedSourcesRepository:
+    """Return requested and mismatched provisions to exercise audit filtering."""
+
+    def __init__(
+        self,
+        repository: SourcesRepository,
+        *,
+        mismatched_source_id: str,
+    ) -> None:
+        self.repository = repository
+        self.mismatched_source_id = mismatched_source_id
+
+    async def get_provisions_for_source(
+        self,
+        source_id: str,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        requested_rows = await self.repository.get_provisions_for_source(source_id, limit=limit)
+        mismatched_rows = await self.repository.get_provisions_for_source(
+            self.mismatched_source_id,
+            limit=limit,
+        )
+        return [dict(row) for row in requested_rows] + [dict(row) for row in mismatched_rows]
 
 
 @pytest.mark.asyncio
@@ -963,10 +1075,117 @@ async def test_audit_replay_surfaces_complete_document_pack_readiness(
 
 
 @pytest.mark.asyncio
+async def test_get_decision_trace_omits_provisions_with_mismatched_source_ids(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Audit provenance must omit provision summaries whose source_id does not match."""
+
+    case_id = await _create_case_with_facts(
+        hs6_code="110311",
+        exporter="GHA",
+        importer="NGA",
+        facts={"direct_transport": True},
+    )
+    expected_source = await _create_source_fixture(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        short_title_suffix=f"rule-source-{uuid4()}",
+    )
+    mismatched_source = await _create_source_fixture(
+        source_type=SourceTypeEnum.APPENDIX,
+        authority_tier=AuthorityTierEnum.BINDING,
+        short_title_suffix=f"foreign-source-{uuid4()}",
+    )
+    expected_provision = await _create_provision_fixture(
+        source_id=str(expected_source["source_id"]),
+        topic_primary="origin_rules",
+        instrument_name_suffix=f"expected-{uuid4()}",
+    )
+    mismatched_provision = await _create_provision_fixture(
+        source_id=str(mismatched_source["source_id"]),
+        topic_primary="origin_rules",
+        instrument_name_suffix=f"foreign-{uuid4()}",
+    )
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        evaluations_repository = EvaluationsRepository(session)
+        cases_repository = CasesRepository(session)
+        sources_repository = SourcesRepository(session)
+
+        persisted = await evaluations_repository.persist_evaluation(
+            _evaluation_payload(
+                case_id=case_id,
+                evaluation_date=date(2025, 1, 1),
+                overall_outcome="eligible",
+                pathway_used="CTH",
+                confidence_class="complete",
+            ),
+            [
+                {
+                    "check_type": "rule",
+                    "check_code": "PSR_RESOLUTION",
+                    "passed": True,
+                    "severity": "info",
+                    "expected_value": "rule provenance source A",
+                    "observed_value": "rule provenance source A",
+                    "explanation": "Seeded rule provenance for audit source-id filtering.",
+                    "details_json": {
+                        "psr_rule": {
+                            "psr_id": str(uuid4()),
+                            "source_id": str(expected_source["source_id"]),
+                            "hs_version": "HS2017",
+                            "hs6_code": "110311",
+                            "product_description": "Groats and meal of wheat",
+                            "legal_rule_text_verbatim": "CTH",
+                            "rule_status": "agreed",
+                            "page_ref": 1,
+                            "table_ref": "T1",
+                            "row_ref": "R1",
+                        }
+                    },
+                }
+            ],
+        )
+        await session.commit()
+
+        audit_service = AuditService(
+            evaluations_repository,
+            cases_repository,
+            _ContaminatedSourcesRepository(
+                sources_repository,
+                mismatched_source_id=str(mismatched_source["source_id"]),
+            ),
+        )
+
+        evaluation_id = str(persisted["evaluation"]["evaluation_id"])
+        with caplog.at_level(logging.WARNING, logger="app.audit"):
+            trail = await audit_service.get_decision_trace(evaluation_id=evaluation_id)
+
+    provenance = trail.final_decision.provenance
+    assert provenance is not None
+    rule_trace = provenance.rule
+    assert rule_trace is not None
+    assert str(rule_trace.source_id) == str(expected_source["source_id"])
+
+    provision_ids = {str(item.provision_id) for item in rule_trace.supporting_provisions}
+    assert str(expected_provision["provision_id"]) in provision_ids
+    assert str(mismatched_provision["provision_id"]) not in provision_ids
+
+    assert (
+        "Omitted provision summary with mismatched source_id:"
+        in caplog.text
+    )
+    assert f"evaluation_id={evaluation_id}" in caplog.text
+    assert f"expected_source_id={expected_source['source_id']}" in caplog.text
+    assert f"actual_source_id={mismatched_source['source_id']}" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_audit_trail_rule_provenance_supporting_provisions_are_populated(
     async_client: AsyncClient,
 ) -> None:
-    """Rule provenance in the audit trail should embed thin provision summaries for the governing source."""
+    """Rule provenance should embed thin provision summaries for the governing source."""
 
     candidate = _require_candidate(
         await _select_supported_candidate(

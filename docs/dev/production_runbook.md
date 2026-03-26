@@ -19,6 +19,7 @@ does not yet exist.
 7. [Parser and tariff-schedule promotion](#7-parser-and-tariff-schedule-promotion)
 8. [Before enabling NIM integration](#8-before-enabling-nim-integration)
 9. [Before enabling a trader-facing UI](#9-before-enabling-a-trader-facing-ui)
+10. [Production Gate Stabilisation — 2026-03-26](#10-production-gate-stabilisation--2026-03-26)
 
 ---
 
@@ -518,6 +519,109 @@ limit explicitly before public launch.
 ### 9.3 Log aggregation is capturing structured request logs
 
 The API emits JSON-structured request logs with `request_id`, `authenticated_principal`,
+
+---
+
+## 10. Production Gate Stabilisation — 2026-03-26
+
+This section records the verified closure state of the 2026-03-26 production-gate
+audit cycle. `docs/dev/AFCFTA-LIVE_REPO_AUDIT_2026-03-26.md` was not present in the
+repository, so verification was performed against the audit prompt outputs plus the
+final repository state after Prompts 1–7 of the production-gate prompt book.
+
+### 10.1 Gaps closed and prompt ownership
+
+- Prompt 1 — Container startup ambiguity closed.
+  Docker now refuses to start without an explicit `UVICORN_WORKERS` value, `.env.example`
+  has one `UVICORN_WORKERS` block, and `docker-compose.prod.yml` keeps `--workers 1`
+  explicit for the canonical compose entrypoint.
+- Prompt 2 — Static-reference cache default closed.
+  `CACHE_STATIC_LOOKUPS` now defaults to `true`, the cache correctness integration
+  test passed, and parser-promotion invalidation steps are documented.
+- Prompt 3 — NIM input boundary closed.
+  `parse_user_input()` now rejects oversized input at 2000 characters without
+  truncation, returns a structured draft rejection reason to orchestration, and
+  keeps NIM-only metadata out of engine requests.
+- Prompt 4 — Evidence risk-filter wiring closed.
+  `confidence_class` is now threaded into evidence readiness. Because the current
+  `verification_question.risk_category` data model is domain-specific rather than
+  severity-based, the mapping is an explicit safe stub with a TODO instead of an
+  undocumented `None` passthrough.
+- Prompt 5 — Golden-case corpus expansion closed.
+  The corpus now covers 6 directed V01 corridors and 9 HS6 chapters, including the
+  added Chapter 62, 09, and 72 scenarios with pass/fail companion cases.
+- Prompt 6 — NIM evaluation scaffold closed.
+  `tests/nim_eval/` exists, is marked with `@pytest.mark.nim_eval`, passes with a
+  mocked client, and is documented for future model-tuning work.
+- Prompt 7 — Audit-trail provenance hardening closed.
+  Provision summaries with mismatched `source_id` values are logged at `WARNING`
+  and omitted from decision traces instead of being silently attached.
+- Prompt 8 — Gate validation and reproducibility closed.
+  The full gate suite passed, and two seeded integration helpers were hardened to
+  allocate unused HS6 fixture codes so repeated gate runs do not fail on unique-key
+  collisions.
+
+### 10.2 Gate validation commands and recorded results
+
+Run these commands to reproduce the gate validation:
+
+```bash
+python -m pytest tests/unit --cov --cov-report=term-missing
+python -m pytest tests/integration --cov --cov-report=term-missing
+python -m pytest tests/unit tests/integration --cov --cov-report=term-missing
+python -m pytest tests/nim_eval -v -m nim_eval
+```
+
+Recorded results for this audit cycle:
+
+- `python -m pytest tests/unit --cov --cov-report=term-missing`
+  Result: `538 passed`, `90.28%` total coverage
+- `python -m pytest tests/integration --cov --cov-report=term-missing`
+  Result: `211 passed`, `86.24%` total coverage
+- `python -m pytest tests/unit tests/integration --cov --cov-report=term-missing`
+  Result: `749 passed`, `96.72%` total coverage
+- `python -m pytest tests/nim_eval -v -m nim_eval`
+  Result: `5 passed`
+
+### 10.3 Verified gate checklist
+
+- `[x]` Dockerfile refuses to start when `UVICORN_WORKERS` is not set explicitly
+- `[x]` `.env.example` contains exactly one `UVICORN_WORKERS` entry
+- `[x]` `docker-compose.prod.yml` overrides `--workers 1` explicitly
+- `[x]` Evidence `risk_category` wiring is explicit and documented as a safe stub/TODO
+- `[x]` Golden-path tests passed with the evidence change in place
+- `[x]` `parse_user_input()` handles input longer than 2000 characters without truncation
+- `[x]` NIM metadata never appears in `EligibilityRequest` after mapping
+- `[x]` `nim_rejection_reason` reaches the orchestration layer through the draft
+- `[x]` Golden cases cover at least 5 corridors
+- `[x]` The corpus includes at least three added HS6 chapters (62, 09, 72)
+- `[x]` Provision `source_id` mismatches are logged and excluded from the audit trail
+- `[x]` No provision with the wrong `source_id` appears in decision traces
+- `[x]` `CACHE_STATIC_LOOKUPS` defaults to `true`
+- `[x]` Cached and uncached static lookup paths return identical integration outcomes
+- `[x]` Cache invalidation after parser promotion is documented
+- `[x]` `tests/nim_eval/` exists and is a valid Python package
+- `[x]` `@pytest.mark.nim_eval` tests pass with a mocked `NimClient`
+- `[x]` `docs/dev/testing.md` documents the harness
+
+### 10.4 Decision Renderer prerequisite confirmation
+
+Decision Renderer Prompt 1 prerequisites are verified as met:
+
+- NIM readiness book complete
+- Assistant-facing contracts pinned by passing integration tests
+- NIM input maps to the frozen backend contract and is now length-capped
+- Clarification targets real engine gaps
+- Explanations cannot contradict deterministic results
+- Every assistant-triggered decision is replayable
+- NIM failures degrade gracefully
+
+### 10.5 NIM Integration (advanced) prerequisite confirmation
+
+NIM Integration (advanced) Prompt 1 prerequisites are verified as met:
+
+- All 8 backend prerequisite gate items are satisfied by the passing integration suite
+- `tests/nim_eval/` is present and ready for Prompt 5 extension
 `method`, `route`, `status_code`, and `latency_ms`. Confirm your log pipeline is
 ingesting these fields before public traffic arrives so you have a baseline for latency
 and error-rate alerting.

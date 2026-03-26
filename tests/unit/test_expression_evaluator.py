@@ -234,6 +234,214 @@ def test_unknown_json_op_raises_error() -> None:
     assert "Unsupported expression_json op" in exc_info.value.message
 
 
+def test_expression_type_must_be_text_or_json_object() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(["not", "valid"], {})
+
+    assert "Expression must be a text string or a JSON object" in exc_info.value.message
+
+
+def test_empty_text_expression_raises_error() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate("   ", {})
+
+    assert "cannot be empty" in exc_info.value.message
+
+
+def test_invalid_text_token_raises_error() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate("wholly_obtained == true @", {})
+
+    assert "Invalid token" in exc_info.value.message
+
+
+def test_missing_comparison_operator_raises_error() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate("wholly_obtained", {})
+
+    assert "missing a comparison operator" in exc_info.value.message
+
+
+def test_text_expression_with_trailing_tokens_raises_error() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate("wholly_obtained == true false", {})
+
+    assert "Unexpected trailing tokens" in exc_info.value.message
+
+
+def test_invalid_text_operand_raises_error() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate("wholly_obtained == AND", {})
+
+    assert "Invalid operand" in exc_info.value.message
+
+
+def test_json_formula_requires_supported_derived_variable() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate({"op": "formula_lte", "formula": "ex_works", "value": 60}, {})
+
+    assert "not a supported derived variable" in exc_info.value.message
+
+
+def test_json_formula_requires_numeric_threshold() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate({"op": "formula_gte", "formula": "va_percent", "value": "high"}, {})
+
+    assert "must be numeric" in exc_info.value.message
+
+
+def test_json_fact_eq_requires_value() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate({"op": "fact_eq", "fact": "wholly_obtained"}, {})
+
+    assert "requires value" in exc_info.value.message
+
+
+def test_json_fact_ne_requires_exactly_one_of_value_or_ref_fact() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(
+            {
+                "op": "fact_ne",
+                "fact": "tariff_heading_input",
+                "value": "1103",
+                "ref_fact": "tariff_heading_output",
+            },
+            {},
+        )
+
+    assert "requires exactly one of value or ref_fact" in exc_info.value.message
+
+
+def test_json_fact_ne_requires_string_ref_fact() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(
+            {"op": "fact_ne", "fact": "tariff_heading_input", "ref_fact": 1234},
+            {},
+        )
+
+    assert "requires ref_fact to be a string" in exc_info.value.message
+
+
+def test_every_non_originating_input_requires_test_object() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate({"op": "every_non_originating_input", "test": []}, {})
+
+    assert "requires test object" in exc_info.value.message
+
+
+def test_every_non_originating_input_rejects_unsupported_test_op() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(
+            {"op": "every_non_originating_input", "test": {"op": "unknown_shift"}},
+            {},
+        )
+
+    assert "Unsupported every_non_originating_input test op" in exc_info.value.message
+
+
+def test_every_non_originating_input_requires_list_inputs() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(
+            {"op": "every_non_originating_input", "test": {"op": "heading_ne_output"}},
+            {"non_originating_inputs": "1103", "output_hs6_code": "110311"},
+        )
+
+    assert "must be a list" in exc_info.value.message
+
+
+def test_every_non_originating_input_requires_object_items() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(
+            {"op": "every_non_originating_input", "test": {"op": "heading_ne_output"}},
+            {"non_originating_inputs": ["1103"], "output_hs6_code": "110311"},
+        )
+
+    assert "items must be objects" in exc_info.value.message
+
+
+def test_every_non_originating_input_requires_matching_code_field() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate(
+            {"op": "every_non_originating_input", "test": {"op": "subheading_ne_output"}},
+            {"non_originating_inputs": [{"hs4_code": "1103"}], "output_hs6_code": "110311"},
+        )
+
+    assert "missing required code" in exc_info.value.message
+
+
+def test_every_non_originating_input_uses_hs6_fallback_for_heading_checks() -> None:
+    evaluator = ExpressionEvaluator()
+
+    result = evaluator.evaluate(
+        {"op": "every_non_originating_input", "test": {"op": "heading_ne_output"}},
+        {
+            "non_originating_inputs": [{"hs6_code": "120100"}],
+            "output_hs6_code": "110311",
+        },
+    )
+
+    assert result.result is True
+    assert result.checks[0].observed_value == "1201"
+
+
+def test_numeric_comparison_rejects_non_numeric_operands() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator.evaluate("vnom_percent <= 60", {"vnom_percent": "high"})
+
+    assert "Comparison requires numeric values" in exc_info.value.message
+
+
+def test_compare_values_rejects_unsupported_operator() -> None:
+    evaluator = ExpressionEvaluator()
+
+    with pytest.raises(ExpressionEvaluationError) as exc_info:
+        evaluator._compare_values(1, "===", 1)
+
+    assert "Unsupported comparison operator" in exc_info.value.message
+
+
+def test_build_comparison_explanation_uses_fallback_for_unmapped_failure() -> None:
+    evaluator = ExpressionEvaluator()
+
+    explanation = evaluator._build_comparison_explanation("exporter", "==", "importer", False)
+
+    assert explanation == "Check failed: exporter == importer"
+
+
 def test_source_file_does_not_use_dynamic_execution() -> None:
     source_path = (
         Path(__file__).resolve().parents[2]

@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.core.enums import (
     AuthorityTierEnum,
@@ -64,12 +64,32 @@ def _build_source(tag: str, *, source_type: SourceTypeEnum) -> SourceRegistry:
 async def _seed_pending_quick_slice_candidate() -> dict[str, str]:
     """Insert one isolated pending-rule candidate for deterministic blocker coverage."""
 
-    hs6_code = f"98{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source("pending-rule", source_type=SourceTypeEnum.APPENDIX)
     tariff_source = _build_source("pending-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        existing_codes = set(
+            (
+                await session.scalars(
+                    select(HS6Product.hs6_code).where(
+                        HS6Product.hs_version == "HS2017",
+                        HS6Product.chapter == "98",
+                    )
+                )
+            ).all()
+        )
+        hs6_code = next(
+            (
+                f"98{suffix:04d}"
+                for suffix in range(10000)
+                if f"98{suffix:04d}" not in existing_codes
+            ),
+            None,
+        )
+        if hs6_code is None:
+            raise AssertionError("No unused HS Chapter 98 code available for pending quick-slice fixture")
+
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,

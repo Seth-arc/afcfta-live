@@ -152,15 +152,18 @@ class SourcesRepository:
     ) -> list[Mapping[str, Any]]:
         """Return thin provision summaries for one source, ordered by authority weight.
 
-        Projects only the fields needed for ``ProvisionSummary``; full text is excluded to
-        keep audit responses compact.  Callers follow ``provision_id`` to
-        ``GET /api/v1/provisions/{provision_id}`` for the verbatim text.
+        Projects the compact audit-trail fields plus ``source_id`` so callers can
+        verify that the returned provision still belongs to the requested source.
+        Full text is excluded to keep audit responses compact. Callers follow
+        ``provision_id`` to ``GET /api/v1/provisions/{provision_id}`` for the
+        verbatim text.
         """
 
         provision_table = LegalProvision.__table__
         statement = (
             select(
                 provision_table.c.provision_id,
+                provision_table.c.source_id,
                 provision_table.c.instrument_name,
                 provision_table.c.article_ref,
                 provision_table.c.annex_ref,

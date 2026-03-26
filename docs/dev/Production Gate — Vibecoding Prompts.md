@@ -61,6 +61,19 @@ A prompt is only complete when all of the following are true:
 3. Any affected docs reflect the corrected state.
 4. The required summary can cite the exact files changed and tests added.
 
+## Prompt Status
+
+| Prompt | Status | Completed |
+|---|---|---|
+| 1 | [x] Complete | 26 March 2026 |
+| 2 | [x] Complete | 26 March 2026 |
+| 3 | [x] Complete | 26 March 2026 |
+| 4 | [x] Complete | 26 March 2026 |
+| 5 | [x] Complete | 26 March 2026 |
+| 6 | [x] Complete | 26 March 2026 |
+| 7 | [x] Complete | 26 March 2026 |
+| 8 | [x] Complete | 26 March 2026 |
+
 ## Cross-Cutting Implementation Notes
 
 - Preserve all existing request_id correlation, auth, and rate-limiting behaviour
@@ -726,8 +739,65 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_audit_api.py -v
 python -m pytest tests/integration/test_sources_api.py -v
-```
 
+Audit item: Audit provenance source_id mismatch hardening
+Date: 2026-03-26
+Status: CLOSED
+
+Issue:
+`app/services/audit_service.py` fetched provision summaries for rule and tariff
+provenance and attached them to the audit trail without verifying that each
+returned provision still belonged to the requested `source_id`.
+
+Risk:
+If a mismatched provision row were returned, the audit trail could attach a
+legally wrong source document to a decision trace. A partial audit trail is
+legally safer than a corrupted one.
+
+Fix:
+1. Hardened provision attachment in `AuditService._fetch_provision_summaries()`.
+2. For each returned row, compare `row["source_id"]` against the requested
+   `source_id`.
+3. If the values differ:
+   - log a warning
+   - omit the mismatched provision from the audit trail
+   - continue building the rest of the trail
+4. Added `source_id` to the compact projection returned by
+   `SourcesRepository.get_provisions_for_source()` so the service can verify it.
+
+Exact check added:
+- Location: `app/services/audit_service.py`
+- Path: `_build_decision_provenance()` now passes `evaluation_id` into
+  `_fetch_provision_summaries()`
+- Guard: `_fetch_provision_summaries()` filters out any provision where
+  `actual_source_id != requested_source_id`
+
+Warning log format:
+`Omitted provision summary with mismatched source_id: evaluation_id=%s expected_source_id=%s actual_source_id=%s`
+
+Verification:
+1. `python -m pytest tests/integration/test_audit_api.py -v`
+   Result: 19 passed
+2. `python -m pytest tests/integration/test_sources_api.py -v`
+   Result: 5 passed
+
+Regression test added:
+`test_get_decision_trace_omits_provisions_with_mismatched_source_ids`
+
+What it proves:
+- Source A and source B can both exist in the database
+- An evaluation referencing source A keeps the provision from source A
+- A provision from source B is not attached to the trail
+- The mismatch is logged at WARNING level
+- No public `AuditTrail` schema fields changed
+
+Conclusion:
+The audit trail no longer silently accepts cross-source provision contamination.
+Mismatched provision rows are explicitly logged and excluded, preserving replay
+safety without failing the entire audit-trace reconstruction.
+
+```
+## Completed 26 March 2026
 ---
 
 ## Prompt 8 — Final gate validation and handoff to Decision Renderer
@@ -823,6 +893,29 @@ python -m pytest tests/nim_eval/ -v -m nim_eval
 python -m pytest tests/integration/test_nim_full_flow.py -v
 python -m pytest tests/integration/test_golden_path.py -v
 ```
+
+## Completed 26 March 2026
+
+Verified gate outputs for Prompt 8:
+
+- `python -m pytest tests/unit --cov --cov-report=term-missing`
+  Result: `538 passed`, `90.28%` coverage
+- `python -m pytest tests/integration --cov --cov-report=term-missing`
+  Result: `211 passed`, `86.24%` coverage
+- `python -m pytest tests/unit tests/integration --cov --cov-report=term-missing`
+  Result: `749 passed`, `96.72%` coverage
+- `python -m pytest tests/nim_eval -v -m nim_eval`
+  Result: `5 passed`
+
+Prompt 8 verification confirmed:
+
+- all audit gaps from Prompts 1–7 are closed in the final repository state
+- the Decision Renderer book's Required Preconditions are satisfied
+- the NIM Integration (advanced) Backend Prerequisites Gate is satisfied
+- `docs/dev/production_runbook.md` now contains a dated production-gate stabilisation
+  section for this audit cycle
+- the full gate suite is reproducible after hardening seeded integration helpers to
+  allocate unused HS6 fixture codes instead of colliding on reruns
 
 ---
 

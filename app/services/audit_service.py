@@ -86,7 +86,10 @@ class AuditService:
             else []
         )
 
-        provenance = await self._build_decision_provenance(checks)
+        provenance = await self._build_decision_provenance(
+            checks,
+            evaluation_id=str(evaluation.evaluation_id),
+        )
         return AuditTrail(
             evaluation=evaluation,
             case=case,
@@ -436,6 +439,8 @@ class AuditService:
     async def _build_decision_provenance(
         self,
         checks: Sequence[EligibilityCheckResultResponse],
+        *,
+        evaluation_id: str,
     ) -> DecisionProvenanceTrace | None:
         """Roll rule and tariff provenance into one summary-level decision trace.
 
@@ -460,8 +465,14 @@ class AuditService:
         rule_trace = None
         if isinstance(rule_payload, dict):
             rule_source_id = rule_payload.get("source_id")
-            rule_provisions = await self._fetch_provision_summaries(str(rule_source_id)) \
-                if rule_source_id is not None else []
+            rule_provisions = (
+                await self._fetch_provision_summaries(
+                    str(rule_source_id),
+                    evaluation_id=evaluation_id,
+                )
+                if rule_source_id is not None
+                else []
+            )
             rule_trace = RuleProvenanceTrace(
                 source_id=rule_source_id,
                 page_ref=rule_payload.get("page_ref"),
@@ -473,8 +484,14 @@ class AuditService:
         tariff_trace = None
         if isinstance(tariff_payload, dict):
             schedule_source_id = tariff_payload.get("schedule_source_id")
-            tariff_provisions = await self._fetch_provision_summaries(str(schedule_source_id)) \
-                if schedule_source_id is not None else []
+            tariff_provisions = (
+                await self._fetch_provision_summaries(
+                    str(schedule_source_id),
+                    evaluation_id=evaluation_id,
+                )
+                if schedule_source_id is not None
+                else []
+            )
             tariff_trace = TariffProvenanceTrace(
                 schedule_source_id=schedule_source_id,
                 rate_source_id=tariff_payload.get("rate_source_id"),
@@ -489,14 +506,33 @@ class AuditService:
             return None
         return DecisionProvenanceTrace(rule=rule_trace, tariff=tariff_trace)
 
-    async def _fetch_provision_summaries(self, source_id: str) -> list[ProvisionSummary]:
+    async def _fetch_provision_summaries(
+        self,
+        source_id: str,
+        *,
+        evaluation_id: str,
+    ) -> list[ProvisionSummary]:
         """Return thin provision summaries for one source, or an empty list when unavailable."""
 
         if self.sources_repository is None:
             return []
         try:
             rows = await self.sources_repository.get_provisions_for_source(source_id, limit=5)
-            return [ProvisionSummary.model_validate(dict(row)) for row in rows]
+            summaries: list[ProvisionSummary] = []
+            for row in rows:
+                row_data = dict(row)
+                actual_source_id = row_data.get("source_id")
+                if actual_source_id is not None and str(actual_source_id) != source_id:
+                    logger.warning(
+                        "Omitted provision summary with mismatched source_id: "
+                        "evaluation_id=%s expected_source_id=%s actual_source_id=%s",
+                        evaluation_id,
+                        source_id,
+                        actual_source_id,
+                    )
+                    continue
+                summaries.append(ProvisionSummary.model_validate(row_data))
+            return summaries
         except Exception:
             return []
 

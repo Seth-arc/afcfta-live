@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.api import deps as api_deps
 from app.core.countries import V01_CORRIDORS
@@ -495,7 +495,6 @@ async def _seed_expanded_golden_candidate(case: Mapping[str, Any]) -> dict[str, 
         pathway_code
     )
     heading = str(seed["heading"])
-    hs6_code = f"{heading}{int(uuid4().hex[:4], 16) % 100:02d}"
     exporter = str(case["input"]["exporter"])
     importer = str(case["input"]["importer"])
     tag = str(seed["scenario_tag"])
@@ -506,6 +505,27 @@ async def _seed_expanded_golden_candidate(case: Mapping[str, Any]) -> dict[str, 
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        existing_codes = set(
+            await session.scalars(
+                select(HS6Product.hs6_code).where(
+                    HS6Product.hs_version == "HS2017",
+                    HS6Product.heading == heading,
+                )
+            )
+        )
+        hs6_code = next(
+            (
+                f"{heading}{suffix:02d}"
+                for suffix in range(100)
+                if f"{heading}{suffix:02d}" not in existing_codes
+            ),
+            None,
+        )
+        if hs6_code is None:
+            raise AssertionError(
+                f"No unused HS6 codes remain for heading {heading} in golden fixture seeding."
+            )
+
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,

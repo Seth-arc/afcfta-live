@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\api\v1\cases.py
+# hypothesis_version: 6.151.9
+
+['/cases', '/cases/{case_id}', 'X-AIS-Audit-URL', 'X-AIS-Case-Id', 'X-AIS-Evaluation-Id', 'assessment.year', 'case', 'case_id', 'facts', 'missing_fields']

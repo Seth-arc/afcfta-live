@@ -71,6 +71,64 @@ They represent realistic:
 Because `golden_cases.py` is a locked reference file, do not edit it casually.
 If you truly need a new golden acceptance case, get explicit review before changing that file.
 
+## NIM Evaluation Harness
+
+The mocked NIM regression harness lives in:
+
+- `tests/nim_eval/`
+
+This suite is the lightweight baseline for future NIM prompt tuning, model
+rollouts, and parser iterations. It does not require a live NIM endpoint.
+Every case uses a mocked `NimClient` response so the harness can run locally,
+in CI, or during offline prompt work without network dependencies.
+
+### What it covers now
+
+- parse-shape regression for representative natural-language prompts
+- clarification regression for under-specified trade queries
+- draft-to-engine mapping invariants, especially stripping NIM-only metadata
+
+### How to run only the NIM eval harness
+
+```bash
+python -m pytest tests/nim_eval -v
+```
+
+or by marker:
+
+```bash
+python -m pytest -m nim_eval -v
+```
+
+### How to add a new eval case
+
+1. Start from a supported scenario in `tests/fixtures/golden_cases.py`.
+2. Add one dict to `tests/nim_eval/cases.py` with:
+   - `name`
+   - `user_input`
+   - `expected_fields`
+   - `expected_clarification`
+3. Keep the mocked NIM payload aligned to only the engine-facing draft fields
+   the case is asserting.
+4. If the case is a clarification case, keep the required trade fields `None`
+   so the harness proves the clarification gate still triggers.
+
+### How to use it during model tuning
+
+Use this harness before and after any NIM parser or prompt change.
+
+- If a complete-parse case regresses, the draft schema or prompt behavior drifted.
+- If a clarification case stops returning empty required fields, the intake gate
+  may be letting ambiguous queries through.
+- If NIM-only metadata appears in the mapped request body, the deterministic
+  engine boundary has been violated.
+
+This harness is intentionally narrower than the full assistant integration
+tests. It is the fast regression baseline for mocked parser behavior, while
+`tests/integration/test_assistant_api.py` and
+`tests/integration/test_nim_full_flow.py` remain the contract tests for the
+live assistant path.
+
 ## How To Add A New Test Case
 
 For normal feature work:

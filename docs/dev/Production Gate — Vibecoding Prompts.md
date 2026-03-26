@@ -504,8 +504,56 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_golden_path.py -v
 python -m pytest tests/integration/test_quick_slice_e2e.py -v
-```
 
+Audit item: Golden-case corridor and chapter expansion
+Date: 2026-03-26
+Status: CLOSED
+
+Objective:
+Expand the golden-case corpus beyond the original two directed corridors so Q2 2026
+hackathon demos have broader live-backed corridor and HS6 chapter coverage.
+
+Scope completed:
+Added three new corridor/chapter scenario groups, each with one pass case and one
+fail companion case, for a total of six new golden cases.
+
+New corridor pairs and HS6 chapters:
+1. CIV->NGA — Chapter 62 apparel
+2. CIV->SEN — Chapter 09 coffee/cocoa
+3. NGA->GHA — Chapter 72 iron/steel
+
+Six new golden cases:
+1. CIV->NGA apparel WO pass
+2. CIV->NGA apparel WO fail - direct transport broken
+3. CIV->SEN coffee CTH pass
+4. CIV->SEN coffee CTH fail - no tariff shift
+5. NGA->GHA iron VNM within threshold
+6. NGA->GHA iron VNM fail - over threshold
+
+Implementation notes:
+- Each new scenario seeds its own isolated HS6 product, PSR rule, tariff schedule,
+  tariff rate, and status rows.
+- The new integration coverage uses one parametrized test that seeds each scenario
+  independently, then runs both the pass and fail companion case against that seed.
+- The coffee scenario was aligned to CIV->SEN instead of CMR->SEN because CIV->SEN
+  is in the locked runtime V01 corridor set, while CMR->SEN is not.
+
+Verification:
+1. `python -m pytest tests/integration/test_golden_path.py -v`
+   Result: 21 passed
+2. `python -m pytest tests/integration/test_quick_slice_e2e.py -v`
+   Result: 18 passed
+
+Corpus totals after change:
+- Directed corridors covered: 6
+- HS6 chapters covered: 9
+
+Conclusion:
+The golden-case corpus now includes three additional supported corridor pairs and
+three additional HS6 chapter slices, with pass/fail coverage for each new scenario.
+No regressions were introduced in the golden-path or quick-slice integration suites.
+```
+## Completed 26 March 2026
 ---
 
 ## Prompt 6 — Add a NIM evaluation scaffold for regression protection
@@ -572,8 +620,62 @@ When done, summarize:
 ```bash
 python -m pytest tests/nim_eval/ -v -m nim_eval
 python -m pytest tests/unit -q
-```
 
+Audit item: NIM evaluation harness scaffold
+Date: 2026-03-26
+Status: CLOSED
+
+Issue:
+The `tests/nim_eval/` directory did not exist, so Prompt 5 in the NIM Integration
+advanced prompt book had no prebuilt regression harness. That meant future prompt
+tuning, model rollout, or parser iteration work would begin without a dedicated
+NIM-specific baseline.
+
+Fix:
+1. Created `tests/nim_eval/` as a proper Python test package.
+2. Added `tests/nim_eval/cases.py` with a minimal `NIM_EVAL_CASES` corpus.
+3. Added `tests/nim_eval/test_nim_eval.py` with mocked-client regression tests.
+4. Added the `nim_eval` pytest marker in `pyproject.toml`.
+5. Documented the harness in `docs/dev/testing.md`.
+
+Evaluation cases defined:
+1. GHA->NGA groats complete parse
+   - Natural-language prompt for HS 110311
+   - Expected complete parse: hs6_code, exporter, importer, year, persona_mode
+
+2. CIV->NGA apparel officer parse
+   - Natural-language prompt for HS 620910
+   - Expected complete parse with officer persona
+
+3. CMR->NGA petroleum clarification required
+   - Natural-language prompt intentionally under-specified
+   - Expected empty required trade fields so clarification is triggered
+
+What the tests assert:
+1. `parse_user_input()` consumes mocked NIM JSON and returns the expected
+   `NimAssessmentDraft` fields for each case.
+2. Clarification cases remain empty in the required fields:
+   `hs6_code`, `exporter`, `importer`, `year`, `persona_mode`.
+3. Mapping from `NimAssessmentDraft` to `EligibilityRequest` never includes
+   `nim_confidence`, `nim_assumptions`, or `nim_rejection_reason`.
+
+Verification:
+1. `python -m pytest tests/nim_eval/ -v -m nim_eval`
+   Result: 5 passed
+2. `python -m pytest tests/unit -q`
+   Result: 463 passed
+
+How to run in isolation:
+- `python -m pytest tests/nim_eval -v`
+- `python -m pytest -m nim_eval -v`
+
+Conclusion:
+The repository now has a minimal, extendable NIM evaluation harness that is
+fully mocked, aligned to the locked golden corpus, and ready for future NIM
+tuning work without blocking that phase.
+
+```
+## Completed 26 March 2026
 ---
 
 ## Prompt 7 — Validate audit trail provision linkage integrity

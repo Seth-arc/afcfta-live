@@ -49,6 +49,7 @@ testpaths = ["tests"]
 norecursedirs = ["tests/load", ".hypothesis"]
 markers = [
     "integration: marks tests that require the integration test stack",
+    "nim_eval: NIM evaluation harness — requires NIM_ENABLED or mocked NimClient",
 ]
 
 [tool.coverage.run]

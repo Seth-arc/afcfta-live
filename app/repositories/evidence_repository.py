@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 from typing import Any
 
 from sqlalchemy import text
@@ -20,16 +21,11 @@ class EvidenceRepository:
         entity_type: str,
         entity_key: str,
         persona_mode: str,
+        as_of_date: date | None = None,
     ) -> list[Mapping[str, Any]]:
-        """Return evidence requirements for one entity key, including system requirements.
+        """Return evidence requirements for one entity key, including system requirements."""
 
-        Evidence requirements are non-temporal in the current schema, so assessment
-        snapshot alignment comes from the surrounding repeatable-read transaction
-        rather than an explicit as-of-date filter.
-        """
-
-        statement = text(
-            """
+        statement_text = """
             SELECT
               er.evidence_id,
               er.entity_type,
@@ -47,16 +43,22 @@ class EvidenceRepository:
             WHERE er.persona_mode IN (:persona_mode, 'system')
               AND er.entity_type = :entity_type
               AND er.entity_key = :entity_key
-            ORDER BY er.priority_level ASC, er.requirement_type ASC
+        """
+        params: dict[str, Any] = {
+            "persona_mode": persona_mode,
+            "entity_type": entity_type,
+            "entity_key": entity_key,
+        }
+        if as_of_date is not None:
+            statement_text += """
+              AND (er.effective_from IS NULL OR er.effective_from <= :as_of_date)
+              AND (er.effective_to IS NULL OR er.effective_to >= :as_of_date)
             """
-        )
+            params["as_of_date"] = as_of_date
+        statement_text += "\nORDER BY er.priority_level ASC, er.requirement_type ASC"
         result = await self.session.execute(
-            statement,
-            {
-                "persona_mode": persona_mode,
-                "entity_type": entity_type,
-                "entity_key": entity_key,
-            },
+            text(statement_text),
+            params,
         )
         return list(result.mappings().all())
 
@@ -65,13 +67,9 @@ class EvidenceRepository:
         entity_type: str,
         entity_key: str,
         risk_category: str | None,
+        as_of_date: date | None = None,
     ) -> list[Mapping[str, Any]]:
-        """Return active verification questions for an entity key, optionally filtered by risk.
-
-        Verification questions likewise have no effective/expiry window columns in
-        v0.1, so transaction snapshot isolation is the only date-alignment mechanism
-        available here.
-        """
+        """Return active verification questions for an entity key, optionally filtered by risk."""
 
         params: dict[str, Any] = {
             "entity_type": entity_type,
@@ -97,6 +95,12 @@ class EvidenceRepository:
               AND vq.entity_key = :entity_key
               AND vq.active = true
         """
+        if as_of_date is not None:
+            statement_text += """
+              AND (vq.effective_from IS NULL OR vq.effective_from <= :as_of_date)
+              AND (vq.effective_to IS NULL OR vq.effective_to >= :as_of_date)
+            """
+            params["as_of_date"] = as_of_date
         if risk_category is not None:
             statement_text += "\n  AND vq.risk_category = :risk_category"
             params["risk_category"] = risk_category

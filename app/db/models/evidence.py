@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum as SAEnum,
     ForeignKey,
@@ -52,6 +53,7 @@ class EvidenceRequirement(Base):
             "entity_key",
             "priority_level",
         ),
+        Index("idx_evidence_requirement_effective_window", "effective_from", "effective_to"),
         Index("idx_evidence_requirement_conditional_gin", "conditional_on", postgresql_using="gin"),
     )
 
@@ -86,6 +88,8 @@ class EvidenceRequirement(Base):
         nullable=False,
         server_default=text("1"),
     )
+    effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -151,6 +155,8 @@ class VerificationQuestion(Base):
         nullable=False,
         server_default=text("1"),
     )
+    effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

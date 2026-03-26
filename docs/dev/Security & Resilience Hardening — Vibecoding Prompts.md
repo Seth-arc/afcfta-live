@@ -344,7 +344,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_audit_api.py -v
 ```
-
+## Completed 26 March 2026
 ---
 
 ## Prompt 5 — Make evidence snapshot isolation explicit and deterministic

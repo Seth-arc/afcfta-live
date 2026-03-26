@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -28,6 +30,8 @@ _DOC_TYPES = [
     "customs_declaration",
     "laboratory_analysis",
 ]
+
+_ASSESSMENT_DATE = date(2025, 1, 1)
 
 # A single required evidence requirement row.
 _requirement_strategy = st.fixed_dictionaries(
@@ -58,6 +62,7 @@ def _run_readiness(
             persona_mode=persona_mode,
             existing_documents=documents,
             confidence_class=confidence_class,
+            assessment_date=_ASSESSMENT_DATE,
         )
 
     return asyncio.run(_inner())
@@ -122,17 +127,20 @@ async def test_build_readiness_officer_has_more_requirements_than_exporter() -> 
         entity_key="HS6_RULE:psr-123",
         persona_mode="officer",
         existing_documents=["certificate_of_origin"],
+        assessment_date=_ASSESSMENT_DATE,
     )
 
     repository.get_requirements.assert_awaited_once_with(
         entity_type="hs6_rule",
         entity_key="HS6_RULE:psr-123",
         persona_mode="officer",
+        as_of_date=_ASSESSMENT_DATE,
     )
     repository.get_verification_questions.assert_awaited_once_with(
         entity_type="hs6_rule",
         entity_key="HS6_RULE:psr-123",
         risk_category=None,
+        as_of_date=_ASSESSMENT_DATE,
     )
     assert isinstance(result, EvidenceReadinessResult)
     assert result.required_items == ["Certificate of origin", "Inspection record"]
@@ -255,31 +263,200 @@ async def test_build_readiness_with_no_requirements_returns_empty_and_complete()
 
 
 @pytest.mark.asyncio
-async def test_build_readiness_uses_non_temporal_repository_contract() -> None:
-    """Evidence readiness should stay date-agnostic until the schema adds date windows."""
+async def test_build_readiness_without_assessment_date_emits_warning_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Callers without assessment_date keep working but must emit an explicit warning."""
 
     repository = AsyncMock(spec=EvidenceRepository)
     repository.get_requirements.return_value = []
     repository.get_verification_questions.return_value = []
     service = EvidenceService(repository)
 
+    with caplog.at_level(logging.WARNING, logger="app.evidence"):
+        await service.build_readiness(
+            entity_type="pathway",
+            entity_key="PATHWAY:pathway-999",
+            persona_mode="exporter",
+            existing_documents=[],
+            assessment_date=None,
+        )
+
+    assert (
+        "evidence_service called without assessment_date — snapshot isolation relies on caller transaction boundary"
+        in caplog.text
+    )
+
+
+@pytest.mark.asyncio
+async def test_build_readiness_passes_assessment_date_to_repository_calls() -> None:
+    """The service should forward assessment_date to both repository lookups."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    repository.get_verification_questions.return_value = []
+    service = EvidenceService(repository)
+    assessment_date = date(2025, 1, 1)
+
     await service.build_readiness(
         entity_type="pathway",
         entity_key="PATHWAY:pathway-999",
         persona_mode="exporter",
         existing_documents=[],
+        assessment_date=assessment_date,
     )
 
     repository.get_requirements.assert_awaited_once_with(
         entity_type="pathway",
         entity_key="PATHWAY:pathway-999",
         persona_mode="exporter",
+        as_of_date=assessment_date,
     )
     repository.get_verification_questions.assert_awaited_once_with(
         entity_type="pathway",
         entity_key="PATHWAY:pathway-999",
         risk_category=None,
+        as_of_date=assessment_date,
     )
+
+
+def build_windowed_requirement(
+    requirement_type: str,
+    description: str,
+    *,
+    persona_mode: str,
+    required: bool = True,
+    effective_from: date | None = None,
+    effective_to: date | None = None,
+) -> dict[str, object]:
+    """Build a requirement row with optional effective date bounds."""
+
+    row = build_requirement(
+        requirement_type,
+        description,
+        persona_mode=persona_mode,
+        required=required,
+    )
+    row["effective_from"] = effective_from
+    row["effective_to"] = effective_to
+    return row
+
+
+class WindowFilteringRepository:
+    """Fake repository that applies the same effective-date rules as the SQL layer."""
+
+    def __init__(self, requirements: list[dict[str, object]]) -> None:
+        self._requirements = requirements
+
+    async def get_requirements(
+        self,
+        *,
+        entity_type: str,
+        entity_key: str,
+        persona_mode: str,
+        as_of_date: date | None = None,
+    ) -> list[dict[str, object]]:
+        assert entity_type == "hs6_rule"
+        assert entity_key == "HS6_RULE:psr-windowed"
+        assert persona_mode == "exporter"
+        if as_of_date is None:
+            return list(self._requirements)
+        return [
+            row
+            for row in self._requirements
+            if (row["effective_from"] is None or row["effective_from"] <= as_of_date)
+            and (row["effective_to"] is None or row["effective_to"] >= as_of_date)
+        ]
+
+    async def get_verification_questions(
+        self,
+        *,
+        entity_type: str,
+        entity_key: str,
+        risk_category: str | None,
+        as_of_date: date | None = None,
+    ) -> list[dict[str, object]]:
+        assert entity_type == "hs6_rule"
+        assert entity_key == "HS6_RULE:psr-windowed"
+        assert risk_category is None
+        return []
+
+
+@pytest.mark.asyncio
+async def test_build_readiness_excludes_rows_expired_before_assessment_date() -> None:
+    repository = WindowFilteringRepository(
+        [
+            build_windowed_requirement(
+                "certificate_of_origin",
+                "Expired certificate of origin",
+                persona_mode="system",
+                effective_to=date(2024, 12, 31),
+            )
+        ]
+    )
+    service = EvidenceService(repository)  # type: ignore[arg-type]
+
+    result = await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-windowed",
+        persona_mode="exporter",
+        existing_documents=[],
+        assessment_date=date(2025, 1, 1),
+    )
+
+    assert result.required_items == []
+
+
+@pytest.mark.asyncio
+async def test_build_readiness_excludes_rows_not_yet_effective_after_assessment_date() -> None:
+    repository = WindowFilteringRepository(
+        [
+            build_windowed_requirement(
+                "supplier_declaration",
+                "Future supplier declaration",
+                persona_mode="system",
+                effective_from=date(2025, 2, 1),
+            )
+        ]
+    )
+    service = EvidenceService(repository)  # type: ignore[arg-type]
+
+    result = await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-windowed",
+        persona_mode="exporter",
+        existing_documents=[],
+        assessment_date=date(2025, 1, 1),
+    )
+
+    assert result.required_items == []
+
+
+@pytest.mark.asyncio
+async def test_build_readiness_includes_unbounded_rows_for_any_assessment_date() -> None:
+    repository = WindowFilteringRepository(
+        [
+            build_windowed_requirement(
+                "invoice",
+                "Always-valid invoice",
+                persona_mode="system",
+                effective_from=None,
+                effective_to=None,
+            )
+        ]
+    )
+    service = EvidenceService(repository)  # type: ignore[arg-type]
+
+    result = await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-windowed",
+        persona_mode="exporter",
+        existing_documents=[],
+        assessment_date=date(2025, 1, 1),
+    )
+
+    assert result.required_items == ["Always-valid invoice"]
+    assert result.missing_items == ["Always-valid invoice"]
 
 
 @pytest.mark.asyncio
@@ -308,12 +485,14 @@ async def test_build_readiness_skips_risk_filter_for_unfiltered_confidence_class
         persona_mode="exporter",
         existing_documents=[],
         confidence_class=confidence_class,
+        assessment_date=_ASSESSMENT_DATE,
     )
 
     repository.get_verification_questions.assert_awaited_once_with(
         entity_type="hs6_rule",
         entity_key="HS6_RULE:psr-risk",
         risk_category=expected_risk,
+        as_of_date=_ASSESSMENT_DATE,
     )
 
 
@@ -342,12 +521,14 @@ async def test_build_readiness_maps_confidence_class_to_seeded_risk_category(
         persona_mode="exporter",
         existing_documents=[],
         confidence_class=confidence_class,
+        assessment_date=_ASSESSMENT_DATE,
     )
 
     repository.get_verification_questions.assert_awaited_once_with(
         entity_type="hs6_rule",
         entity_key="HS6_RULE:psr-risk",
         risk_category=expected_risk,
+        as_of_date=_ASSESSMENT_DATE,
     )
 
 
@@ -395,9 +576,11 @@ async def test_build_readiness_excludes_questions_outside_resolved_risk_category
         entity_type: str,
         entity_key: str,
         risk_category: str | None,
+        as_of_date: date | None = None,
     ) -> list[dict[str, object]]:
         assert entity_type == "hs6_rule"
         assert entity_key == "HS6_RULE:psr-risk"
+        assert as_of_date == _ASSESSMENT_DATE
         return [
             question
             for question in all_questions
@@ -413,6 +596,7 @@ async def test_build_readiness_excludes_questions_outside_resolved_risk_category
         persona_mode="exporter",
         existing_documents=[],
         confidence_class=confidence_class,
+        assessment_date=_ASSESSMENT_DATE,
     )
 
     assert result.verification_questions == expected_questions

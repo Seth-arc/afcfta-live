@@ -338,6 +338,7 @@ class EligibilityService:
             persona_mode=request.persona_mode,
             existing_documents=request.existing_documents,
             confidence_class=confidence_class,
+            assessment_date=assessment_date,
         )
         audit_checks.append(self._make_evidence_trace_check(evidence_result))
 
@@ -969,6 +970,7 @@ class EligibilityService:
         persona_mode: str,
         existing_documents: Sequence[str],
         confidence_class: str | None,
+        assessment_date: date,
     ) -> Any:
         """Resolve readiness from the most specific evidence target with compatibility fallbacks."""
 
@@ -978,11 +980,12 @@ class EligibilityService:
             selected_pathway=selected_pathway,
         ):
             result = await self.evidence_service.build_readiness(
-                entity_type,
-                entity_key,
-                persona_mode,
-                list(existing_documents),
-                confidence_class,
+                entity_type=entity_type,
+                entity_key=entity_key,
+                persona_mode=persona_mode,
+                existing_documents=list(existing_documents),
+                confidence_class=confidence_class,
+                assessment_date=assessment_date,
             )
             if fallback_result is None:
                 fallback_result = result

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+import logging
+
+from app.core.logging import log_event
 from app.repositories.evidence_repository import EvidenceRepository
 from app.schemas.evidence import EvidenceReadinessResult
 
@@ -20,6 +24,8 @@ _CONFIDENCE_TO_RISK: dict[str, str | None] = {
     "provisional": None,
 }
 
+_logger = logging.getLogger("app.evidence")
+
 
 class EvidenceService:
     """Service for evidence requirement comparison and readiness scoring."""
@@ -34,14 +40,23 @@ class EvidenceService:
         persona_mode: str,
         existing_documents: list[str],
         confidence_class: str | None = None,
+        assessment_date: date | None = None,
     ) -> EvidenceReadinessResult:
         """Return required, missing, and verification items for a persona/entity pair.
 
-        The current evidence tables are not date-windowed, so readiness remains
-        assessment-snapshot consistent by running inside the same repeatable-read
-        transaction as the rest of the assessment.
+        When assessment_date is omitted, evidence lookups rely on the caller to keep
+        all reads inside the same repeatable-read transaction boundary.
         """
 
+        if assessment_date is None:
+            log_event(
+                _logger,
+                logging.WARNING,
+                event="evidence_service_missing_assessment_date",
+                message="evidence_service called without assessment_date — snapshot isolation relies on caller transaction boundary",
+                entity_type=entity_type,
+                entity_key=entity_key,
+            )
         resolved_persona = self._normalize_persona_mode(persona_mode)
         risk_category = (
             None if confidence_class is None else _CONFIDENCE_TO_RISK.get(confidence_class)
@@ -50,11 +65,13 @@ class EvidenceService:
             entity_type=entity_type,
             entity_key=entity_key,
             persona_mode=resolved_persona,
+            as_of_date=assessment_date,
         )
         questions = await self.evidence_repository.get_verification_questions(
             entity_type=entity_type,
             entity_key=entity_key,
             risk_category=risk_category,
+            as_of_date=assessment_date,
         )
 
         required_map: dict[str, str] = {}
@@ -105,6 +122,7 @@ class EvidenceService:
         persona_mode: str,
         existing_documents: list[str],
         confidence_class: str | None = None,
+        assessment_date: date | None = None,
     ) -> EvidenceReadinessResult:
         """Compatibility wrapper for API handlers that call the service via get_readiness()."""
 
@@ -114,6 +132,7 @@ class EvidenceService:
             persona_mode=persona_mode,
             existing_documents=existing_documents,
             confidence_class=confidence_class,
+            assessment_date=assessment_date,
         )
 
     @staticmethod

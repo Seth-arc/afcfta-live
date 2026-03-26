@@ -17,21 +17,19 @@ services:
     # REDIS_URL entry below before raising --workers above 1.
     # The Dockerfile intentionally has no worker-count default; direct docker run
     # operators must set UVICORN_WORKERS explicitly, while this compose override
-    # is the canonical production entrypoint and pins the safe default at 1.
+    # is the canonical production entrypoint.
     command:
       [
         "uvicorn", "app.main:app",
         "--host", "0.0.0.0",
         "--port", "8000",
-        "--workers", "1",
+        "--workers", "2", # Requires REDIS_URL — see .env.prod
       ]
     depends_on:
       db:
         condition: service_healthy
-      # Uncomment the redis dependency below when enabling the redis service
-      # further down in this file for multi-worker rate limiting.
-      # redis:
-      #   condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3); sys.exit(0)"]
       interval: 30s
@@ -56,18 +54,16 @@ services:
       retries: 5
       start_period: 10s
 
-  # Uncomment this service when promoting from single-worker mode to multiple
-  # workers with Redis-backed shared rate limiting.
-  # redis:
-  #   image: redis:7-alpine
-  #   restart: unless-stopped
-  #   command: ["redis-server", "--save", "", "--appendonly", "no"]
-  #   healthcheck:
-  #     test: ["CMD", "redis-cli", "ping"]
-  #     interval: 10s
-  #     timeout: 3s
-  #     retries: 5
-  #     start_period: 5s
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   pgdata_prod:

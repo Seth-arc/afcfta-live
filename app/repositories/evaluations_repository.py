@@ -33,6 +33,9 @@ class EvaluationsRepository:
         self,
         evaluation_data: Mapping[str, Any],
         check_results: Sequence[Mapping[str, Any]],
+        *,
+        lock_case: bool = True,
+        return_inserted_checks: bool = True,
     ) -> Mapping[str, Any]:
         """Atomically insert one evaluation and all of its check rows."""
 
@@ -45,12 +48,13 @@ class EvaluationsRepository:
         }
 
         async with self._atomic_scope():
-            lock_statement = (
-                select(CaseFile.case_id)
-                .where(CaseFile.case_id == evaluation_payload["case_id"])
-                .with_for_update()
-            )
-            await self.session.execute(lock_statement)
+            if lock_case:
+                lock_statement = (
+                    select(CaseFile.case_id)
+                    .where(CaseFile.case_id == evaluation_payload["case_id"])
+                    .with_for_update()
+                )
+                await self.session.execute(lock_statement)
 
             evaluation_statement = (
                 insert(evaluation_table).values(**evaluation_payload).returning(*evaluation_table.c)
@@ -96,9 +100,12 @@ class EvaluationsRepository:
                         }
                     )
 
-                check_statement = insert(check_table).values(rows).returning(*check_table.c)
-                inserted_result = await self.session.execute(check_statement)
-                inserted_checks = list(inserted_result.mappings().all())
+                if return_inserted_checks:
+                    check_statement = insert(check_table).values(rows).returning(*check_table.c)
+                    inserted_result = await self.session.execute(check_statement)
+                    inserted_checks = list(inserted_result.mappings().all())
+                else:
+                    await self.session.execute(insert(check_table).values(rows))
 
         return {
             "evaluation": evaluation_row,

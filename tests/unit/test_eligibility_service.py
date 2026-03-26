@@ -257,9 +257,14 @@ def _request(
 def _service() -> tuple[EligibilityService, dict[str, object]]:
     """Create the orchestrator with mocked dependencies."""
 
+    rule_resolution_service = AsyncMock()
+    shared_rule_resolution = AsyncMock()
+    rule_resolution_service.resolve_rule_bundle = shared_rule_resolution
+    rule_resolution_service.resolve_rule_bundle_by_hs6_id = shared_rule_resolution
+
     deps = {
         "classification_service": AsyncMock(),
-        "rule_resolution_service": AsyncMock(),
+        "rule_resolution_service": rule_resolution_service,
         "tariff_resolution_service": AsyncMock(),
         "status_service": AsyncMock(),
         "evidence_service": AsyncMock(),
@@ -1031,8 +1036,9 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
     auto_case_id = str(_uuid(400))
     evaluation_id = str(_uuid(401))
     deps["cases_repository"].create_case.return_value = auto_case_id
-    deps["evaluations_repository"].get_latest_evaluation_for_case.return_value = {
-        "evaluation_id": evaluation_id
+    deps["evaluations_repository"].persist_evaluation.return_value = {
+        "evaluation": {"evaluation_id": evaluation_id},
+        "checks": [],
     }
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
@@ -1081,9 +1087,7 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
 
     persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
     assert persisted_evaluation["case_id"] == auto_case_id
-    deps["evaluations_repository"].get_latest_evaluation_for_case.assert_awaited_once_with(
-        auto_case_id
-    )
+    deps["evaluations_repository"].get_latest_evaluation_for_case.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1136,7 +1140,7 @@ async def test_assess_interface_request_raises_when_case_fact_persistence_fails(
         "reason": "case_facts_persist_failed",
         "hs6_code": "110311",
     }
-    deps["evaluations_repository"].get_latest_evaluation_for_case.assert_not_awaited()
+    deps["evaluations_repository"].persist_evaluation.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1154,7 +1158,10 @@ async def test_assess_interface_request_raises_when_replay_evaluation_is_missing
     )
     auto_case_id = str(_uuid(402))
     deps["cases_repository"].create_case.return_value = auto_case_id
-    deps["evaluations_repository"].get_latest_evaluation_for_case.return_value = None
+    deps["evaluations_repository"].persist_evaluation.return_value = {
+        "evaluation": {},
+        "checks": [],
+    }
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
     deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
@@ -1184,8 +1191,8 @@ async def test_assess_interface_request_raises_when_replay_evaluation_is_missing
 
 
 @pytest.mark.asyncio
-async def test_assess_interface_request_raises_when_replay_evaluation_lookup_fails() -> None:
-    """Interface runs should surface replay-id lookup failures as replay-persistence errors."""
+async def test_assess_interface_request_raises_when_evaluation_persistence_returns_no_identifier() -> None:
+    """Interface runs should fail closed when persistence succeeds without an evaluation id."""
 
     service, deps = _service()
     request = _request(
@@ -1198,9 +1205,7 @@ async def test_assess_interface_request_raises_when_replay_evaluation_lookup_fai
     )
     auto_case_id = str(_uuid(404))
     deps["cases_repository"].create_case.return_value = auto_case_id
-    deps["evaluations_repository"].get_latest_evaluation_for_case.side_effect = RuntimeError(
-        "lookup failed"
-    )
+    deps["evaluations_repository"].persist_evaluation.return_value = {"checks": []}
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
     deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
@@ -1225,7 +1230,7 @@ async def test_assess_interface_request_raises_when_replay_evaluation_lookup_fai
 
     assert exc_info.value.detail == {
         "case_id": auto_case_id,
-        "reason": "evaluation_lookup_failed",
+        "reason": "evaluation_not_persisted",
     }
 
 

@@ -552,7 +552,8 @@ commands, published artifact names, and the 48-hour no-schema-change rule.
   severity-based, the mapping is an explicit safe stub with a TODO instead of an
   undocumented `None` passthrough.
 - Prompt 5 — Golden-case corpus expansion closed.
-  The corpus now covers 6 directed V01 corridors and 9 HS6 chapters, including the
+  The locked corpus now covers 9 distinct HS6 products across 6 directed V01
+  corridors, pinned by 15 golden cases spanning 9 HS6 chapters, including the
   added Chapter 62, 09, and 72 scenarios with pass/fail companion cases.
 - Prompt 6 — NIM evaluation scaffold closed.
   `tests/nim_eval/` exists, is marked with `@pytest.mark.nim_eval`, passes with a
@@ -587,6 +588,50 @@ Recorded results for this audit cycle:
 - `python -m pytest tests/nim_eval -v -m nim_eval`
   Result: `5 passed`
 
+### 10.2A Current March 26 rerun evidence ledger
+
+Record the fresh March 26 rerun here before enabling the next prompt book.
+
+| Gate | Command / comparison | Result | Artifact paths |
+|---|---|---|---|
+| Unit | `python -m pytest tests/unit --cov --cov-report=term-missing --cov-report=xml:artifacts/unit-coverage.xml` | `544 passed`, `90.14%` total coverage | `artifacts/unit-coverage.xml` |
+| Integration | `python -m pytest tests/integration --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml` | `215 passed`, `85.95%` total coverage | `artifacts/integration-coverage.xml` |
+| Assistant/NIM | `python -m pytest tests/integration/test_assistant_api.py tests/integration/test_nim_full_flow.py -v --junitxml=artifacts/assistant-nim-tests.xml --cov=app.api.v1.assistant --cov=app.services.nim --cov=app.schemas.nim --cov-report=term-missing --cov-report=xml:artifacts/assistant-nim-coverage.xml` | `50 passed`, `79.46%` total coverage | `artifacts/assistant-nim-tests.xml`, `artifacts/assistant-nim-coverage.xml` |
+| Load baseline | `python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-ci.json` plus `python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report-ci.json --latency-tolerance-pct 25 --min-success-rate 95` | `PASS` — `50 / 50` successful, `p95 = 0.5930 s`, baseline comparison pass | `artifacts/load-report-ci.json` |
+| 100c load | `python tests/load/run_load_test.py --mode burst --concurrency 100 --requests 500 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-100.json` plus `python tests/load/compare_reports.py --baseline tests/load/baseline_100c.json --report artifacts/load-report-100.json --latency-tolerance-pct 50 --min-success-rate 95` | `PASS` — `500 / 500` successful, `p95 = 2.1710 s`, baseline comparison pass | `artifacts/load-report-100.json` |
+
+### 10.2B Go / No-Go for the March 26 gate
+
+- `[x]` Schema freeze is active for the contracts listed in `docs/dev/pre_nim_gate_closure.md`
+- `[x]` Readiness regression is fixed
+- `[x]` Provenance topic filters and aliases are live and test-pinned
+- `[x]` Current locked coverage statement is published
+- `[x]` All five entries in section 10.2A are marked passed on the March 26 head
+
+The 48-hour no-schema-change soak starts only after every item above is green.
+Do not start the soak from partial completion, stale artifacts, or a mixed-head rerun.
+
+### 10.2C Final gate-closure handoff
+
+Status for the March 26, 2026 head: **PASSED / FORMALLY CLEARED**.
+
+Current formal status:
+
+- section 10.2A is fully populated with passing unit, integration, assistant/NIM,
+  and load evidence for the March 26 head
+- the March 26 gate is now recorded as complete and publishable
+
+Schema freeze start timestamp:
+
+- `2026-03-26T10:32:57.1600046-04:00`
+
+Next allowed prompt book:
+
+- **Decision Renderer** is the next allowed primary prompt book
+- **NIM Readiness** is already complete and the freeze is in effect
+- **NIM Integration** remains post-readiness follow-on work, not the next primary
+  build step
+
 ### 10.3 Verified gate checklist
 
 - `[x]` Dockerfile refuses to start when `UVICORN_WORKERS` is not set explicitly
@@ -597,7 +642,9 @@ Recorded results for this audit cycle:
 - `[x]` `parse_user_input()` handles input longer than 2000 characters without truncation
 - `[x]` NIM metadata never appears in `EligibilityRequest` after mapping
 - `[x]` `nim_rejection_reason` reaches the orchestration layer through the draft
-- `[x]` Golden cases cover at least 5 corridors
+- `[x]` Golden cases cover 6 directed corridors
+- `[x]` The locked corpus covers 9 distinct HS6 products
+- `[x]` The locked corpus contains 15 golden cases
 - `[x]` The corpus includes at least three added HS6 chapters (62, 09, 72)
 - `[x]` Provision `source_id` mismatches are logged and excluded from the audit trail
 - `[x]` No provision with the wrong `source_id` appears in decision traces
@@ -632,13 +679,15 @@ and error-rate alerting.
 
 ### 9.4 Assessment responses are verified against golden cases
 
-Run the locked golden cases through the live API and confirm all nine pass:
+Run the locked golden corpus through the live API and confirm all 15 cases pass.
+The current acceptance slice in `tests/fixtures/golden_cases.py` covers 9 distinct
+HS6 products across 6 directed corridors and 9 HS chapters.
 
 ```bash
 python -m pytest tests/integration/test_golden_path.py -v
 ```
 
-All nine must return the expected `eligible` value and `pathway_used`.
+All 15 must return the expected `eligible` value and `pathway_used`.
 
 ### 9.5 Database backup confirmed
 

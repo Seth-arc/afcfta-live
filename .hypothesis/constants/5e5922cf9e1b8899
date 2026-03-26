@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\db\base.py
+# hypothesis_version: 6.151.9
+
+[0.75, 0.95, 'SELECT 1', 'checked_in', 'checked_out', 'command_timeout', 'elevated', 'lock_timeout', 'ok', 'overflow', 'pool_pressure', 'pool_size', 'saturated', 'server_settings', 'statement_timeout', 'timeout']

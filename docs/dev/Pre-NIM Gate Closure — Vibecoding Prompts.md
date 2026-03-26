@@ -131,7 +131,7 @@ python tests/load/compare_reports.py --baseline tests/load/baseline_100c.json --
 ```
 
 Note: on the validated Windows/Git Bash local setup, force `--url http://127.0.0.1:8000` and use the active local dev auth key (`dev-local-key`). The default `localhost` target and older long-lived token produced false load failures in the March 26 gate rerun.
-
+## Completed 26 March
 ---
 
 ## Prompt 3 - Add provenance `topic` filters and aliases at the API boundary
@@ -174,7 +174,7 @@ When done, summarize:
 python -m pytest tests/integration/test_sources_api.py -v
 python -m pytest tests/integration/test_audit_api.py -v
 ```
-
+## Completed 26 March
 ---
 
 ## Prompt 4 - Reconcile and publish the current HS6 coverage analysis
@@ -213,7 +213,7 @@ When done, summarize:
 ```bash
 git diff README.md docs/dev/production_runbook.md docs/dev/pre_nim_gate_closure.md
 ```
-
+## Completed 26 March
 ---
 
 ## Prompt 5 - Rerun and publish the full March 26 gate

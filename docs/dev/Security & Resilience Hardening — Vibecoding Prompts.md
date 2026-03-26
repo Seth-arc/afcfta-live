@@ -45,7 +45,7 @@ production deployment is considered stable.
 - Do not expand corridor or HS6 scope beyond V01.
 - Do not start Decision Renderer work in this book.
 - Do not re-open architecture decisions already settled by the Production Gate or
-  Post-Audit Hardening books.
+  Post-Audit Hardening books. I keep deleting but it won't lksiten...
 
 ## Working Rules
 

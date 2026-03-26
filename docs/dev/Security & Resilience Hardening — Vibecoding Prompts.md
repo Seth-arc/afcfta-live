@@ -434,7 +434,7 @@ python -m alembic upgrade head
 python -m pytest tests/unit/test_evidence_service.py -v
 python -m pytest tests/integration/test_audit_api.py -v -k "evidence"
 ```
-##
+## Completed 26 March 2026
 ---
 
 ## Prompt 6 — Enable Redis rate limiting and promote to multi-worker
@@ -499,7 +499,7 @@ docker compose -f docker-compose.prod.yml logs api | grep -i "redis\|rate.limit\
 # Health check
 curl -sf http://localhost:8000/api/v1/health/ready | python -m json.tool
 ```
-
+## Completed 26 March 2026
 ---
 
 ## Prompt 7 — Property-based tests for the expression evaluator

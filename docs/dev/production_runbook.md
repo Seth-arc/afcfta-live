@@ -113,6 +113,8 @@ is ready.
 
 ## Scaling to multiple workers
 
+Current state (as of 2026-03-26): Redis enabled, UVICORN_WORKERS=2, rate limiting active.
+
 The API must stay on a single Uvicorn worker until Redis-backed rate limiting is
 active. `_lifespan()` in [app/main.py](../../app/main.py) raises `RuntimeError`
 when `UVICORN_WORKERS > 1` and `REDIS_URL` is empty, because `InMemoryRateLimiter`

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Literal
 
@@ -29,7 +30,7 @@ class EligibilityRequest(BaseModel):
     hs_version: str = "HS2017"
     exporter: str = Field(min_length=3, max_length=3)
     importer: str = Field(min_length=3, max_length=3)
-    year: int = Field(ge=2020, le=2040)
+    year: int
     persona_mode: PersonaModeEnum
     production_facts: list[CaseFactIn]
     existing_documents: list[str] = Field(
@@ -83,6 +84,27 @@ class EligibilityRequest(BaseModel):
     @classmethod
     def normalize_hs6_code(cls, value: str) -> str:
         return _normalize_hs6_code(value)
+
+    @field_validator("year", mode="before")
+    @classmethod
+    def validate_supported_year(cls, value: object) -> object:
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, int):
+            year = value
+        elif isinstance(value, str):
+            try:
+                year = int(value)
+            except ValueError:
+                return value
+        else:
+            return value
+
+        upper_bound = date.today().year + 1
+        if year < 2020 or year > upper_bound:
+            raise ValueError(f"year must be between 2020 and {upper_bound}; got {value}")
+        return value
 
     @field_validator("exporter", "importer")
     @classmethod

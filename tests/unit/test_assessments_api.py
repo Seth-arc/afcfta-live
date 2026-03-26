@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import date
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,7 +13,31 @@ from httpx import AsyncClient
 
 from app.core.exceptions import EvaluationPersistenceError
 from app.core.enums import RuleStatusEnum
-from app.schemas.assessments import EligibilityAssessmentResponse, TariffOutcomeResponse
+from app.schemas.assessments import (
+    EligibilityAssessmentResponse,
+    EligibilityRequest,
+    TariffOutcomeResponse,
+)
+
+
+def _assessment_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "hs6_code": "110311",
+        "exporter": "GHA",
+        "importer": "NGA",
+        "year": 2025,
+        "persona_mode": "exporter",
+        "production_facts": [
+            {
+                "fact_type": "direct_transport",
+                "fact_key": "direct_transport",
+                "fact_value_type": "boolean",
+                "fact_value_boolean": True,
+            }
+        ],
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _assessment_response() -> EligibilityAssessmentResponse:
@@ -70,21 +95,7 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
 
     response = await async_client.post(
         "/api/v1/assessments",
-        json={
-            "hs6_code": "11031100",
-            "exporter": "GHA",
-            "importer": "NGA",
-            "year": 2025,
-            "persona_mode": "exporter",
-            "production_facts": [
-                {
-                    "fact_type": "direct_transport",
-                    "fact_key": "direct_transport",
-                    "fact_value_type": "boolean",
-                    "fact_value_boolean": True,
-                }
-            ],
-        },
+        json=_assessment_payload(hs6_code="11031100"),
     )
 
     assert response.status_code == 200, response.text
@@ -94,6 +105,54 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
     assert response.headers["X-AIS-Evaluation-Id"] == evaluation_id
     assert response.headers["X-AIS-Audit-URL"] == f"/api/v1/audit/evaluations/{evaluation_id}"
     assert response.json()["audit_persisted"] is True
+
+
+def test_eligibility_request_accepts_year_2025() -> None:
+    payload = EligibilityRequest.model_validate(_assessment_payload(year=2025))
+
+    assert payload.year == 2025
+
+
+@pytest.mark.asyncio
+async def test_assessments_route_rejects_year_2019_with_422(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(year=2019),
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    assert any(
+        error["loc"][-1] == "year"
+        and error["msg"] == f"Value error, year must be between 2020 and {date.today().year + 1}; got 2019"
+        for error in body["detail"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_assessments_route_rejects_year_beyond_next_calendar_year_with_422(
+    async_client: AsyncClient,
+) -> None:
+    future_year = date.today().year + 2
+
+    response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(year=future_year),
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    assert any(
+        error["loc"][-1] == "year"
+        and error["msg"] == (
+            f"Value error, year must be between 2020 and {date.today().year + 1}; got {future_year}"
+        )
+        for error in body["detail"]
+    )
 
 
 @pytest.mark.asyncio
@@ -172,21 +231,7 @@ async def test_assessments_route_returns_structured_persistence_error_when_conte
 
     response = await async_client.post(
         "/api/v1/assessments",
-        json={
-            "hs6_code": "110311",
-            "exporter": "GHA",
-            "importer": "NGA",
-            "year": 2025,
-            "persona_mode": "exporter",
-            "production_facts": [
-                {
-                    "fact_type": "direct_transport",
-                    "fact_key": "direct_transport",
-                    "fact_value_type": "boolean",
-                    "fact_value_boolean": True,
-                }
-            ],
-        },
+        json=_assessment_payload(),
     )
 
     assert lifecycle == ["context_enter", "service_called", "context_exit"]

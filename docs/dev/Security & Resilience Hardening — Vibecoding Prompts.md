@@ -637,23 +637,22 @@ export DB_POOL_MAX_OVERFLOW=80
 # 10c baseline
 python tests/load/run_load_test.py \
   --mode burst --concurrency 10 --requests 50 \
-  --api-key sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii \
+  --api-key "" \
   --report tests/load/baseline.json
 
-python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --api-key sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii --report tests/load/baseline.json
+python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --api-key "" --report tests/load/baseline.json
 export AIS_BASE_URL=http://localhost:8000
 read -s -p "AIS API key: " AIS_API_KEY; export AIS_API_KEY; echo
 mkdir -p artifacts
 
-ALTER ROLE afcfta WITH PASSWORD 'eNIrdkxuHA17H4gxWgqHMdOy';
 
-read -s -p "sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii: " AIS_API_KEY; export AIS_API_KEY; echo
+read -s -p "api key: " AIS_API_KEY; export AIS_API_KEY; echo
 
 
 # 100c baseline
 python tests/load/run_load_test.py \
   --mode burst --concurrency 100 --requests 500 \
-  --api-key sk_live_NK6YIGSIWgjCcmrta8IEx8W5Z5cucAii \
+  --api-key 
   --report tests/load/baseline_100c.json
 
 # Commit both files

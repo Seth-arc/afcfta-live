@@ -31,7 +31,17 @@ AfCFTA is the world's largest free trade area by country count. Using it in prac
 - Source and legal provision lookup APIs
 - Corridor profile and alert listing APIs
 - Repeatable parser promotion runbook for Appendix IV artifacts
-- Deterministic seed slice spanning 8 HS6 products across 4 supported corridors
+- Deterministic seed slice spanning 9 HS6 products across 6 directed supported corridors, pinned by 15 locked golden cases across 9 HS chapters
+
+## Locked Coverage Slice
+
+The canonical March 26, 2026 acceptance slice is derived from
+`tests/fixtures/golden_cases.py` and currently covers:
+
+- 9 distinct HS6 products
+- 6 directed corridors
+- 15 golden cases
+- 9 HS chapters
 
 ## Product Surface
 

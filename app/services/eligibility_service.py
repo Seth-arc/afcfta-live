@@ -469,24 +469,58 @@ class EligibilityService:
                 detail={"reason": "cases_repository_unavailable"},
             )
 
-        case_id = await self.cases_repository.create_case(
-            {
-                "case_external_ref": f"IFACE-ASSESS-{uuid4()}",
-                "persona_mode": request.persona_mode,
-                "exporter_state": request.exporter,
-                "importer_state": request.importer,
-                "hs6_code": request.hs6_code,
-                "hs_version": request.hs_version,
-                "submission_status": "submitted",
-                "title": "Interface-triggered eligibility assessment",
-                "created_by": "api:assessments",
-                "updated_by": "api:assessments",
-            }
-        )
-        await self.cases_repository.add_facts(
-            case_id,
-            [fact.model_dump(by_alias=True) for fact in request.production_facts],
-        )
+        try:
+            case_id = await self.cases_repository.create_case(
+                {
+                    "case_external_ref": f"IFACE-ASSESS-{uuid4()}",
+                    "persona_mode": request.persona_mode,
+                    "exporter_state": request.exporter,
+                    "importer_state": request.importer,
+                    "hs6_code": request.hs6_code,
+                    "hs_version": request.hs_version,
+                    "submission_status": "submitted",
+                    "title": "Interface-triggered eligibility assessment",
+                    "created_by": "api:assessments",
+                    "updated_by": "api:assessments",
+                }
+            )
+        except Exception as exc:
+            self._log_interface_persistence_failure(
+                boundary="case_create",
+                reason="case_create_failed",
+                hs6_code=request.hs6_code,
+                case_id=None,
+                exc=exc,
+            )
+            raise EvaluationPersistenceError(
+                "Interface assessment could not create a replayable case",
+                detail={
+                    "reason": "case_create_failed",
+                    "hs6_code": request.hs6_code,
+                },
+            ) from exc
+
+        try:
+            await self.cases_repository.add_facts(
+                case_id,
+                [fact.model_dump(by_alias=True) for fact in request.production_facts],
+            )
+        except Exception as exc:
+            self._log_interface_persistence_failure(
+                boundary="case_facts_persist",
+                reason="case_facts_persist_failed",
+                hs6_code=request.hs6_code,
+                case_id=case_id,
+                exc=exc,
+            )
+            raise EvaluationPersistenceError(
+                "Interface assessment could not persist replayable case facts",
+                detail={
+                    "case_id": case_id,
+                    "reason": "case_facts_persist_failed",
+                    "hs6_code": request.hs6_code,
+                },
+            ) from exc
         return request.model_copy(update={"case_id": case_id})
 
     async def _get_latest_evaluation_id_for_case(self, case_id: str | None) -> str:
@@ -504,13 +538,52 @@ class EligibilityService:
                 detail={"case_id": case_id, "reason": "evaluations_repository_unavailable"},
             )
 
-        evaluation_row = await self.evaluations_repository.get_latest_evaluation_for_case(case_id)
+        try:
+            evaluation_row = await self.evaluations_repository.get_latest_evaluation_for_case(case_id)
+        except Exception as exc:
+            self._log_interface_persistence_failure(
+                boundary="evaluation_lookup",
+                reason="evaluation_lookup_failed",
+                hs6_code=None,
+                case_id=case_id,
+                exc=exc,
+            )
+            raise EvaluationPersistenceError(
+                "Interface assessment could not confirm replay persistence",
+                detail={"case_id": case_id, "reason": "evaluation_lookup_failed"},
+            ) from exc
+
         if evaluation_row is None:
             raise EvaluationPersistenceError(
                 "Interface assessment did not produce a replayable evaluation trail",
                 detail={"case_id": case_id, "reason": "evaluation_not_persisted"},
             )
         return str(evaluation_row["evaluation_id"])
+
+    def _log_interface_persistence_failure(
+        self,
+        *,
+        boundary: str,
+        reason: str,
+        hs6_code: str | None,
+        case_id: str | None,
+        exc: Exception,
+    ) -> None:
+        """Emit one structured error log for interface persistence failures."""
+
+        _logger.error(
+            "assessment_interface_persistence_failed",
+            exc_info=True,
+            extra={
+                "structured_data": {
+                    "event": "assessment_interface_persistence_failed",
+                    "boundary": boundary,
+                    "reason": reason,
+                    "hs6_code": hs6_code,
+                    "case_id": case_id,
+                }
+            },
+        )
 
     def _run_blocker_checks(
         self,

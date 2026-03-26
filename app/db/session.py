@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import EvaluationPersistenceError
 from app.db.base import get_async_session_factory, get_engine
 
 ASSESSMENT_ISOLATION_LEVEL = "REPEATABLE READ"
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -32,8 +35,31 @@ async def assessment_session_context() -> AsyncIterator[AsyncSession]:
         )
         factory = get_async_session_factory(bind=connection)
         async with factory() as session:
-            async with session.begin():
-                yield session
+            session_body_completed = False
+            try:
+                async with session.begin():
+                    yield session
+                    session_body_completed = True
+            except EvaluationPersistenceError:
+                raise
+            except Exception as exc:
+                if not session_body_completed:
+                    raise
+                logger.error(
+                    "assessment_transaction_close_failed",
+                    exc_info=True,
+                    extra={
+                        "structured_data": {
+                            "event": "assessment_transaction_close_failed",
+                            "boundary": "assessment_transaction_close",
+                            "reason": "assessment_transaction_close_failed",
+                        }
+                    },
+                )
+                raise EvaluationPersistenceError(
+                    "Assessment transaction failed while closing the replayable snapshot",
+                    detail={"reason": "assessment_transaction_close_failed"},
+                ) from exc
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

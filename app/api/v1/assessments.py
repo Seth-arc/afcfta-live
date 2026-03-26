@@ -5,13 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Response
 
 from app.api.deps import require_assessment_rate_limit
-from app.api.deps import get_assessment_eligibility_service
+from app.api.deps import assessment_eligibility_service_context
 from app.schemas.assessments import (
     CaseAssessmentRequest,
     EligibilityAssessmentResponse,
     EligibilityRequest,
 )
-from app.services.eligibility_service import EligibilityService
 
 router = APIRouter(dependencies=[Depends(require_assessment_rate_limit)])
 
@@ -28,11 +27,11 @@ def _set_replay_headers(response: Response, *, case_id: str, evaluation_id: str)
 async def assess_case(
     payload: EligibilityRequest,
     response: Response,
-    eligibility_service: EligibilityService = Depends(get_assessment_eligibility_service),
 ) -> EligibilityAssessmentResponse:
-    """Run the full eligibility orchestrator for the provided payload."""
+    """Run one assessment and return only after the replayable transaction has closed."""
 
-    assessment = await eligibility_service.assess_interface_request(payload)
+    async with assessment_eligibility_service_context() as eligibility_service:
+        assessment = await eligibility_service.assess_interface_request(payload)
     _set_replay_headers(
         response,
         case_id=assessment.case_id,
@@ -46,11 +45,11 @@ async def assess_stored_case(
     case_id: str,
     payload: CaseAssessmentRequest,
     response: Response,
-    eligibility_service: EligibilityService = Depends(get_assessment_eligibility_service),
 ) -> EligibilityAssessmentResponse:
-    """Compatibility alias for POST /api/v1/cases/{case_id}/assess."""
+    """Compatibility alias that closes the assessment transaction before responding."""
 
-    assessment = await eligibility_service.assess_interface_case(case_id, payload)
+    async with assessment_eligibility_service_context() as eligibility_service:
+        assessment = await eligibility_service.assess_interface_case(case_id, payload)
     _set_replay_headers(
         response,
         case_id=assessment.case_id,

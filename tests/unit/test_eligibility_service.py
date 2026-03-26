@@ -1084,6 +1084,59 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
 
 
 @pytest.mark.asyncio
+async def test_assess_interface_request_raises_when_case_creation_fails() -> None:
+    """Interface runs should surface case auto-create failures as replay-persistence errors."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    deps["cases_repository"].create_case.side_effect = RuntimeError("insert failed")
+
+    with pytest.raises(EvaluationPersistenceError) as exc_info:
+        await service.assess_interface_request(request)
+
+    assert exc_info.value.detail == {
+        "reason": "case_create_failed",
+        "hs6_code": "110311",
+    }
+    deps["cases_repository"].add_facts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_assess_interface_request_raises_when_case_fact_persistence_fails() -> None:
+    """Interface runs should surface fact-write failures as replay-persistence errors."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    auto_case_id = str(_uuid(403))
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["cases_repository"].add_facts.side_effect = RuntimeError("fact insert failed")
+
+    with pytest.raises(EvaluationPersistenceError) as exc_info:
+        await service.assess_interface_request(request)
+
+    assert exc_info.value.detail == {
+        "case_id": auto_case_id,
+        "reason": "case_facts_persist_failed",
+        "hs6_code": "110311",
+    }
+    deps["evaluations_repository"].get_latest_evaluation_for_case.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_assess_interface_request_raises_when_replay_evaluation_is_missing() -> None:
     """Interface runs should fail closed if no persisted evaluation can be resolved after assessment."""
 
@@ -1124,6 +1177,52 @@ async def test_assess_interface_request_raises_when_replay_evaluation_is_missing
     assert exc_info.value.detail == {
         "case_id": auto_case_id,
         "reason": "evaluation_not_persisted",
+    }
+
+
+@pytest.mark.asyncio
+async def test_assess_interface_request_raises_when_replay_evaluation_lookup_fails() -> None:
+    """Interface runs should surface replay-id lookup failures as replay-persistence errors."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    auto_case_id = str(_uuid(404))
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["evaluations_repository"].get_latest_evaluation_for_case.side_effect = RuntimeError(
+        "lookup failed"
+    )
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    with pytest.raises(EvaluationPersistenceError) as exc_info:
+        await service.assess_interface_request(request)
+
+    assert exc_info.value.detail == {
+        "case_id": auto_case_id,
+        "reason": "evaluation_lookup_failed",
     }
 
 

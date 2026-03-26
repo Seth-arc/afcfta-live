@@ -529,6 +529,10 @@ audit cycle. `docs/dev/AFCFTA-LIVE_REPO_AUDIT_2026-03-26.md` was not present in 
 repository, so verification was performed against the audit prompt outputs plus the
 final repository state after Prompts 1–7 of the production-gate prompt book.
 
+Use [pre_nim_gate_closure.md](/c:/Users/ssnguna/Local%20Sites/afcfta-live/docs/dev/pre_nim_gate_closure.md)
+as the operator checklist for the frozen schema set, required March 26 rerun
+commands, published artifact names, and the 48-hour no-schema-change rule.
+
 ### 10.1 Gaps closed and prompt ownership
 
 - Prompt 1 — Container startup ambiguity closed.

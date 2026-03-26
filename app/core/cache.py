@@ -41,9 +41,10 @@ Safe strategies:
      the restart window is missed — no cached entry survives longer than the
      configured TTL regardless.
 
-The cache is opt-in.  It is disabled by default (CACHE_STATIC_LOOKUPS=false)
-so that a no-cache baseline can be established from load test results before
-the cache is enabled and its impact validated.
+The cache is enabled by default for static reference data so production
+deployments benefit without extra configuration.  Set
+CACHE_STATIC_LOOKUPS=false when you need a no-cache baseline or a strict
+immediate-consistency promotion window.
 """
 
 from __future__ import annotations

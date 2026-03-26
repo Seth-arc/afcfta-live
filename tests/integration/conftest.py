@@ -37,6 +37,7 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+import app.core.cache as reference_cache
 import app.db.base as _db_base
 import app.db.session as _db_session
 
@@ -88,3 +89,12 @@ async def _drain_async_tasks() -> None:  # type: ignore[return]
     yield
     for _ in range(10):
         await asyncio.sleep(0)
+
+
+@pytest.fixture(autouse=True)
+def _clear_static_reference_cache() -> None:  # type: ignore[return]
+    """Keep integration tests isolated when static lookup caching is enabled."""
+
+    reference_cache.clear_all()
+    yield
+    reference_cache.clear_all()

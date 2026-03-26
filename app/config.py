@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     DB_POOL_MAX_OVERFLOW: int = 10
 
     # In-process cache for static reference lookups
-    CACHE_STATIC_LOOKUPS: bool = False
+    CACHE_STATIC_LOOKUPS: bool = True
     CACHE_TTL_SECONDS: int = 300
 
     # API authentication

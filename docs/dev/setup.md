@@ -171,6 +171,9 @@ API_AUTH_KEY=<replace-with-a-long-random-secret>
 POSTGRES_PASSWORD=<replace-with-a-database-password>
 ```
 
+That `DATABASE_URL` example is for `docker-compose.prod.yml` only. The hostname
+`db` is the Compose service name provided by that stack.
+
 If the database password includes reserved URL characters such as `%`, `@`, `:`, `/`, or `;`, use the raw value in `POSTGRES_PASSWORD` and the URL-encoded form of that same password in `DATABASE_URL` and `DATABASE_URL_SYNC`.
 
 Then start the production stack with the explicit env file:
@@ -195,20 +198,62 @@ Optional production overrides:
 
 - `DATABASE_URL_SYNC`
 - DB timeout controls
+- `CACHE_STATIC_LOOKUPS` for local no-cache baselines or strict promotion windows
+- `CACHE_TTL_SECONDS` if you need a TTL other than the 5-minute default
 - rate-limit controls
 - logging controls
 - `ERROR_TRACKING_BACKEND`, `SENTRY_DSN`, and `SENTRY_TRACES_SAMPLE_RATE`
-- `UVICORN_WORKERS`
+- `UVICORN_WORKERS` for direct `docker run` deployments; `docker-compose.prod.yml` pins `--workers 1`
 
-The production container starts with:
+`docker-compose.prod.yml` is the canonical production entrypoint. It overrides the
+image command and keeps `--workers 1` explicit until Redis-backed rate limiting
+is configured.
+
+The image-level production command is:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:?UVICORN_WORKERS must be set explicitly — do not rely on the default. Set 1 for InMemoryRateLimiter deployments, higher only after REDIS_URL is configured}
 ```
 
 The container fails fast if `DATABASE_URL`, `API_AUTH_KEY`, or `ENV` are missing, and its health check targets `/api/v1/health/ready` so the process is not marked healthy until database connectivity is working.
 
 If the API container exits before serving traffic, that is expected fail-fast behavior for an incomplete production env file.
+
+For non-compose deployments, set `UVICORN_WORKERS` explicitly on `docker run`:
+
+```bash
+docker run --rm -p 8000:8000 --env-file ./.env.prod -e UVICORN_WORKERS=1 afcfta-intelligence:prod
+```
+
+Before running that command, update `./.env.prod` for the standalone case:
+
+- `docker-compose.prod.yml`: `DATABASE_URL=postgresql+asyncpg://afcfta:<replace-password>@db:5432/afcfta`
+- direct `docker run`: `DATABASE_URL=postgresql+asyncpg://afcfta:<replace-password>@<reachable-db-host>:5432/afcfta`
+
+For direct `docker run`, `<reachable-db-host>` must be a database address that
+the standalone API container can actually resolve and reach. A hostname like
+`db` works in `docker-compose.prod.yml` because Compose provides that service DNS
+name; it does not work automatically for a standalone container.
+
+## Parser Promotion Cache Invalidation
+
+Static reference caching is enabled by default in production
+(`CACHE_STATIC_LOOKUPS=true`) with a 5-minute TTL
+(`CACHE_TTL_SECONDS=300`). Follow [parser_promotion_workflow.md](./parser_promotion_workflow.md)
+for the staged-to-operational promotion itself, then invalidate API worker caches
+explicitly using one of these two approaches:
+
+1. Preferred zero-downtime path: complete the parser promotion, validate the DB state,
+   then perform a rolling restart of API workers. This evicts all in-process cached HS,
+   PSR, and tariff lookups immediately.
+2. Strict immediate-consistency path: set `CACHE_STATIC_LOOKUPS=false`, restart API
+   workers before the promotion window, complete the promotion and validation with the
+   cache disabled, then optionally set `CACHE_STATIC_LOOKUPS=true` again and perform
+   another rolling restart after the promotion is confirmed.
+
+If a restart window is missed, the TTL caps stale static-reference reads at 5 minutes,
+but operator guidance should still treat a rolling restart as the standard post-promotion
+step.
 
 ## 9. Verify The API Is Running
 

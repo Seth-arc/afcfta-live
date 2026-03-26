@@ -16,6 +16,9 @@ services:
     # request ceiling by the worker count. Once REDIS_URL points to the
     # redis service below, the rate limiter switches to a shared sliding-window
     # implementation and --workers can safely be raised.
+    # The Dockerfile intentionally has no worker-count default; direct docker run
+    # operators must set UVICORN_WORKERS explicitly, while this compose override
+    # is the canonical production entrypoint and pins the safe default at 1.
     command:
       [
         "uvicorn", "app.main:app",

@@ -17,14 +17,17 @@ from app.core.enums import (
     HsLevelEnum,
     RuleStatusEnum,
 )
+from app.core.entity_keys import make_entity_key
 from app.db.base import get_async_session_factory
 from app.db.models.intelligence import AlertEvent, CorridorProfile
 from app.repositories.intelligence_repository import IntelligenceRepository
 from app.schemas.assessments import EligibilityAssessmentResponse, EligibilityRequest
 from app.schemas.cases import CaseFactIn
+from app.schemas.intelligence import AlertEventOut
 from app.schemas.rules import PSRRuleResolvedOut, RulePathwayOut, RuleResolutionResult
 from app.schemas.status import StatusOverlay
 from app.services.intelligence_service import IntelligenceService
+from tests.integration.test_golden_path import _fact_payload, _seed_not_operational_candidate
 
 
 pytestmark = pytest.mark.integration
@@ -326,3 +329,64 @@ async def test_generated_alerts_are_visible_through_alert_listing_api(
 
     assert any(row["alert_type"] == "rule_status_changed" for row in body)
     assert any("PSR rule status is pending" in row["alert_message"] for row in body)
+
+
+@pytest.mark.asyncio
+async def test_direct_assessment_emits_corridor_alert_visible_via_alert_listing_api(
+    async_client: AsyncClient,
+) -> None:
+    """A seeded `not_yet_operational` corridor overlay should emit a corridor alert.
+
+    The fixture intentionally seeds the corridor status blocker because
+    `IntelligenceService._build_alert_specs()` only creates a corridor-scoped alert row
+    when the resolved corridor overlay status is `not_yet_operational`.
+    """
+
+    candidate = await _seed_not_operational_candidate()
+    corridor_key = make_entity_key(
+        "corridor",
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        hs6_code=candidate["hs6_code"],
+    )
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json={
+            "hs6_code": candidate["hs6_code"],
+            "hs_version": "HS2017",
+            "exporter": candidate["exporter"],
+            "importer": candidate["importer"],
+            "year": 2025,
+            "persona_mode": "exporter",
+            "production_facts": [
+                _fact_payload("wholly_obtained", True),
+                _fact_payload("direct_transport", True),
+            ],
+        },
+    )
+
+    assert assessment_response.status_code == 200, assessment_response.text
+    assessment_body = assessment_response.json()
+    assert assessment_body["failures"] == ["NOT_OPERATIONAL"]
+
+    alerts_response = await async_client.get(
+        "/api/v1/intelligence/alerts",
+        params={
+            "status": "open",
+            "entity_type": "corridor",
+            "entity_key": corridor_key,
+            "limit": 25,
+        },
+    )
+
+    assert alerts_response.status_code == 200, alerts_response.text
+    body = alerts_response.json()
+    assert body, "Expected at least one emitted corridor alert for the assessed entity_key."
+    assert {"entity_type", "entity_key", "severity", "alert_status"}.issubset(body[0])
+
+    alert = AlertEventOut.model_validate(body[0])
+    assert alert.entity_type == "corridor"
+    assert alert.entity_key == corridor_key
+    assert alert.severity == AlertSeverityEnum.CRITICAL
+    assert alert.alert_status == AlertStatusEnum.OPEN

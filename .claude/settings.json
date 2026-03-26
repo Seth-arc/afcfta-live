@@ -50,7 +50,11 @@
       "Bash(python -m pytest tests/integration/ --collect-only -q)",
       "Bash(python -m pytest tests/integration/test_nim_full_flow.py tests/integration/test_assistant_api.py -q --tb=no)",
       "Bash(python -m pytest tests/integration/test_assistant_api.py -q --tb=line)",
-      "Bash(ls \"c:\\\\Users\\\\ssnguna\\\\Local Sites\\\\afcfta-live\\\\docs\\\\dev\"\" 2>/dev/null || echo \"NOT FOUND \")"
+      "Bash(ls \"c:\\\\Users\\\\ssnguna\\\\Local Sites\\\\afcfta-live\\\\docs\\\\dev\"\" 2>/dev/null || echo \"NOT FOUND \")",
+      "Bash(find /c/Users/ssnguna/Local Sites/afcfta-live/app -type f -name *.py)",
+      "Bash(find /c/Users/ssnguna/Local Sites/afcfta-live/tests -type f -name *.py)",
+      "Bash(find /c/Users/ssnguna/Local Sites/afcfta-live/scripts -type f -name *.py)",
+      "Bash(xargs cat:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\ssnguna\\.claude\\projects\\c--Users-ssnguna-Local-Sites-afcfta-live"

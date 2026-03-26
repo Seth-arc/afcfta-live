@@ -10,3 +10,7 @@ tests/*-test-report/
 .env.*.local
 AGENTS.md
 docs/dev/prompts/
+.vscode/
+.claude/
+.claude/
+.vscode/

@@ -366,6 +366,7 @@ async def test_eligible_product_pathway_and_general_rules_pass() -> None:
         f"PATHWAY:{_uuid(12)}",
         "exporter",
         [],
+        "complete",
     )
 
 
@@ -996,6 +997,7 @@ async def test_assess_case_loads_stored_facts_and_reuses_direct_path() -> None:
         f"PATHWAY:{_uuid(12)}",
         "exporter",
         ["certificate_of_origin"],
+        "complete",
     )
 
 
@@ -1291,7 +1293,7 @@ async def test_assessment_falls_back_to_rule_type_evidence_when_specific_targets
     assert result.readiness_score == 0.0
     assert result.completeness_ratio == 0.0
     assert deps["evidence_service"].build_readiness.await_args_list == [
-        call("pathway", f"PATHWAY:{_uuid(12)}", "exporter", []),
-        call("hs6_rule", f"HS6_RULE:{_uuid(10)}", "exporter", []),
-        call("rule_type", "CTH", "exporter", []),
+        call("pathway", f"PATHWAY:{_uuid(12)}", "exporter", [], "complete"),
+        call("hs6_rule", f"HS6_RULE:{_uuid(10)}", "exporter", [], "complete"),
+        call("rule_type", "CTH", "exporter", [], "complete"),
     ]

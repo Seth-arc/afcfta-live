@@ -15,9 +15,10 @@ Orchestration boundary:
 - Rate limiting matches the /assessments route (assessment_rate_limit).
 
 Early-exit conditions (no DB connection, no engine call):
-1. Required draft facts missing (hs6_code, exporter, importer, year, persona_mode).
-2. NIM confidence below _MIN_NIM_CONFIDENCE (0.7) when present.
-3. to_eligibility_request() raises ValueError or ValidationError (malformed draft).
+1. Intake rejects oversized input and requests a shorter retry.
+2. Required draft facts missing (hs6_code, exporter, importer, year, persona_mode).
+3. NIM confidence below _MIN_NIM_CONFIDENCE (0.7) when present.
+4. to_eligibility_request() raises ValueError or ValidationError (malformed draft).
 """
 
 from __future__ import annotations
@@ -78,8 +79,9 @@ async def assistant_assess(
     Orchestration flow:
     1. Parse natural-language input — IntakeService calls NIM and validates JSON.
        Falls back to an empty draft when NIM is disabled or fails.
-    2. Completeness gate — if required facts are absent or NIM confidence is
-       below threshold, return a ClarificationResponse. No DB connection made.
+    2. Clarification gate — if intake rejects the raw text, required facts are
+       absent, or NIM confidence is below threshold, return a
+       ClarificationResponse. No DB connection made.
     3. Map draft to EligibilityRequest, stripping all NIM-only metadata. Return
        an error envelope if the mapping itself is rejected. No DB connection made.
     4. Open a REPEATABLE READ DB session and call assess_interface_request() for
@@ -120,6 +122,27 @@ async def assistant_assess(
         draft.nim_confidence is not None
         and draft.nim_confidence.overall < _MIN_NIM_CONFIDENCE
     )
+
+    if draft.nim_rejection_reason is not None:
+        t_clr = time.monotonic()
+        clarification = await clarification_service.generate_clarification(
+            ClarificationContext(nim_rejection_reason=draft.nim_rejection_reason)
+        )
+        clr_latency_ms = int((time.monotonic() - t_clr) * 1000)
+
+        log_nim_clarification_sent(
+            latency_ms=clr_latency_ms,
+            missing_required_facts=[],
+            low_confidence_trigger=False,
+            gap_key_asked="nim_input_retry_shorter",
+            nim_enabled=clarification_service.nim_client.enabled,
+        )
+
+        return AssistantResponseEnvelope(
+            response_type="clarification",
+            audit_persisted=False,
+            clarification=clarification,
+        )
 
     if missing_facts or low_confidence:
         # When only confidence is insufficient (all required facts present),

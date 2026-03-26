@@ -2,7 +2,7 @@
 
 Covers:
 - Authentication and rate-limit guard.
-- Input validation (schema rejection before any NIM call).
+- Input validation for empty/missing fields plus oversized-input clarification.
 - Envelope shape contract for all three response_type values.
 - Clarification path: NIM disabled → empty draft → real clarification flow.
 - Happy path: mocked intake draft → full engine run → assessment + replay ids.
@@ -31,6 +31,7 @@ from tests.contract_constants import (
     ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS,
     VALID_ASSISTANT_RESPONSE_TYPES,
 )
+from app.services.nim.intake_service import NIM_MAX_INPUT_CHARS
 
 pytestmark = pytest.mark.integration
 
@@ -101,6 +102,25 @@ async def test_assistant_rejects_missing_user_input(
     response = await async_client.post(ASSISTANT_URL, json={})
 
     assert response.status_code == 422, response.text
+
+
+@pytest.mark.asyncio
+async def test_assistant_returns_clarification_for_oversized_user_input(
+    async_client: AsyncClient,
+) -> None:
+    """Oversized input must return a clarification response, not a schema-level 422."""
+
+    response = await async_client.post(
+        ASSISTANT_URL,
+        json={"user_input": "x" * (NIM_MAX_INPUT_CHARS + 1)},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["response_type"] == "clarification"
+    assert body["clarification"] is not None
+    assert "longer than 2000 characters" in body["clarification"]["question"]
+    assert body["audit_persisted"] is False
 
 
 @pytest.mark.asyncio

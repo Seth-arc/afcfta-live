@@ -5,6 +5,18 @@ from __future__ import annotations
 from app.repositories.evidence_repository import EvidenceRepository
 from app.schemas.evidence import EvidenceReadinessResult
 
+# TODO: verification_question.risk_category currently stores domain-specific
+# categories (for example origin_claim and documentary_gap), not confidence
+# severity buckets such as MEDIUM/HIGH. Once the data model records how each
+# confidence_class should map to those categories, replace these safe-default
+# None entries with the real DB-backed filter values.
+_CONFIDENCE_TO_RISK: dict[str, str | None] = {
+    "complete": None,
+    "incomplete": None,
+    "insufficient": None,
+    "provisional": None,
+}
+
 
 class EvidenceService:
     """Service for evidence requirement comparison and readiness scoring."""
@@ -18,6 +30,7 @@ class EvidenceService:
         entity_key: str,
         persona_mode: str,
         existing_documents: list[str],
+        confidence_class: str | None = None,
     ) -> EvidenceReadinessResult:
         """Return required, missing, and verification items for a persona/entity pair.
 
@@ -27,6 +40,9 @@ class EvidenceService:
         """
 
         resolved_persona = self._normalize_persona_mode(persona_mode)
+        risk_category = (
+            None if confidence_class is None else _CONFIDENCE_TO_RISK.get(confidence_class)
+        )
         requirements = await self.evidence_repository.get_requirements(
             entity_type=entity_type,
             entity_key=entity_key,
@@ -35,7 +51,7 @@ class EvidenceService:
         questions = await self.evidence_repository.get_verification_questions(
             entity_type=entity_type,
             entity_key=entity_key,
-            risk_category=None,
+            risk_category=risk_category,
         )
 
         required_map: dict[str, str] = {}
@@ -85,6 +101,7 @@ class EvidenceService:
         entity_key: str,
         persona_mode: str,
         existing_documents: list[str],
+        confidence_class: str | None = None,
     ) -> EvidenceReadinessResult:
         """Compatibility wrapper for API handlers that call the service via get_readiness()."""
 
@@ -93,6 +110,7 @@ class EvidenceService:
             entity_key=entity_key,
             persona_mode=persona_mode,
             existing_documents=existing_documents,
+            confidence_class=confidence_class,
         )
 
     @staticmethod

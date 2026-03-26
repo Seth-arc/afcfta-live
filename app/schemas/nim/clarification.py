@@ -5,17 +5,19 @@ It selects the highest-priority gap, then asks NIM to phrase a focused question.
 NIM is used only for phrasing — the gap selection logic lives in the service,
 not in the model.
 
-Priority order (highest to lowest):
-1. Required engine facts absent from the draft (hs6_code, exporter, importer,
+Clarification handling order:
+1. NIM intake rejection reasons that require a deterministic retry prompt
+   before any gap-based question (for example oversized input).
+2. Required engine facts absent from the draft (hs6_code, exporter, importer,
    year, persona_mode) — must be resolved before the engine can run at all.
-2. Missing production facts reported in the engine's `missing_facts` field
+3. Missing production facts reported in the engine's `missing_facts` field
    after a partial run — these unblock pathway evaluation.
-3. Missing evidence items reported in the engine's `missing_evidence` field.
+4. Missing evidence items reported in the engine's `missing_evidence` field.
 
 The clarification service must never infer eligibility or promise outcomes.
 It must produce exactly one focused question at a time.
-A ClarificationContext with no gaps at all is invalid and is rejected at
-construction time.
+A ClarificationContext with no gaps and no rejection reason is invalid and is
+rejected at construction time.
 """
 
 from __future__ import annotations
@@ -39,15 +41,22 @@ class ClarificationContext(BaseModel):
     `failure_codes` are engine failure codes from `failures` that may help
     the clarification service pick the most actionable question.
 
-    At least one of missing_draft_facts, missing_engine_facts, or
-    missing_evidence must be non-empty. A context with no gaps has nothing
-    to clarify and is rejected at validation time.
+    `nim_rejection_reason` is set when the intake layer intentionally declines
+    to send the user's text to NIM (for example because it exceeds the
+    AGENTS.md input-length boundary) and the assistant should ask the user to
+    resend a shorter description.
+
+    At least one of missing_draft_facts, missing_engine_facts,
+    missing_evidence, or nim_rejection_reason must be present. A context with
+    no gaps or rejection reason has nothing to clarify and is rejected at
+    validation time.
     """
 
     missing_draft_facts: list[str] = Field(default_factory=list)
     missing_engine_facts: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
     failure_codes: list[str] = Field(default_factory=list)
+    nim_rejection_reason: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -55,9 +64,9 @@ class ClarificationContext(BaseModel):
     def require_at_least_one_gap(self) -> ClarificationContext:
         if not self.has_any_gap():
             raise ValueError(
-                "ClarificationContext must have at least one gap "
-                "(missing_draft_facts, missing_engine_facts, or missing_evidence). "
-                "A context with no gaps has nothing to clarify."
+                "ClarificationContext must have at least one gap or rejection reason "
+                "(missing_draft_facts, missing_engine_facts, missing_evidence, or "
+                "nim_rejection_reason). A context with none of these has nothing to clarify."
             )
         return self
 
@@ -78,9 +87,10 @@ class ClarificationContext(BaseModel):
         return None
 
     def has_any_gap(self) -> bool:
-        """Return True when there is at least one missing fact or evidence item."""
+        """Return True when there is something actionable to clarify."""
         return bool(
             self.missing_draft_facts
             or self.missing_engine_facts
             or self.missing_evidence
+            or self.nim_rejection_reason
         )

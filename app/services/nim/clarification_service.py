@@ -11,6 +11,8 @@ Responsibility boundary:
 - Does NOT call the deterministic engine.
 
 Priority order for gap selection (deterministic, not model-driven):
+0. Intake rejection reasons that require a deterministic retry prompt
+   before any gap-based clarification (for example oversized input).
 1. Required draft facts absent from NimAssessmentDraft (hs6_code, exporter,
    importer, year, persona_mode) — must be resolved before the engine can run.
 2. Missing production facts reported in the engine's `missing_facts` field
@@ -31,6 +33,7 @@ from app.core.fact_keys import PRODUCTION_FACTS
 from app.schemas.nim.assistant import ClarificationResponse
 from app.schemas.nim.clarification import ClarificationContext
 from app.services.nim.client import NimClient, NimClientError
+from app.services.nim.intake_service import NIM_REJECTION_REASON_INPUT_TOO_LONG
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,10 @@ _ENGINE_FACT_QUESTION = (
 )
 _EVIDENCE_QUESTION = (
     "Do you have the following document available: {evidence_key}?"
+)
+_INPUT_TOO_LONG_QUESTION = (
+    "Your description is longer than 2000 characters. Please resend a shorter "
+    "summary focused on the product, corridor, year, and the key production facts."
 )
 
 # ---------------------------------------------------------------------------
@@ -192,6 +199,13 @@ class ClarificationService:
 
         Raises nothing — deterministic fallback is always available.
         """
+        if context.nim_rejection_reason == NIM_REJECTION_REASON_INPUT_TOO_LONG:
+            return ClarificationResponse(
+                question=_INPUT_TOO_LONG_QUESTION,
+                missing_facts=[],
+                missing_evidence=[],
+            )
+
         # 1. Deterministic gap selection — not model-driven
         gap_key = context.highest_priority_gap()
         # gap_key cannot be None here because ClarificationContext validates

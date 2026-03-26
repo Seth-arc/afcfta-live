@@ -13,6 +13,7 @@ NIM-ONLY METADATA — produced by the model, used only by the intake and
 clarification services, MUST be dropped before EligibilityRequest is constructed:
   - nim_confidence
   - nim_assumptions
+  - nim_rejection_reason
   - HS6Candidate.product_description_parsed
 
 The mapping layer in IntakeService.to_eligibility_request() is the only place
@@ -203,6 +204,7 @@ class NimAssessmentDraft(BaseModel):
     DROPPED BEFORE ENGINE CALL (never reaches EligibilityRequest):
       draft.nim_confidence
       draft.nim_assumptions
+      draft.nim_rejection_reason
       draft.product.product_description_parsed
     """
 
@@ -216,6 +218,7 @@ class NimAssessmentDraft(BaseModel):
     # --- NIM-only metadata (dropped before engine call) ---
     nim_confidence: NimConfidence | None = None
     nim_assumptions: list[str] = Field(default_factory=list)
+    nim_rejection_reason: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 

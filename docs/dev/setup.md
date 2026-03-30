@@ -281,6 +281,25 @@ docker compose -f ./docker-compose.prod.yml up --build -d
 
 The production compose file reads container runtime variables directly from `./.env.prod`, which avoids accidentally leaking a host-shell `DATABASE_URL` like `localhost` into the API container.
 
+### Automatic Migrations
+
+The `migrate` service in `docker-compose.prod.yml` runs `alembic upgrade head`
+automatically on every `docker compose up`. It starts after the `db` service is
+healthy and must exit successfully before the `api` service starts. This makes
+compose deployments self-contained: a fresh database or a schema-changing release
+will have its migrations applied without any manual step.
+
+Alembic's `upgrade head` is idempotent. When the database schema is already at
+the latest revision, the command is a no-op and exits immediately. It is safe to
+run on every deployment regardless of whether the schema has changed.
+
+To run a migration manually against a running stack (for example, after pulling a
+new image with a new revision while the database is already up):
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm migrate
+```
+
 Required production environment variables for the API container:
 
 - `DATABASE_URL`

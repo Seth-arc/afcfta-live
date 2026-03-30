@@ -1,0 +1,75 @@
+# GlitchTip — lightweight, self-hosted, Sentry-compatible error tracking.
+# This stack is intentionally separate from the API compose files so
+# error-tracking infrastructure can be started, stopped, and upgraded
+# independently.
+#
+# Quick start:
+#   1. cp .env.sentry.example .env.sentry
+#   2. Replace SECRET_KEY with a real random string
+#   3. docker compose -f docker-compose.sentry.yml --env-file .env.sentry up -d
+#   4. Open http://localhost:8100, create an account, create a project,
+#      and copy the DSN into your API .env / .env.prod as SENTRY_DSN.
+#
+# The API's sentry-sdk talks to GlitchTip the same way it talks to
+# hosted Sentry — no code changes required.
+
+services:
+  glitchtip-db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: glitchtip
+      POSTGRES_USER: glitchtip
+      POSTGRES_PASSWORD: ${GLITCHTIP_DB_PASSWORD:-glitchtip_dev}
+    volumes:
+      - glitchtip_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U glitchtip -d glitchtip"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  glitchtip-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  glitchtip:
+    image: glitchtip/glitchtip:latest
+    restart: unless-stopped
+    depends_on:
+      glitchtip-db:
+        condition: service_healthy
+      glitchtip-redis:
+        condition: service_healthy
+    ports:
+      - "8100:8000"
+    environment:
+      DATABASE_URL: postgresql://glitchtip:${GLITCHTIP_DB_PASSWORD:-glitchtip_dev}@glitchtip-db:5432/glitchtip
+      REDIS_URL: redis://glitchtip-redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+      GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN:-http://localhost:8100}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-noreply@localhost}
+      EMAIL_URL: ${EMAIL_URL:-consolemail://}
+      GLITCHTIP_MAX_EVENT_LIFE_DAYS: ${GLITCHTIP_MAX_EVENT_LIFE_DAYS:-90}
+      # All-in-one mode: web server + celery worker + beat in a single process.
+      # Suitable for small deployments. Split into separate services if load grows.
+      SERVER_ROLE: all_in_one
+    networks:
+      - default
+      - afcfta
+
+networks:
+  afcfta:
+    name: afcfta-live_default
+    external: true
+
+volumes:
+  glitchtip_pgdata:

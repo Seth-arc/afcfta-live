@@ -43,6 +43,11 @@ dev = [
     "ruff",
     "py-spy",
 ]
+# Install with: pip install -e ".[sentry]"
+# Kept out of base dependencies so deployments without Sentry do not pull the SDK.
+sentry = [
+    "sentry-sdk>=1.40.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

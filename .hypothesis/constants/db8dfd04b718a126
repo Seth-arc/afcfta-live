@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\repositories\cases_repository.py
+# hypothesis_version: 6.151.9
+
+['1.000', 'case', 'case_id', 'confidence_score', 'fact_key', 'fact_order', 'fact_type', 'fact_value_boolean', 'fact_value_date', 'fact_value_json', 'fact_value_number', 'fact_value_text', 'fact_value_type', 'facts', 'hs6_code', 'hs_code', 'source_ref', 'source_reference', 'source_type', 'unit', 'user_input']

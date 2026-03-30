@@ -18,7 +18,7 @@ COPY scripts ./scripts
 
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip setuptools wheel \
-    && /opt/venv/bin/pip install .
+    && /opt/venv/bin/pip install ".[sentry]"
 
 
 FROM python:3.11-slim AS runtime

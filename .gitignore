@@ -6,6 +6,7 @@ artifacts/
 tests/*-test-report/
 .env
 .env.prod
+.env.sentry
 .env.local
 .env.*.local
 AGENTS.md

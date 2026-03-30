@@ -123,6 +123,80 @@ scrape_configs:
           - api.internal.afcfta.example:8000
 ```
 
+## Enabling Sentry Error Tracking
+
+The API includes an optional Sentry integration for external error tracking. It is disabled by default and requires an explicit opt-in. The `sentry-sdk` is Sentry-protocol compatible, so it works with both hosted Sentry and self-hosted alternatives like GlitchTip.
+
+### Option A — Self-hosted GlitchTip (recommended)
+
+GlitchTip is a lightweight, open-source, Sentry-compatible error tracker. It runs alongside the API in a separate compose stack.
+
+1. Create the GlitchTip env file:
+
+```bash
+cp .env.sentry.example .env.sentry
+```
+
+2. Generate a secret key and set it in `.env.sentry`:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(50))"
+```
+
+3. Start the GlitchTip stack:
+
+```bash
+docker compose -f docker-compose.sentry.yml --env-file .env.sentry up -d
+```
+
+4. Open `http://localhost:8100`, create an account, create a project (select "Python" as the platform), and copy the DSN.
+
+5. Install the Sentry SDK extra in the API environment:
+
+```bash
+python -m pip install -e ".[sentry]"
+```
+
+6. Set the following in your `.env` (or `.env.prod`):
+
+```env
+ERROR_TRACKING_BACKEND=sentry
+SENTRY_DSN=<dsn-from-glitchtip>
+SENTRY_TRACES_SAMPLE_RATE=0.05
+```
+
+7. Restart the API. On successful initialisation the startup log will print:
+
+```
+External error tracking initialized with backend sentry
+```
+
+### Option B — Hosted Sentry (sentry.io)
+
+1. Install the Sentry SDK extra:
+
+```bash
+python -m pip install -e ".[sentry]"
+```
+
+2. Set the following environment variables in your `.env` (or `.env.prod`):
+
+```env
+ERROR_TRACKING_BACKEND=sentry
+SENTRY_DSN=<your-project-dsn>
+SENTRY_TRACES_SAMPLE_RATE=0.05
+```
+
+`SENTRY_DSN` must be obtained from the Sentry project settings page.
+
+3. Restart the API and confirm the startup log line above appears.
+
+### Common notes
+
+- **Never commit a real DSN to git.**
+- Set `SENTRY_TRACES_SAMPLE_RATE=0.0` if performance tracing is not needed.
+- If the confirmation log line does not appear, check that `sentry-sdk` is installed and `SENTRY_DSN` is non-empty.
+
 ## 4. Install Dependencies
 
 Use an editable install with dev dependencies:

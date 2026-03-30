@@ -287,12 +287,12 @@ When done, summarize:
 
 **You run:**
 ```bash
-python scripts/seed_data.py - ## giving problems, will continue.
+python scripts/seed_data.py - ## passed
 python -m pytest tests/unit/test_evidence_service.py -v ## passed
 python -m pytest tests/integration/test_golden_path.py -v ## passed
 python -m pytest tests/integration -q ## passed
 ```
-
+## Completed 29 March
 ---
 
 ## Prompt 4 — Provision Sentry error tracking

@@ -1,0 +1,4 @@
+# file: C:\Users\ssnguna\Local Sites\afcfta-live\app\repositories\evaluations_repository.py
+# hypothesis_version: 6.151.9
+
+['case_id', 'check_code', 'check_type', 'checks', 'details_json', 'evaluation', 'evaluation_id', 'expected_value', 'explanation', 'linked_component_id', 'observed_value', 'passed', 'severity']

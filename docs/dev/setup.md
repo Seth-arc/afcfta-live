@@ -293,6 +293,8 @@ Alembic's `upgrade head` is idempotent. When the database schema is already at
 the latest revision, the command is a no-op and exits immediately. It is safe to
 run on every deployment regardless of whether the schema has changed.
 
+For rollback procedures see [docs/dev/rollback_runbook.md](./rollback_runbook.md).
+
 To run a migration manually against a running stack (for example, after pulling a
 new image with a new revision while the database is already up):
 

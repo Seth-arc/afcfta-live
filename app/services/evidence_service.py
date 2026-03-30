@@ -9,17 +9,10 @@ from app.core.logging import log_event
 from app.repositories.evidence_repository import EvidenceRepository
 from app.schemas.evidence import EvidenceReadinessResult
 
-# `scripts/sql/seed_evidence_requirements.sql` currently seeds only
-# `evidence_requirement` rows. The seeded verification-question data in
-# `scripts/seed_data.py` uses `origin_claim`, `valuation_risk`,
-# `tariff_classification_risk`, and the fallback `general`, not the
-# confidence classes directly. Until dedicated `documentary_gap` question rows
-# exist in the checked-in seed data, `incomplete` maps to the generic
-# documentary-check bucket (`general`) and `insufficient` maps to
-# `origin_claim`.
+# Maps confidence class to verification question risk tier.
 _CONFIDENCE_TO_RISK: dict[str, str | None] = {
     "complete": None,
-    "incomplete": "general",
+    "incomplete": "documentary_gap",
     "insufficient": "origin_claim",
     "provisional": None,
 }

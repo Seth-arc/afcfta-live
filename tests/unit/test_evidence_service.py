@@ -500,7 +500,7 @@ async def test_build_readiness_skips_risk_filter_for_unfiltered_confidence_class
 @pytest.mark.parametrize(
     ("confidence_class", "expected_risk"),
     [
-        ("incomplete", "general"),
+        ("incomplete", "documentary_gap"),
         ("insufficient", "origin_claim"),
     ],
 )
@@ -536,7 +536,7 @@ async def test_build_readiness_maps_confidence_class_to_seeded_risk_category(
 @pytest.mark.parametrize(
     ("confidence_class", "expected_questions"),
     [
-        ("incomplete", ["General documentary check"]),
+        ("incomplete", ["Documentary gap check"]),
         ("insufficient", ["Origin claim check"]),
     ],
 )
@@ -553,6 +553,11 @@ async def test_build_readiness_excludes_questions_outside_resolved_risk_category
             "General documentary check",
             persona_mode="system",
             risk_category="general",
+        ),
+        build_question(
+            "Documentary gap check",
+            persona_mode="system",
+            risk_category="documentary_gap",
         ),
         build_question(
             "Origin claim check",
@@ -600,6 +605,68 @@ async def test_build_readiness_excludes_questions_outside_resolved_risk_category
     )
 
     assert result.verification_questions == expected_questions
+
+
+@pytest.mark.asyncio
+async def test_incomplete_confidence_routes_to_documentary_gap() -> None:
+    """confidence_class='incomplete' must route get_verification_questions to documentary_gap.
+
+    Asserts the repository is called with risk_category='documentary_gap' and that
+    the returned verification_questions list is non-empty when the repository returns data.
+    """
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    repository.get_verification_questions.return_value = [
+        build_question(
+            "Is the documentary evidence package complete and consistent?",
+            persona_mode="officer",
+            risk_category="documentary_gap",
+        ),
+    ]
+    service = EvidenceService(repository)
+
+    result = await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-docgap",
+        persona_mode="officer",
+        existing_documents=[],
+        confidence_class="incomplete",
+        assessment_date=_ASSESSMENT_DATE,
+    )
+
+    repository.get_verification_questions.assert_awaited_once_with(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-docgap",
+        risk_category="documentary_gap",
+        as_of_date=_ASSESSMENT_DATE,
+    )
+    assert result.verification_questions
+
+
+@pytest.mark.asyncio
+async def test_complete_confidence_skips_risk_filter() -> None:
+    """confidence_class='complete' must call get_verification_questions with risk_category=None."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_requirements.return_value = []
+    repository.get_verification_questions.return_value = []
+    service = EvidenceService(repository)
+
+    await service.build_readiness(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-complete",
+        persona_mode="officer",
+        existing_documents=[],
+        confidence_class="complete",
+        assessment_date=_ASSESSMENT_DATE,
+    )
+
+    repository.get_verification_questions.assert_awaited_once_with(
+        entity_type="hs6_rule",
+        entity_key="HS6_RULE:psr-complete",
+        risk_category=None,
+        as_of_date=_ASSESSMENT_DATE,
+    )
 
 
 def test_evidence_readiness_request_uses_existing_documents_vocabulary() -> None:

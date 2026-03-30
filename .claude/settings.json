@@ -58,7 +58,19 @@
       "Read(//c/Users/ssnguna/Local Sites/afcfta-live/app/api/**)",
       "Bash(python -m pytest tests/ --co -q)",
       "Bash(python -m pytest tests/unit/ --co -q)",
-      "Bash(python -c \"from tests.fixtures.golden_cases import GOLDEN_CASES; print\\(f''Golden cases: {len\\(GOLDEN_CASES\\)}''\\)\")"
+      "Bash(python -c \"from tests.fixtures.golden_cases import GOLDEN_CASES; print\\(f''Golden cases: {len\\(GOLDEN_CASES\\)}''\\)\")",
+      "Bash(python -m pytest tests/integration/test_public_contracts_api.py -v -k \"cors\")",
+      "Bash(python -m pytest tests/unit/test_evidence_service.py -v)",
+      "Bash(python -m pytest tests/integration/test_golden_path.py tests/integration/test_evidence_api.py -q)",
+      "Bash(python -m pytest tests/integration/test_golden_path.py -q)",
+      "Bash(python -m pytest tests/integration -q --ignore=tests/integration/test_golden_path.py --ignore=tests/integration/test_assistant_api.py)",
+      "Bash(python -m pytest tests/integration/test_tariffs_repository.py::test_get_tariff_returns_none_for_missing_corridor -v)",
+      "Bash(python -m pytest tests/integration/test_rate_limit_api.py tests/integration/test_public_contracts_api.py tests/unit/test_evidence_service.py -v)",
+      "Bash(pg_isready -h 127.0.0.1 -p 5432)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(docker context:*)",
+      "Bash(docker version:*)",
+      "Bash(docker --context default ps)"
     ],
     "additionalDirectories": [
       "C:\\Users\\ssnguna\\.claude\\projects\\c--Users-ssnguna-Local-Sites-afcfta-live"

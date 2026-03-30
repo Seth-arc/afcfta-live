@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from app.api.router import api_router
 from app.api.deps import InMemoryRateLimiter, RedisRateLimiter
 from app.config import get_settings
-from app.core.exceptions import AISBaseException
+from app.core.exceptions import AISBaseException, RateLimitExceededError
 from app.core.http_status import DOMAIN_STATUS_CODES
 from app.core.logging import (
     bind_request_log_context,
@@ -192,13 +192,18 @@ async def _domain_exception_handler(request: Request, exc: AISBaseException) -> 
     """Render domain exceptions as structured JSON without leaking internals."""
 
     status_code = DOMAIN_STATUS_CODES.get(type(exc), 400)
-    return _error_response(
+    response = _error_response(
         request,
         status_code=status_code,
         code=exc.code,
         message=exc.message,
         details=exc.detail,
     )
+    if isinstance(exc, RateLimitExceededError) and exc.detail:
+        retry_after = exc.detail.get("retry_after_seconds")
+        if retry_after is not None:
+            response.headers["Retry-After"] = str(int(retry_after))
+    return response
 
 
 async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:

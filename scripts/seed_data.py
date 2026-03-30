@@ -1082,6 +1082,26 @@ def build_seed_rows(existing_hs6_ids: dict[str, UUID] | None = None) -> dict[str
             }
         )
 
+        verification_questions.append(
+            {
+                "question_id": seed_uuid(f"question/documentary_gap/{hs6_code}/officer"),
+                "entity_type": "hs6_rule",
+                "entity_key": make_entity_key("hs6_rule", psr_id=str(psr_id)),
+                "persona_mode": PersonaModeEnum.OFFICER,
+                "question_text": (
+                    f"Is the full documentary evidence package for HS6 {hs6_code} "
+                    f"complete, internally consistent, and sufficient to close any "
+                    f"identified evidence gaps?"
+                ),
+                "purpose": "Verify documentary completeness for the evidence gap review.",
+                "legal_basis_provision_id": rules_provision_id,
+                "risk_category": VerificationRiskCategoryEnum.DOCUMENTARY_GAP,
+                "priority_level": 2,
+                "active": True,
+                "question_order": 1,
+            }
+        )
+
         for component_index, component in enumerate(spec["components"], start=1):
             components.append(
                 {

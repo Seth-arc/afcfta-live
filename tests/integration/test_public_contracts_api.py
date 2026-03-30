@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import importlib
 from datetime import date
 from typing import Any
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from app.config import get_settings
 from app.core.countries import V01_COUNTRIES
 from app.db.base import get_async_session_factory
 
@@ -136,3 +138,75 @@ async def test_tariffs_endpoint_exposes_provenance_ids_and_accepts_as_of_date(
         assert schedule_source_id in body["provenance_ids"]
     if rate_source_id is not None:
         assert rate_source_id in body["provenance_ids"]
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_rejects_unlisted_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CORSMiddleware must not echo Access-Control-Allow-Origin for an origin not in the allow-list.
+
+    Configures CORS for https://allowed.example only, then sends a preflight
+    from https://untrusted.example and verifies the response carries no ACAO
+    header matching that origin.  Uses the real CORSMiddleware — not mocked.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/fake")
+    monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://localhost/fake")
+    monkeypatch.setenv("API_AUTH_KEY", "pytest-api-key")
+    monkeypatch.setenv("CORS_ALLOW_ORIGINS", "https://allowed.example")
+    get_settings.cache_clear()
+
+    import app.main as main_module
+
+    importlib.reload(main_module)
+    cors_app = main_module.create_app()
+
+    transport = ASGITransport(app=cors_app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.options(
+                "/api/v1/assessments",
+                headers={
+                    "Origin": "https://untrusted.example",
+                    "Access-Control-Request-Method": "POST",
+                },
+            )
+        assert response.headers.get("Access-Control-Allow-Origin") != "https://untrusted.example"
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_allows_configured_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CORSMiddleware must echo Access-Control-Allow-Origin for a configured origin.
+
+    Overrides CORS_ALLOW_ORIGINS to https://renderer.test.example for this test
+    only.  Sends a preflight from that origin and asserts the ACAO response
+    header matches exactly.  Uses the real CORSMiddleware — not mocked.
+
+    # TEST-ONLY: CORS_ALLOW_ORIGINS is set via env patch here.
+    # Do not copy this value to production config; real Decision Renderer
+    # origins must be provisioned and set in .env.prod explicitly.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/fake")
+    monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://localhost/fake")
+    monkeypatch.setenv("API_AUTH_KEY", "pytest-api-key")
+    monkeypatch.setenv("CORS_ALLOW_ORIGINS", "https://renderer.test.example")
+    get_settings.cache_clear()
+
+    import app.main as main_module
+
+    importlib.reload(main_module)
+    cors_app = main_module.create_app()
+
+    transport = ASGITransport(app=cors_app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.options(
+                "/api/v1/assessments",
+                headers={
+                    "Origin": "https://renderer.test.example",
+                    "Access-Control-Request-Method": "POST",
+                },
+            )
+        assert response.headers.get("Access-Control-Allow-Origin") == "https://renderer.test.example"
+    finally:
+        get_settings.cache_clear()

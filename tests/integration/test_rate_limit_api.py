@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings, get_settings
@@ -188,3 +190,60 @@ async def test_case_create_with_assess_true_uses_assessment_rate_limit_policy(
     assert body["error"]["code"] == "RATE_LIMIT_EXCEEDED"
     assert body["error"]["details"]["policy_name"] == "assessments"
     assert body["error"]["details"]["max_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_is_enforced_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RATE_LIMIT_ENABLED=true with max=2 must return 429 + Retry-After on the third request.
+
+    Does not require a live database: the assessment handler is stubbed so that
+    only the rate-limit dependency (which runs first) is exercised for r1/r2,
+    and r3 is blocked before the handler is reached at all.
+
+    # TEST-ONLY: RATE_LIMIT_ENABLED is set explicitly in this test fixture.
+    # This override must NOT be copied to production config (.env.prod).
+    # Production must independently maintain RATE_LIMIT_ENABLED=true.
+    """
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://localhost/fake")
+    monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://localhost/fake")
+    monkeypatch.setenv("API_AUTH_KEY", "pytest-api-key")
+    monkeypatch.setenv("API_AUTH_PRINCIPAL", "pytest-suite")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS", "2")
+    get_settings.cache_clear()
+
+    import app.main as main_module
+
+    importlib.reload(main_module)
+    test_app = main_module.create_app()
+
+    @asynccontextmanager
+    async def _stub_ctx():
+        svc = AsyncMock()
+        svc.assess_interface_request.side_effect = HTTPException(
+                status_code=503, detail="stub: no db in rate-limit test"
+            )
+        yield svc
+
+    transport = ASGITransport(app=test_app)
+    try:
+        with patch(
+            "app.api.v1.assessments.assessment_eligibility_service_context",
+            side_effect=_stub_ctx,
+        ):
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+                headers={"X-API-Key": "pytest-api-key"},
+            ) as client:
+                await client.post("/api/v1/assessments", json=_assessment_payload())
+                await client.post("/api/v1/assessments", json=_assessment_payload())
+                r3 = await client.post("/api/v1/assessments", json=_assessment_payload())
+
+        # r1 and r2 pass the rate-limit check (counter incremented) then fail in the
+        # stubbed handler — that is expected and their status codes are not asserted.
+        # r3 is blocked by the rate limiter before any handler logic runs.
+        assert r3.status_code == 429, r3.text
+        assert "Retry-After" in r3.headers
+    finally:
+        get_settings.cache_clear()

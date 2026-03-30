@@ -236,8 +236,8 @@ async def test_rate_limit_is_enforced_when_enabled(monkeypatch: pytest.MonkeyPat
                 base_url="http://testserver",
                 headers={"X-API-Key": "pytest-api-key"},
             ) as client:
-                r1 = await client.post("/api/v1/assessments", json=_assessment_payload())
-                r2 = await client.post("/api/v1/assessments", json=_assessment_payload())
+                await client.post("/api/v1/assessments", json=_assessment_payload())
+                await client.post("/api/v1/assessments", json=_assessment_payload())
                 r3 = await client.post("/api/v1/assessments", json=_assessment_payload())
 
         # r1 and r2 pass the rate-limit check (counter incremented) then fail in the

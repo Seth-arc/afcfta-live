@@ -45,7 +45,7 @@ production deployment is considered stable.
 - Do not expand corridor or HS6 scope beyond V01.
 - Do not start Decision Renderer work in this book.
 - Do not re-open architecture decisions already settled by the Production Gate or
-  Post-Audit Hardening books.
+  Post-Audit Hardening books. I keep deleting but it won't lksiten...
 
 ## Working Rules
 
@@ -629,7 +629,7 @@ Runbook requirements:
 **You run** (stack must be running with Redis enabled from Prompt 6):
 ```bash
 export AIS_BASE_URL=http://localhost:8000
-export AIS_API_KEY=<your-api-key>
+export AIS_API_KEY="api_key"
 export RATE_LIMIT_ENABLED=false   # disable limiter for the load run only
 export DB_POOL_SIZE=20
 export DB_POOL_MAX_OVERFLOW=80
@@ -637,13 +637,22 @@ export DB_POOL_MAX_OVERFLOW=80
 # 10c baseline
 python tests/load/run_load_test.py \
   --mode burst --concurrency 10 --requests 50 \
-  --api-key "$AIS_API_KEY" \
+  --api-key "" \
   --report tests/load/baseline.json
+
+python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --api-key "" --report tests/load/baseline.json
+export AIS_BASE_URL=http://localhost:8000
+read -s -p "AIS API key: " AIS_API_KEY; export AIS_API_KEY; echo
+mkdir -p artifacts
+how come this is not showing in the github desktop ?
+
+read -s -p "api key: " AIS_API_KEY; export AIS_API_KEY; echo
+
 
 # 100c baseline
 python tests/load/run_load_test.py \
   --mode burst --concurrency 100 --requests 500 \
-  --api-key "$AIS_API_KEY" \
+  --api-key 
   --report tests/load/baseline_100c.json
 
 # Commit both files

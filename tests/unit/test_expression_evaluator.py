@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import string
 
 import pytest
 from hypothesis import assume, given, settings
@@ -26,6 +27,16 @@ _THRESHOLD_PCT = st.integers(min_value=0, max_value=100)
 
 # HS-4 tariff headings as zero-padded 4-digit strings ("1000"-"9999").
 _HEADING = st.integers(min_value=1000, max_value=9999).map(str)
+
+_BOOLEAN_FACT_NAME = st.sampled_from(
+    [
+        "wholly_obtained",
+        "specific_process_performed",
+        "direct_transport",
+        "cumulation_claimed",
+    ]
+)
+_ASCII_IDENTIFIER = st.text(alphabet=string.ascii_letters, min_size=1, max_size=8)
 
 
 def test_vnm_passes_when_threshold_is_met() -> None:
@@ -454,6 +465,118 @@ def test_source_file_does_not_use_dynamic_execution() -> None:
     assert re.search(r"\beval\s*\(", source) is None
     assert re.search(r"\bexec\s*\(", source) is None
     assert re.search(r"(?<!re\.)\bcompile\s*\(", source) is None
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — boolean algebra on supported expression forms
+# ---------------------------------------------------------------------------
+
+
+@given(fact_value=st.booleans())
+@settings(max_examples=200)
+def test_boolean_identity_laws_hold_for_supported_text_forms(fact_value: bool) -> None:
+    """A boolean leaf composed with constant true/false preserves identity laws.
+
+    The evaluator grammar does not support standalone boolean variables, so these
+    properties pin the equivalent comparison form `(wholly_obtained == true)`.
+    """
+
+    evaluator = ExpressionEvaluator()
+    facts = {"wholly_obtained": fact_value}
+
+    and_true = evaluator.evaluate("wholly_obtained == true AND true == true", facts)
+    or_false = evaluator.evaluate("wholly_obtained == true OR false == true", facts)
+    and_false = evaluator.evaluate("wholly_obtained == true AND false == true", facts)
+    or_true = evaluator.evaluate("wholly_obtained == true OR true == true", facts)
+
+    assert and_true.result is fact_value
+    assert or_false.result is fact_value
+    assert and_false.result is False
+    assert or_true.result is True
+
+
+@given(fact_value=st.booleans())
+@settings(max_examples=200)
+def test_boolean_idempotency_laws_hold_for_supported_text_forms(fact_value: bool) -> None:
+    """Repeating the same boolean leaf under AND/OR must not change the result."""
+
+    evaluator = ExpressionEvaluator()
+    facts = {"wholly_obtained": fact_value}
+
+    and_self = evaluator.evaluate(
+        "wholly_obtained == true AND wholly_obtained == true",
+        facts,
+    )
+    or_self = evaluator.evaluate(
+        "wholly_obtained == true OR wholly_obtained == true",
+        facts,
+    )
+
+    assert and_self.result is fact_value
+    assert or_self.result is fact_value
+
+
+@given(fact_value=st.booleans())
+@settings(max_examples=200)
+def test_boolean_negation_equivalents_hold_for_supported_text_forms(fact_value: bool) -> None:
+    """Equivalent comparison forms preserve NOT and double-NOT semantics.
+
+    The evaluator grammar has no unary NOT token, so `A == false` and `A != false`
+    are the supported equivalents of `NOT A` and `NOT (NOT A)`.
+    """
+
+    evaluator = ExpressionEvaluator()
+    facts = {"wholly_obtained": fact_value}
+
+    negated = evaluator.evaluate("wholly_obtained == false", facts)
+    double_negated = evaluator.evaluate("wholly_obtained != false", facts)
+
+    assert negated.result is (not fact_value)
+    assert double_negated.result is fact_value
+
+
+@given(identifier=_ASCII_IDENTIFIER, fact_value=st.booleans())
+@settings(max_examples=200)
+def test_fact_name_fuzz_never_leaks_unlisted_exceptions(
+    identifier: str, fact_value: bool
+) -> None:
+    """Arbitrary short ASCII identifiers must either evaluate or fail cleanly.
+
+    This pins the public contract to `ExpressionEvaluationError` for invalid or
+    unsupported fact names and prevents parser bugs from leaking `KeyError`,
+    `AttributeError`, or other internal exception types.
+    """
+
+    evaluator = ExpressionEvaluator()
+
+    try:
+        result = evaluator.evaluate(f"{identifier} == true", {identifier: fact_value})
+    except ExpressionEvaluationError:
+        return
+
+    assert isinstance(result.result, bool)
+
+
+@given(fact_name=_BOOLEAN_FACT_NAME)
+@settings(max_examples=200)
+def test_missing_boolean_fact_uses_documented_tristate_result(fact_name: str) -> None:
+    """Missing facts return the documented tri-state result instead of crashing.
+
+    The current evaluator contract does not raise a dedicated missing-fact
+    exception. It returns `result=None` and records the missing variable name.
+    """
+
+    evaluator = ExpressionEvaluator()
+
+    text_result = evaluator.evaluate(f"{fact_name} == true", {})
+    json_result = evaluator.evaluate({"op": "fact_eq", "fact": fact_name, "value": True}, {})
+
+    assert text_result.result is None
+    assert text_result.missing_variables == [fact_name]
+    assert text_result.checks[0].passed is None
+    assert json_result.result is None
+    assert json_result.missing_variables == [fact_name]
+    assert json_result.checks[0].passed is None
 
 
 # ---------------------------------------------------------------------------

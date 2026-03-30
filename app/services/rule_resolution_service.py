@@ -42,8 +42,26 @@ class RuleResolutionService:
                 detail={"hs_version": hs_version, "hs6_code": hs6_code},
             )
 
-        resolved_psr = await self.rules_repository.resolve_applicable_psr(
+        return await self.resolve_rule_bundle_by_hs6_id(
             str(product.hs6_id),
+            hs_version=hs_version,
+            hs6_code=hs6_code,
+            assessment_date=resolved_date,
+        )
+
+    async def resolve_rule_bundle_by_hs6_id(
+        self,
+        hs6_id: str,
+        *,
+        hs_version: str,
+        hs6_code: str,
+        assessment_date: date | None = None,
+    ) -> RuleResolutionResult:
+        """Resolve the governing PSR when the canonical HS6 row is already known."""
+
+        resolved_date = assessment_date or date.today()
+        resolved_psr = await self.rules_repository.resolve_applicable_psr(
+            hs6_id,
             resolved_date,
         )
         if resolved_psr is None:

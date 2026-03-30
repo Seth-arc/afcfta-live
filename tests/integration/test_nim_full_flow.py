@@ -47,8 +47,8 @@ PERSISTENCE_GUARANTEE
 
 EXPLANATION_SAFETY
   The deterministic fallback explanation text correctly reflects the engine's
-  eligible field without contradiction. Raw user text never appears in any
-  response field.
+  eligible field using the approved natural-language wording, without
+  contradiction. Raw user text never appears in any response field.
 """
 
 from __future__ import annotations
@@ -758,9 +758,10 @@ async def test_fallback_explanation_text_reflects_engine_eligible_outcome(
     """The deterministic fallback explanation must correctly reflect the engine's
     eligible field.
 
-    _build_fallback_text() produces "Assessment outcome: eligible." or
-    "Assessment outcome: not eligible." — we verify the text is consistent with
-    the engine output. Any mismatch would mean explanation contradicts the decision.
+    _build_fallback_text() now uses the approved natural-language phrasing:
+    "Based on the information provided, this product qualifies ..." or
+    "Based on the information provided, this product does not currently qualify ..."
+    We verify that the text stays consistent with the engine output.
     """
     _install_complete_draft_override(app)
     try:
@@ -772,18 +773,23 @@ async def test_fallback_explanation_text_reflects_engine_eligible_outcome(
         explanation = body["explanation"] or ""
 
         if eligible:
-            # Fallback starts "Assessment outcome: eligible."
+            # Fallback starts "Based on the information provided, this product qualifies ..."
             assert "not eligible" not in explanation.lower(), (
                 "Explanation must not claim ineligibility when engine says eligible. "
                 f"Got: {explanation!r}"
             )
-            assert "eligible" in explanation.lower(), (
-                "Fallback explanation must mention the eligible outcome. "
+            assert (
+                "qualifies for afcfta preferential treatment" in explanation.lower()
+            ), (
+                "Fallback explanation must reflect the eligible outcome. "
                 f"Got: {explanation!r}"
             )
         else:
-            # Fallback starts "Assessment outcome: not eligible."
-            assert "not eligible" in explanation.lower(), (
+            # Fallback starts "Based on the information provided, this product does not currently qualify ..."
+            assert (
+                "does not currently qualify for afcfta preferential treatment"
+                in explanation.lower()
+            ), (
                 "Explanation must reflect ineligibility when engine says not eligible. "
                 f"Got: {explanation!r}"
             )

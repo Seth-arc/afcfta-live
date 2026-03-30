@@ -7,7 +7,7 @@
     "total_requests": 500,
     "timeout_s": 30.0,
     "fail_under_pct": 95.0,
-    "pool_note": "Requires DB_POOL_SIZE=20 DB_POOL_MAX_OVERFLOW=80 in CI env (100 connections for 100c). Measured on GitHub Actions ubuntu-latest shared runner."
+    "payload_count": 5
   },
   "mode": "burst",
   "metrics": {
@@ -18,15 +18,15 @@
     "network_errors": 0,
     "other_failures": 0,
     "success_rate_pct": 100.0,
-    "wall_elapsed_s": 36.0,
-    "throughput_rps": 13.9,
+    "wall_elapsed_s": 10.453,
+    "throughput_rps": 47.83,
     "latency_s": {
-      "min": 0.50,
-      "p50": 3.00,
-      "p75": 4.50,
-      "p95": 6.00,
-      "p99": 7.50,
-      "max": 10.00,
+      "min": 0.203,
+      "p50": 1.266,
+      "p75": 2.375,
+      "p95": 5.609,
+      "p99": 7.125,
+      "max": 9.203,
       "sample_count": 500
     }
   }

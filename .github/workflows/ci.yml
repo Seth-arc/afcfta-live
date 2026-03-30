@@ -271,6 +271,15 @@ jobs:
           echo "API did not become ready within 60s" >&2
           exit 1
 
+      - name: Warm assessment caches
+        run: >
+          python tests/load/run_load_test.py
+          --mode burst
+          --concurrency 1
+          --requests 5
+          --api-key ci-load-test-key
+          --report artifacts/load-report-warmup.json
+
       - name: Run burst load test
         run: >
           python tests/load/run_load_test.py

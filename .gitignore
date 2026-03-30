@@ -8,3 +8,9 @@ tests/*-test-report/
 .env.prod
 .env.local
 .env.*.local
+AGENTS.md
+docs/dev/prompts/
+.vscode/
+.claude/
+.claude/
+.vscode/

@@ -101,10 +101,13 @@ _IN_FORCE_PHRASES: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 _NIM_EXPLANATION_SYSTEM_PROMPT_TEMPLATE = """\
-You are a trade compliance assistant explaining an AfCFTA eligibility \
-assessment result to {audience}.
+You are a trade compliance assistant.
+You are explaining an AfCFTA eligibility assessment result for {audience}
 
 Write a plain-language summary of the assessment outcome.
+
+Trade context:
+{trade_context}
 
 Rules:
 - Base your explanation ONLY on the assessment data provided below.
@@ -112,7 +115,8 @@ Rules:
 - Do NOT invent rules, pathways, or facts not present in the data.
 - Do NOT make predictions about future assessments.
 - Do NOT promise or imply outcomes beyond what the data states.
-- Keep the explanation factual, concise, and under 150 words.
+- If trade context is provided, you may use it in the opening sentence.
+- Keep the explanation factual, concise, and under 200 words.
 
 Return ONLY a JSON object: {{"text": "<your plain-language explanation>"}}
 
@@ -121,34 +125,75 @@ Assessment data:
 """
 
 # ---------------------------------------------------------------------------
-# Audience label by persona mode
+# Audience and tone guidance by persona mode
 # ---------------------------------------------------------------------------
 
 _AUDIENCE_BY_PERSONA: dict[str, str] = {
-    "exporter": "an exporter",
-    "officer": "a customs officer",
-    "analyst": "a trade analyst",
-    "system": "an automated system",
+    "exporter": "an exporter. Use a practical, supportive tone.",
+    "officer": "a customs officer. Use a precise, formal tone.",
+    "analyst": "a trade analyst. Use a data-forward tone.",
+    "system": "an automated system. Keep the wording terse.",
 }
-_DEFAULT_AUDIENCE = "a trade professional"
+_DEFAULT_AUDIENCE = "a trade professional. Use a clear, neutral tone."
 
 # ---------------------------------------------------------------------------
 # Deterministic helpers
 # ---------------------------------------------------------------------------
 
 
+def _build_trade_context(
+    hs6_code: str | None,
+    exporter: str | None,
+    importer: str | None,
+) -> str:
+    """Build a short product-and-corridor context string for the model prompt."""
+    parts: list[str] = []
+
+    if hs6_code:
+        parts.append(f"HS6 product {hs6_code}")
+
+    if exporter and importer:
+        parts.append(f"corridor {exporter} to {importer}")
+    elif exporter:
+        parts.append(f"exporter {exporter}")
+    elif importer:
+        parts.append(f"importer {importer}")
+
+    if not parts:
+        return "No specific product or corridor context was provided."
+
+    return "; ".join(parts) + "."
+
+
 def _build_fallback_text(assessment: EligibilityAssessmentResponse) -> str:
-    """Build a minimal factual summary directly from engine fields."""
-    outcome = "eligible" if assessment.eligible else "not eligible"
-    parts = [f"Assessment outcome: {outcome}."]
+    """Build a minimal natural-language summary directly from engine fields."""
+    outcome_phrase = (
+        "qualifies" if assessment.eligible else "does not currently qualify"
+    )
+    parts = [
+        (
+            "Based on the information provided, this product "
+            f"{outcome_phrase} for AfCFTA preferential treatment."
+        )
+    ]
     if assessment.pathway_used:
-        parts.append(f"Pathway used: {assessment.pathway_used}.")
-    parts.append(f"Rule status: {assessment.rule_status.value}.")
-    parts.append(f"Confidence: {assessment.confidence_class}.")
+        parts.append(
+            f"The current assessment relies on the {assessment.pathway_used} pathway."
+        )
+    parts.append(f"The applicable rule status is {assessment.rule_status.value}.")
+    parts.append(f"The confidence class is {assessment.confidence_class}.")
     if assessment.failures:
-        parts.append(f"Failures: {'; '.join(assessment.failures)}.")
+        parts.append(
+            "The engine reported these failure codes: "
+            + ", ".join(assessment.failures)
+            + "."
+        )
     if assessment.missing_facts:
-        parts.append(f"Missing facts: {', '.join(assessment.missing_facts)}.")
+        parts.append(
+            "More information is still needed on: "
+            + ", ".join(fact.replace("_", " ") for fact in assessment.missing_facts)
+            + "."
+        )
     return " ".join(parts)
 
 
@@ -156,18 +201,26 @@ def _build_next_steps(assessment: EligibilityAssessmentResponse) -> list[str]:
     """Derive actionable next steps deterministically from engine outputs."""
     steps: list[str] = []
     for doc in assessment.missing_evidence:
-        steps.append(f"Obtain and submit document: {doc.replace('_', ' ')}.")
+        steps.append(
+            "Prepare your "
+            f"{doc.replace('_', ' ')} - this is required to claim the "
+            "preferential tariff rate."
+        )
     for fact in assessment.missing_facts:
-        steps.append(f"Provide production fact: {fact.replace('_', ' ')}.")
+        steps.append(
+            "Provide your "
+            f"{fact.replace('_', ' ')} details so the origin assessment can continue."
+        )
     if assessment.eligible and assessment.evidence_required and not assessment.missing_evidence:
         steps.append(
-            "Prepare the required evidence package before shipment: "
-            + ", ".join(assessment.evidence_required) + "."
+            "Keep your required evidence package ready before shipment: "
+            + ", ".join(doc.replace("_", " ") for doc in assessment.evidence_required)
+            + "."
         )
     if not assessment.eligible and not assessment.missing_facts and not assessment.missing_evidence:
         steps.append(
-            "Review the failed rule criteria to determine whether an alternative "
-            "originating pathway is available."
+            "Review the failed rule criteria and check whether another "
+            "originating pathway may be available."
         )
     return steps
 
@@ -243,6 +296,9 @@ class ExplanationService:
         self,
         assessment: EligibilityAssessmentResponse,
         persona_mode: str | None = None,
+        hs6_code: str | None = None,
+        exporter: str | None = None,
+        importer: str | None = None,
     ) -> ExplanationResult:
         """Generate a plain-language explanation grounded in the assessment result.
 
@@ -267,7 +323,13 @@ class ExplanationService:
         warnings = _build_warnings(assessment)
 
         # NIM explanation attempt with full fallback chain
-        text, fallback_used = await self._generate_text(assessment, persona_mode)
+        text, fallback_used = await self._generate_text(
+            assessment=assessment,
+            persona_mode=persona_mode,
+            hs6_code=hs6_code,
+            exporter=exporter,
+            importer=importer,
+        )
 
         return ExplanationResult(
             text=text,
@@ -280,12 +342,21 @@ class ExplanationService:
         self,
         assessment: EligibilityAssessmentResponse,
         persona_mode: str | None,
+        hs6_code: str | None,
+        exporter: str | None,
+        importer: str | None,
     ) -> tuple[str, bool]:
         """Return (text, fallback_used) — always a non-None string."""
         audience = _AUDIENCE_BY_PERSONA.get(persona_mode or "", _DEFAULT_AUDIENCE)
         assessment_json = _build_assessment_summary_json(assessment)
+        trade_context = _build_trade_context(
+            hs6_code=hs6_code or assessment.hs6_code,
+            exporter=exporter,
+            importer=importer,
+        )
         system_prompt = _NIM_EXPLANATION_SYSTEM_PROMPT_TEMPLATE.format(
             audience=audience,
+            trade_context=trade_context,
             assessment_json=assessment_json,
         )
 

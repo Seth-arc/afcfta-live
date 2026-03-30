@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -98,6 +99,25 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def _nim_enabled_requires_companions(self) -> "Settings":
+        """When NIM_ENABLED=true, NIM_BASE_URL, NIM_API_KEY, and NIM_MODEL must be non-empty."""
+        if not self.NIM_ENABLED:
+            return self
+        missing: list[str] = []
+        if not self.NIM_BASE_URL:
+            missing.append("NIM_BASE_URL")
+        if not self.NIM_API_KEY:
+            missing.append("NIM_API_KEY")
+        if not self.NIM_MODEL:
+            missing.append("NIM_MODEL")
+        if missing:
+            raise ValueError(
+                f"NIM_ENABLED=true but the following required fields are empty: "
+                f"{', '.join(missing)}"
+            )
+        return self
 
 
 @lru_cache

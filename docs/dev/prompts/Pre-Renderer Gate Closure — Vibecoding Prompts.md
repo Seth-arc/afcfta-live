@@ -512,6 +512,7 @@ python -m pytest tests/integration -q --co -q 2>/dev/null | tail -5
 No automated test gates this prompt — the deliverable is the runbook document.
 Verify it renders correctly in your editor before marking complete.
 
+## Completed 29 March
 ---
 
 ## Prompt 7 — Complete NIM configuration for production activation

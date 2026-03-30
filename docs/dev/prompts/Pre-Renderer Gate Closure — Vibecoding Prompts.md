@@ -376,6 +376,7 @@ SENTRY_DSN=<your-real-project-dsn>
 and install the extras in the runtime image by adding `.[sentry]` to the
 Dockerfile pip install line.
 
+## Completed 29 March
 ---
 
 ## Prompt 5 — Add database migration step to docker-compose.prod.yml
@@ -433,7 +434,7 @@ When done, summarize:
 docker compose -f docker-compose.prod.yml config
 docker compose -f docker-compose.prod.yml build
 ```
-
+## Completed 29 March
 ---
 
 ## Prompt 6 — Write the production rollback runbook

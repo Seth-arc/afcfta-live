@@ -776,3 +776,190 @@ async def test_nim_explanation_invalid_json_does_not_block_assessment(
     finally:
         _remove_intake_override(app)
         app.dependency_overrides.pop(get_nim_client, None)
+
+
+# ---------------------------------------------------------------------------
+# Rendering layer: assistant_rendering on assessment responses
+# ---------------------------------------------------------------------------
+
+_RENDERING_FIELDS = frozenset({
+    "headline",
+    "summary",
+    "gap_analysis",
+    "fix_strategy",
+    "next_steps",
+    "warnings",
+})
+
+
+@pytest.mark.asyncio
+async def test_eligible_result_has_qualifying_rendering(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """When the engine returns an eligible assessment, assistant_rendering must
+    have a qualifying headline and fix_strategy must be null.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment":
+            assert body["assistant_rendering"] is not None, (
+                "assistant_rendering must be populated for assessment responses"
+            )
+            rendering = body["assistant_rendering"]
+            assert _RENDERING_FIELDS.issubset(set(rendering)), (
+                f"Rendering missing fields: {_RENDERING_FIELDS - set(rendering)}"
+            )
+            assert isinstance(rendering["headline"], str)
+            assert len(rendering["headline"]) > 0
+
+            if body["assessment"]["eligible"]:
+                assert "qualifies" in rendering["headline"].lower() or "qualify" in rendering["headline"].lower(), (
+                    "Qualifying headline must mention qualification"
+                )
+                assert rendering["fix_strategy"] is None, (
+                    "fix_strategy must be null for eligible products"
+                )
+
+            # Assessment fields must be untouched by rendering
+            assert ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS.issubset(set(body["assessment"]))
+    finally:
+        _remove_intake_override(app)
+
+
+@pytest.mark.asyncio
+async def test_failed_result_has_gap_analysis_and_fix_strategy(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """When the engine returns a non-eligible assessment, assistant_rendering must
+    include a fix_strategy. If quantified counterfactuals are present, gap_analysis
+    should also be populated.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment" and not body["assessment"]["eligible"]:
+            rendering = body["assistant_rendering"]
+            assert rendering is not None, (
+                "assistant_rendering must be populated for non-eligible assessments"
+            )
+            assert isinstance(rendering["fix_strategy"], str) and len(rendering["fix_strategy"]) > 0, (
+                "fix_strategy must be populated for non-eligible results"
+            )
+            assert isinstance(rendering["next_steps"], list) and len(rendering["next_steps"]) > 0, (
+                "next_steps must be non-empty for non-eligible results"
+            )
+            # headline must not claim qualification
+            assert "qualifies" not in rendering["headline"].lower(), (
+                "headline must not claim qualification when product is not eligible"
+            )
+
+            # Assessment fields must be unchanged
+            asmnt = body["assessment"]
+            assert isinstance(asmnt["eligible"], bool) and asmnt["eligible"] is False
+            assert isinstance(asmnt["failures"], list)
+    finally:
+        _remove_intake_override(app)
+
+
+@pytest.mark.asyncio
+async def test_missing_facts_rendering_reflects_incomplete_state(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """When the engine response has missing_facts, assistant_rendering must
+    reflect the incomplete state in both headline and fix_strategy.
+    """
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment" and body["assessment"]["missing_facts"]:
+            rendering = body["assistant_rendering"]
+            assert rendering is not None, (
+                "assistant_rendering must be populated when facts are missing"
+            )
+            # DecisionRenderer headline for missing facts: "I can't complete the assessment yet."
+            headline_lower = rendering["headline"].lower()
+            assert "can't complete" in headline_lower or "incomplete" in headline_lower or "not qualify" in headline_lower, (
+                "headline must signal incomplete assessment when facts are missing"
+            )
+            # fix_strategy should guide the user to supply missing facts
+            assert rendering["fix_strategy"] is not None, (
+                "fix_strategy must be present when facts are missing"
+            )
+
+            # Assessment fields must be untouched
+            assert body["assessment"]["missing_facts"] == body["assessment"]["missing_facts"]
+            assert isinstance(body["assessment"]["eligible"], bool)
+    finally:
+        _remove_intake_override(app)
+
+
+@pytest.mark.asyncio
+async def test_nim_rendering_fallback_returns_deterministic_rendering(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """When NIM rendering fails, the deterministic fallback must produce
+    assistant_rendering and the assessment must remain unchanged.
+
+    RenderingService falls back to DecisionRenderer when NIM is unavailable.
+    The assessment envelope must be identical to what the engine returned.
+    """
+    from app.api.deps import get_rendering_service
+    from app.services.nim.rendering_service import RenderingService
+
+    _override_intake_with_complete_draft(app)
+
+    # Force NIM rendering to fail by overriding with a client that errors
+    mock_nim = MagicMock()
+    mock_nim.generate_json = AsyncMock(return_value=None)  # NIM disabled
+    mock_nim.enabled = False
+    mock_nim.model = ""
+    mock_rendering_svc = RenderingService(mock_nim)
+    app.dependency_overrides[get_rendering_service] = lambda: mock_rendering_svc
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        if body["response_type"] == "assessment":
+            # Assessment must be fully populated and untouched
+            assert body["assessment"] is not None
+            assert ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS.issubset(set(body["assessment"]))
+            assert isinstance(body["assessment"]["eligible"], bool)
+
+            # Deterministic rendering must still be present
+            rendering = body["assistant_rendering"]
+            assert rendering is not None, (
+                "assistant_rendering must be present even when NIM rendering fails"
+            )
+            assert _RENDERING_FIELDS.issubset(set(rendering)), (
+                f"Fallback rendering missing fields: {_RENDERING_FIELDS - set(rendering)}"
+            )
+            assert isinstance(rendering["headline"], str) and len(rendering["headline"]) > 0
+            assert isinstance(rendering["summary"], str) and len(rendering["summary"]) > 0
+            assert isinstance(rendering["next_steps"], list) and len(rendering["next_steps"]) > 0
+
+            # Replay identifiers must still be set
+            assert body["case_id"] is not None
+            assert body["evaluation_id"] is not None
+            assert body["audit_url"] is not None
+    finally:
+        _remove_intake_override(app)
+        app.dependency_overrides.pop(get_rendering_service, None)

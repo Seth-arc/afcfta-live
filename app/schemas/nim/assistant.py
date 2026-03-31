@@ -82,6 +82,24 @@ class ClarificationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AssistantRendering(BaseModel):
+    """Structured rendering of the assessment for assistant display.
+
+    Fields mirror RenderedDecision from decision_renderer.py. This schema
+    is always populated on assessment responses — either from NIM or from
+    the deterministic DecisionRenderer fallback.
+    """
+
+    headline: str
+    summary: str
+    gap_analysis: str | None = None
+    fix_strategy: str | None = None
+    next_steps: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class AssistantError(BaseModel):
     """Structured error for input rejection and validation failures.
 
@@ -137,6 +155,7 @@ class AssistantResponseEnvelope(BaseModel):
     clarification: ClarificationResponse | None = None
     explanation: str | None = None  # additive only; never contradicts assessment
     explanation_fallback_used: bool = False  # True when deterministic fallback replaced NIM text
+    assistant_rendering: AssistantRendering | None = None  # NIM or deterministic rendering
     error: AssistantError | None = None
 
     model_config = ConfigDict(

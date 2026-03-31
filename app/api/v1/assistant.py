@@ -33,6 +33,7 @@ from app.api.deps import (
     get_clarification_service,
     get_explanation_service,
     get_intake_service,
+    get_rendering_service,
     require_assessment_rate_limit,
     run_replayable_interface_assessment,
     schedule_advisory_alert_dispatch,
@@ -40,11 +41,13 @@ from app.api.deps import (
 from app.config import Settings, get_settings
 from app.schemas.nim.assistant import (
     AssistantError,
+    AssistantRendering,
     AssistantRequest,
     AssistantResponseEnvelope,
 )
 from app.schemas.nim.clarification import ClarificationContext
 from app.services.nim.clarification_service import ClarificationService
+from app.services.nim.counterfactual_engine import CounterfactualEngine
 from app.services.nim.explanation_service import ExplanationService
 from app.services.nim.intake_service import IntakeService
 from app.services.nim.logging import (
@@ -53,6 +56,7 @@ from app.services.nim.logging import (
     log_nim_input_rejected,
     log_nim_intake_parsed,
 )
+from app.services.nim.rendering_service import RenderingService
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +64,47 @@ router = APIRouter(dependencies=[Depends(require_assessment_rate_limit)])
 
 # Minimum NIM confidence required to proceed to the engine without clarification.
 _MIN_NIM_CONFIDENCE: float = 0.7
+
+# Map failure codes back to pathway codes for synthesising pathway_analysis.
+_FAILURE_TO_PATHWAY: dict[str, str] = {
+    "FAIL_CTH_NOT_MET": "CTH",
+    "FAIL_CTSH_NOT_MET": "CTSH",
+    "FAIL_VNM_EXCEEDED": "VNM",
+    "FAIL_VA_INSUFFICIENT": "VA",
+    "FAIL_WO_NOT_MET": "WO",
+    "FAIL_PROCESS_NOT_MET": "PROCESS",
+}
+
+
+def _build_engine_payload(response) -> dict:
+    """Build the engine_payload dict expected by RenderingService from the response."""
+    decision = {
+        "eligible": response.eligible,
+        "pathway_used": response.pathway_used,
+        "rule_status": response.rule_status.value if hasattr(response.rule_status, "value") else str(response.rule_status),
+        "confidence_class": response.confidence_class,
+    }
+    product = {"hs6_code": response.hs6_code}
+    tariff_outcome = response.tariff_outcome.model_dump(mode="json") if response.tariff_outcome else {}
+
+    # Synthesise minimal pathway_analysis from response fields.
+    pathway_analysis: list[dict] = []
+    if response.pathway_used:
+        pathway_analysis.append({"pathway_code": response.pathway_used, "passed": response.eligible})
+    for failure_code in response.failures:
+        pathway_code = _FAILURE_TO_PATHWAY.get(failure_code)
+        if pathway_code and pathway_code != response.pathway_used:
+            pathway_analysis.append({"pathway_code": pathway_code, "passed": False})
+
+    return {
+        "decision": decision,
+        "product": product,
+        "pathway_analysis": pathway_analysis,
+        "missing_facts": list(response.missing_facts),
+        "failures": list(response.failures),
+        "evidence_required": list(response.evidence_required),
+        "tariff_outcome": tariff_outcome,
+    }
 
 
 @router.post("/assistant/assess", response_model=AssistantResponseEnvelope)
@@ -70,6 +115,7 @@ async def assistant_assess(
     intake_service: IntakeService = Depends(get_intake_service),
     clarification_service: ClarificationService = Depends(get_clarification_service),
     explanation_service: ExplanationService = Depends(get_explanation_service),
+    rendering_service: RenderingService = Depends(get_rendering_service),
     settings: Settings = Depends(get_settings),
 ) -> AssistantResponseEnvelope:
     """NIM-assisted eligibility assessment.
@@ -91,7 +137,11 @@ async def assistant_assess(
        Set replay headers.
     5. Generate plain-language explanation via ExplanationService (deterministic
        fallback always fires; explanation never alters assessment fields).
-    6. Return combined AssistantResponseEnvelope.
+    6. Generate counterfactuals via CounterfactualEngine from the engine output.
+    7. Run NIM rendering over the truth payload via RenderingService. Falls back
+       to deterministic DecisionRenderer on any failure.
+    8. Return combined AssistantResponseEnvelope with assessment and
+       assistant_rendering kept separate.
     """
     t_start = time.monotonic()
 
@@ -231,6 +281,46 @@ async def assistant_assess(
     )
     expl_latency_ms = int((time.monotonic() - t_expl) * 1000)
 
+    # -------------------------------------------------------------------------
+    # Step 6: Counterfactuals — deterministic, derived from failed pathways
+    # -------------------------------------------------------------------------
+    engine_payload = _build_engine_payload(result.response)
+    production_facts = eligibility_request.production_facts or {}
+    normalized_facts = production_facts if isinstance(production_facts, dict) else {}
+
+    counterfactual_engine = CounterfactualEngine()
+    counterfactual_results = counterfactual_engine.generate(
+        normalized_facts=normalized_facts,
+        pathway_analysis=engine_payload["pathway_analysis"],
+    )
+    counterfactuals = [c.to_dict() for c in counterfactual_results]
+
+    # -------------------------------------------------------------------------
+    # Step 7: NIM rendering — never blocks assessment; falls back to
+    # deterministic DecisionRenderer on any failure.
+    # -------------------------------------------------------------------------
+    try:
+        rendered = await rendering_service.render(
+            engine_payload=engine_payload,
+            counterfactuals=counterfactuals,
+        )
+        assistant_rendering = AssistantRendering(
+            headline=rendered.headline,
+            summary=rendered.summary,
+            gap_analysis=rendered.gap_analysis,
+            fix_strategy=rendered.fix_strategy,
+            next_steps=rendered.next_steps,
+            warnings=rendered.warnings,
+        )
+    except Exception:
+        logger.warning("NIM rendering failed; using minimal deterministic rendering", exc_info=True)
+        assistant_rendering = AssistantRendering(
+            headline="Assessment complete." if result.response.eligible else "Assessment complete — does not qualify yet.",
+            summary="See the assessment fields for full details.",
+            next_steps=["Review the assessment details above."],
+            warnings=[],
+        )
+
     total_latency_ms = int((time.monotonic() - t_start) * 1000)
 
     log_nim_assessment_completed(
@@ -249,7 +339,7 @@ async def assistant_assess(
     )
 
     # -------------------------------------------------------------------------
-    # Step 6: Return combined envelope
+    # Step 8: Return combined envelope — assessment and rendering separate
     # -------------------------------------------------------------------------
     return AssistantResponseEnvelope(
         response_type="assessment",
@@ -260,4 +350,5 @@ async def assistant_assess(
         assessment=result.response,
         explanation=explanation_result.text,
         explanation_fallback_used=explanation_result.fallback_used,
+        assistant_rendering=assistant_rendering,
     )

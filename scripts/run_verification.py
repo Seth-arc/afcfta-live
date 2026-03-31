@@ -28,6 +28,20 @@ ASSISTANT_TEST_PATHS = (
     "tests/integration/test_assistant_api.py",
     "tests/integration/test_nim_full_flow.py",
 )
+IGNORED_GIT_STATUS_DIR_MARKERS = (
+    "__pycache__/",
+    ".hypothesis/",
+    ".pytest_cache/",
+    "artifacts/",
+)
+IGNORED_GIT_STATUS_SUFFIXES = (
+    ".pyc",
+    ".pyo",
+    ".pyd",
+)
+IGNORED_GIT_STATUS_BASENAMES = (
+    ".coverage",
+)
 
 
 @dataclass(slots=True)
@@ -105,8 +119,57 @@ def _git_sha() -> str:
     return _git_value("rev-parse", "--short", "HEAD", fallback="nogit")
 
 
+def _normalize_git_status_path(path: str) -> str:
+    """Normalize one porcelain path so generated-file filters are platform-stable."""
+
+    return path.strip().strip('"').replace("\\", "/")
+
+
+def _is_ignored_git_status_path(path: str) -> bool:
+    """Return True when a dirty path is generated cache/junk that should not block the gate."""
+
+    normalized_path = _normalize_git_status_path(path)
+    if not normalized_path:
+        return False
+
+    if any(marker in normalized_path for marker in IGNORED_GIT_STATUS_DIR_MARKERS):
+        return True
+
+    basename = normalized_path.rsplit("/", 1)[-1]
+    if basename in IGNORED_GIT_STATUS_BASENAMES:
+        return True
+    if basename.startswith(".coverage."):
+        return True
+    if any(normalized_path.endswith(suffix) for suffix in IGNORED_GIT_STATUS_SUFFIXES):
+        return True
+    return False
+
+
+def _git_dirty_paths() -> list[str]:
+    """Return dirty worktree paths after filtering generated cache artifacts."""
+
+    try:
+        output = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+
+    dirty_paths: list[str] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        path = line[3:] if len(line) > 3 else line
+        if _is_ignored_git_status_path(path):
+            continue
+        dirty_paths.append(_normalize_git_status_path(path))
+    return dirty_paths
+
+
 def _git_dirty() -> bool:
-    return bool(_git_value("status", "--porcelain", fallback=""))
+    return bool(_git_dirty_paths())
 
 
 def _display_command(command: list[str]) -> str:

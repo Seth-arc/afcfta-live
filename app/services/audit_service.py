@@ -603,6 +603,18 @@ class AuditService:
                 check_type="rule",
                 check_code="PSR_RESOLUTION",
             )
+            rule_source = (
+                self._snapshot_source(rule_snapshot)
+                if rule_snapshot is not None
+                else (
+                    await self._fetch_source_details(
+                        str(rule_source_id),
+                        evaluation_id=evaluation_id,
+                    )
+                    if rule_source_id is not None
+                    else None
+                )
+            )
             rule_provisions = (
                 self._snapshot_provisions(rule_snapshot)
                 if rule_snapshot is not None
@@ -617,13 +629,13 @@ class AuditService:
             )
             rule_trace = RuleProvenanceTrace(
                 source_id=rule_source_id,
-                source_short_title=self._snapshot_source_value(rule_snapshot, "short_title"),
-                source_version_label=self._snapshot_source_value(rule_snapshot, "version_label"),
-                source_publication_date=self._snapshot_source_value(
-                    rule_snapshot,
+                source_short_title=self._source_payload_value(rule_source, "short_title"),
+                source_version_label=self._source_payload_value(rule_source, "version_label"),
+                source_publication_date=self._source_payload_value(
+                    rule_source,
                     "publication_date",
                 ),
-                source_effective_date=self._snapshot_source_value(rule_snapshot, "effective_date"),
+                source_effective_date=self._source_payload_value(rule_source, "effective_date"),
                 snapshot_captured_at=self._snapshot_captured_at(rule_snapshot),
                 page_ref=rule_payload.get("page_ref"),
                 table_ref=rule_payload.get("table_ref"),
@@ -638,6 +650,18 @@ class AuditService:
                 checks,
                 check_type="tariff",
                 check_code="TARIFF_RESOLUTION",
+            )
+            tariff_source = (
+                self._snapshot_source(tariff_snapshot)
+                if tariff_snapshot is not None
+                else (
+                    await self._fetch_source_details(
+                        str(schedule_source_id),
+                        evaluation_id=evaluation_id,
+                    )
+                    if schedule_source_id is not None
+                    else None
+                )
             )
             tariff_provisions = (
                 self._snapshot_provisions(tariff_snapshot)
@@ -654,17 +678,17 @@ class AuditService:
             tariff_trace = TariffProvenanceTrace(
                 schedule_source_id=schedule_source_id,
                 rate_source_id=tariff_payload.get("rate_source_id"),
-                source_short_title=self._snapshot_source_value(tariff_snapshot, "short_title"),
-                source_version_label=self._snapshot_source_value(
-                    tariff_snapshot,
+                source_short_title=self._source_payload_value(tariff_source, "short_title"),
+                source_version_label=self._source_payload_value(
+                    tariff_source,
                     "version_label",
                 ),
-                source_publication_date=self._snapshot_source_value(
-                    tariff_snapshot,
+                source_publication_date=self._source_payload_value(
+                    tariff_source,
                     "publication_date",
                 ),
-                source_effective_date=self._snapshot_source_value(
-                    tariff_snapshot,
+                source_effective_date=self._source_payload_value(
+                    tariff_source,
                     "effective_date",
                 ),
                 snapshot_captured_at=self._snapshot_captured_at(tariff_snapshot),
@@ -709,6 +733,25 @@ class AuditService:
         return source.get(key)
 
     @staticmethod
+    def _snapshot_source(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Return the nested source payload from a persisted provenance snapshot."""
+
+        if not isinstance(snapshot, dict):
+            return None
+        source = snapshot.get("source")
+        if not isinstance(source, dict):
+            return None
+        return source
+
+    @staticmethod
+    def _source_payload_value(source: dict[str, Any] | None, key: str) -> Any:
+        """Read one source-level field from either persisted or live lookup payloads."""
+
+        if not isinstance(source, dict):
+            return None
+        return source.get(key)
+
+    @staticmethod
     def _snapshot_captured_at(snapshot: dict[str, Any] | None) -> Any:
         """Return the snapshot capture timestamp when present."""
 
@@ -742,7 +785,14 @@ class AuditService:
         if self.sources_repository is None:
             return []
         try:
-            rows = await self.sources_repository.get_provisions_for_source(source_id, limit=5)
+            try:
+                rows = await self.sources_repository.get_provisions_for_source(  # type: ignore[misc]
+                    source_id,
+                    limit=5,
+                    include_text=True,
+                )
+            except TypeError:
+                rows = await self.sources_repository.get_provisions_for_source(source_id, limit=5)
             summaries: list[ProvisionSummary] = []
             for row in rows:
                 row_data = dict(row)
@@ -760,6 +810,33 @@ class AuditService:
             return summaries
         except Exception:
             return []
+
+    async def _fetch_source_details(
+        self,
+        source_id: str,
+        *,
+        evaluation_id: str,
+    ) -> dict[str, Any] | None:
+        """Return thin source metadata when no persisted provenance snapshot exists."""
+
+        if self.sources_repository is None:
+            return None
+
+        get_source = getattr(self.sources_repository, "get_source", None)
+        if get_source is None:
+            return None
+
+        try:
+            row = await get_source(source_id)
+            return dict(row) if row is not None else None
+        except Exception:
+            logger.warning(
+                "Failed to fetch source metadata for audit provenance: "
+                "evaluation_id=%s source_id=%s",
+                evaluation_id,
+                source_id,
+            )
+            return None
 
     def _decode_summary_model(
         self,

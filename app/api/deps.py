@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.core.logging import update_request_log_context
-from app.db.session import get_assessment_db, get_db
+from app.db.session import get_assessment_db, get_db, session_context
 from app.core.exceptions import AuthenticationError, RateLimitExceededError
 from app.repositories.cases_repository import CasesRepository
 from app.repositories.evidence_repository import EvidenceRepository
@@ -44,6 +44,7 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.rule_resolution_service import RuleResolutionService
 from app.services.status_service import StatusService
 from app.services.tariff_resolution_service import TariffResolutionService
+from app.schemas.assessments import CaseAssessmentRequest, EligibilityRequest
 
 logger = logging.getLogger(__name__)
 
@@ -448,13 +449,40 @@ def assessment_eligibility_service_context():
     return _ctx()
 
 
+async def _persist_prepared_interface_assessment(prepared_assessment):
+    """Persist one prepared assessment after the repeatable-read snapshot has closed."""
+
+    async with session_context() as session:
+        service = _build_eligibility_service(session)
+        return await service.finalize_prepared_interface_assessment(prepared_assessment)
+
+
+async def run_replayable_interface_assessment(
+    payload: EligibilityRequest,
+):
+    """Run the engine inside REPEATABLE READ, then persist replay state on a short write session."""
+
+    async with assessment_eligibility_service_context() as eligibility_service:
+        prepared = await eligibility_service.prepare_interface_request_assessment(payload)
+    return await _persist_prepared_interface_assessment(prepared)
+
+
+async def run_replayable_case_assessment(
+    case_id: str,
+    payload: CaseAssessmentRequest,
+):
+    """Run one case-backed engine pass, then persist replay state after the snapshot closes."""
+
+    async with assessment_eligibility_service_context() as eligibility_service:
+        prepared = await eligibility_service.prepare_interface_case_assessment(case_id, payload)
+    return await _persist_prepared_interface_assessment(prepared)
+
+
 async def dispatch_advisory_alert_specs(specs: list[dict[str, Any]]) -> None:
     """Persist advisory alert specs on a detached session without delaying the response path."""
 
     if not specs:
         return
-
-    from app.db.session import session_context
 
     try:
         async with session_context() as session:

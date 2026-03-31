@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -12,7 +11,6 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 
 from app.api.deps import (
-    get_assessment_eligibility_service,
     get_audit_service,
     get_cases_repository,
 )
@@ -191,25 +189,20 @@ async def test_create_case_with_assessment_commits_and_sets_replay_headers(
             assert requested_case_id == case_id
             return {"case": case_row, "facts": [fact_row]}
 
-    class FakeEligibilityService:
-        async def assess_interface_case(self, requested_case_id: str, payload) -> object:
-            assess_calls.append((requested_case_id, payload))
-            return SimpleNamespace(
-                case_id=case_id,
-                evaluation_id=evaluation_id,
-                response=_assessment_response(),
-                pending_alert_specs=pending_alert_specs,
-            )
-
     async def fake_rate_limit(request, settings) -> None:
         rate_limit_calls.append((request, settings))
 
-    @asynccontextmanager
-    async def fake_context():
-        yield FakeEligibilityService()
+    async def fake_run(requested_case_id: str, payload) -> object:
+        assess_calls.append((requested_case_id, payload))
+        return SimpleNamespace(
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+            response=_assessment_response(),
+            pending_alert_specs=pending_alert_specs,
+        )
 
     monkeypatch.setattr("app.api.v1.cases.require_assessment_rate_limit", fake_rate_limit)
-    monkeypatch.setattr("app.api.v1.cases.assessment_eligibility_service_context", fake_context)
+    monkeypatch.setattr("app.api.v1.cases.run_replayable_case_assessment", fake_run)
     monkeypatch.setattr(
         "app.api.v1.cases.schedule_advisory_alert_dispatch",
         lambda background_tasks, specs: scheduled_alert_specs.append(specs),
@@ -378,34 +371,27 @@ async def test_case_assess_route_sets_replay_headers(
         },
     )
 
-    class FakeEligibilityService:
-        async def assess_interface_case(self, requested_case_id: str, payload) -> object:
-            assert requested_case_id == case_id
-            assert payload.year == 2025
-            assert payload.existing_documents == ["certificate_of_origin"]
-            return SimpleNamespace(
-                case_id=case_id,
-                evaluation_id=evaluation_id,
-                response=_assessment_response(),
-                pending_alert_specs=pending_alert_specs,
-            )
+    async def fake_run(requested_case_id: str, payload) -> object:
+        assert requested_case_id == case_id
+        assert payload.year == 2025
+        assert payload.existing_documents == ["certificate_of_origin"]
+        return SimpleNamespace(
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+            response=_assessment_response(),
+            pending_alert_specs=pending_alert_specs,
+        )
 
-    async def override_service() -> FakeEligibilityService:
-        return FakeEligibilityService()
-
-    app.dependency_overrides[get_assessment_eligibility_service] = override_service
+    monkeypatch.setattr("app.api.v1.cases.run_replayable_case_assessment", fake_run)
     monkeypatch.setattr(
         "app.api.v1.cases.schedule_advisory_alert_dispatch",
         lambda background_tasks, specs: scheduled_alert_specs.append(specs)
     )
 
-    try:
-        response = await async_client.post(
-            f"/api/v1/cases/{case_id}/assess",
-            json={"year": 2025, "submitted_documents": ["certificate_of_origin"]},
-        )
-    finally:
-        app.dependency_overrides.pop(get_assessment_eligibility_service, None)
+    response = await async_client.post(
+        f"/api/v1/cases/{case_id}/assess",
+        json={"year": 2025, "submitted_documents": ["certificate_of_origin"]},
+    )
 
     assert response.status_code == 200, response.text
     assert response.headers["X-AIS-Case-Id"] == case_id

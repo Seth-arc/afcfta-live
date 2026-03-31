@@ -1151,6 +1151,57 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
 
 
 @pytest.mark.asyncio
+async def test_prepare_interface_request_assessment_defers_evaluation_persistence() -> None:
+    """Prepared interface runs should capture replay payload without writing the evaluation yet."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    auto_case_id = str(_uuid(405))
+    pending_alert_spec = {
+        "alert_type": "data_quality_issue",
+        "entity_type": "corridor",
+        "entity_key": "corridor:GHA:NGA:110311",
+    }
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["intelligence_service"].build_assessment_alert_specs.return_value = [pending_alert_spec]
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    prepared = await service.prepare_interface_request_assessment(request)
+
+    assert prepared.case_id == auto_case_id
+    assert prepared.response.eligible is True
+    assert prepared.response.audit_persisted is False
+    assert prepared.pending_alert_specs == (pending_alert_spec,)
+    assert prepared.evaluation_persistence is not None
+    assert prepared.evaluation_persistence.request.case_id == auto_case_id
+    deps["evaluations_repository"].persist_evaluation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_assess_interface_request_raises_when_case_creation_fails() -> None:
     """Interface runs should surface case auto-create failures as replay-persistence errors."""
 
@@ -1488,8 +1539,8 @@ async def test_assessment_falls_back_to_rule_type_evidence_when_specific_targets
 
 
 @pytest.mark.asyncio
-async def test_persist_evaluation_snapshots_rule_and_tariff_provenance() -> None:
-    """Persistence should embed immutable rule/tariff provenance snapshots into audit checks."""
+async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() -> None:
+    """Persistence should keep source references but defer provenance enrichment off the hot path."""
 
     service, deps = _service()
     case_id = str(_uuid(500))
@@ -1626,35 +1677,26 @@ async def test_persist_evaluation_snapshots_rule_and_tariff_provenance() -> None
         check for check in persisted_checks if check["check_code"] == "TARIFF_RESOLUTION"
     )
 
+    assert rule_check["details_json"]["psr_rule"]["source_id"] == str(rule_source_id)
+    assert "provenance_snapshot" not in rule_check["details_json"]
     assert (
-        rule_check["details_json"]["provenance_snapshot"]["source"]["source_id"]
-        == str(rule_source_id)
-    )
-    assert (
-        rule_check["details_json"]["provenance_snapshot"]["supporting_provisions"][0][
-            "provision_text_verbatim"
-        ]
-        == "Change in tariff heading required."
-    )
-    assert (
-        tariff_check["details_json"]["provenance_snapshot"]["source"]["source_id"]
+        tariff_check["details_json"]["tariff_resolution"]["schedule_source_id"]
         == str(schedule_source_id)
     )
+    assert "provenance_snapshot" not in tariff_check["details_json"]
     assert (
-        tariff_check["details_json"]["provenance_snapshot"]["supporting_provisions"][0][
-            "provision_text_normalized"
+        persisted_evaluation["decision_snapshot_json"]["rule_check"]["details_json"]["psr_rule"][
+            "source_id"
         ]
-        == "preferential rate zero"
-    )
-    assert (
-        persisted_evaluation["decision_snapshot_json"]["rule_check"]["details_json"][
-            "provenance_snapshot"
-        ]["source"]["source_id"]
         == str(rule_source_id)
     )
+    assert "provenance_snapshot" not in persisted_evaluation["decision_snapshot_json"][
+        "rule_check"
+    ]["details_json"]
     assert (
         persisted_evaluation["decision_snapshot_json"]["tariff_check"]["details_json"][
-            "provenance_snapshot"
-        ]["source"]["source_id"]
+            "tariff_resolution"
+        ]["schedule_source_id"]
         == str(schedule_source_id)
     )
+    assert deps["sources_repository"].get_source_snapshot.await_count == 0

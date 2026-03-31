@@ -59,6 +59,27 @@ class InterfaceAssessmentResult:
     pending_alert_specs: tuple[dict[str, Any], ...] = ()
 
 
+@dataclass(frozen=True)
+class PreparedEvaluationPersistence:
+    """Replay-critical payload captured during assessment for deferred persistence."""
+
+    request: EligibilityRequest
+    assessment_date: date
+    rule_bundle: RuleResolutionResult
+    pathway_used: str | None
+    audit_checks: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class PreparedInterfaceAssessment:
+    """Interface assessment plus deferred persistence payload after the read snapshot closes."""
+
+    response: EligibilityAssessmentResponse
+    case_id: str
+    pending_alert_specs: tuple[dict[str, Any], ...] = ()
+    evaluation_persistence: PreparedEvaluationPersistence | None = None
+
+
 class EligibilityService:
     """Run the deterministic engine in the locked execution order."""
 
@@ -93,11 +114,14 @@ class EligibilityService:
         self.audit_service = audit_service
         self._last_persisted_evaluation_id: str | None = None
         self._last_pending_alert_specs: tuple[dict[str, Any], ...] = ()
+        self._last_prepared_persistence: PreparedEvaluationPersistence | None = None
 
     async def assess_case(
         self,
         case_id: str,
         request: CaseAssessmentRequest,
+        *,
+        persist_evaluation: bool = True,
     ) -> EligibilityAssessmentResponse:
         """Load one stored case, rehydrate its facts, and assess it through the direct path.
 
@@ -110,7 +134,10 @@ class EligibilityService:
             year=request.year,
             existing_documents=request.existing_documents,
         )
-        return await self.assess(eligibility_request)
+        return await self.assess(
+            eligibility_request,
+            persist_evaluation=persist_evaluation,
+        )
 
     async def assess_interface_request(
         self,
@@ -120,6 +147,7 @@ class EligibilityService:
 
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
         replayable_request = await self._ensure_replayable_request(request)
         response = await self.assess(replayable_request)
         evaluation_id = self._require_persisted_evaluation_id(replayable_request.case_id)
@@ -139,6 +167,7 @@ class EligibilityService:
 
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
         response = await self.assess_case(case_id, request)
         evaluation_id = self._require_persisted_evaluation_id(case_id)
         return InterfaceAssessmentResult(
@@ -148,11 +177,88 @@ class EligibilityService:
             pending_alert_specs=self._consume_pending_alert_specs(),
         )
 
-    async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
+    async def prepare_interface_request_assessment(
+        self,
+        request: EligibilityRequest,
+    ) -> PreparedInterfaceAssessment:
+        """Compute one interface-triggered assessment and defer replay persistence."""
+
+        self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
+        replayable_request = await self._ensure_replayable_request(request)
+        response = await self.assess(replayable_request, persist_evaluation=False)
+        return PreparedInterfaceAssessment(
+            response=response,
+            case_id=str(replayable_request.case_id),
+            pending_alert_specs=self._consume_pending_alert_specs(),
+            evaluation_persistence=self._require_prepared_persistence(
+                str(replayable_request.case_id)
+            ),
+        )
+
+    async def prepare_interface_case_assessment(
+        self,
+        case_id: str,
+        request: CaseAssessmentRequest,
+    ) -> PreparedInterfaceAssessment:
+        """Compute one case-backed assessment and defer replay persistence."""
+
+        self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
+        response = await self.assess_case(case_id, request, persist_evaluation=False)
+        return PreparedInterfaceAssessment(
+            response=response,
+            case_id=case_id,
+            pending_alert_specs=self._consume_pending_alert_specs(),
+            evaluation_persistence=self._require_prepared_persistence(case_id),
+        )
+
+    async def finalize_prepared_interface_assessment(
+        self,
+        prepared: PreparedInterfaceAssessment,
+    ) -> InterfaceAssessmentResult:
+        """Persist one prepared assessment on a short-lived detached write session."""
+
+        response = prepared.response.model_copy(deep=True)
+        persistence = prepared.evaluation_persistence
+        if persistence is None:
+            raise EvaluationPersistenceError(
+                "Prepared interface assessment did not capture a replayable evaluation payload",
+                detail={"case_id": prepared.case_id, "reason": "evaluation_not_prepared"},
+            )
+
+        self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
+        response.audit_persisted = await self._persist_evaluation_if_possible(
+            request=persistence.request,
+            assessment_date=persistence.assessment_date,
+            rule_bundle=persistence.rule_bundle,
+            response=response,
+            pathway_used=persistence.pathway_used,
+            audit_checks=persistence.audit_checks,
+        )
+        evaluation_id = self._require_persisted_evaluation_id(prepared.case_id)
+        return InterfaceAssessmentResult(
+            response=response,
+            case_id=prepared.case_id,
+            evaluation_id=evaluation_id,
+            pending_alert_specs=prepared.pending_alert_specs,
+        )
+
+    async def assess(
+        self,
+        request: EligibilityRequest,
+        *,
+        persist_evaluation: bool = True,
+    ) -> EligibilityAssessmentResponse:
         """Execute one full assessment inside the caller's request-scoped DB snapshot."""
 
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
 
@@ -284,13 +390,14 @@ class EligibilityService:
                 ),
             )
             audit_checks.append(self._make_decision_trace_check(response))
-            response.audit_persisted = await self._persist_evaluation_if_possible(
+            response.audit_persisted = await self._persist_or_prepare_evaluation(
                 request=request,
                 assessment_date=assessment_date,
                 rule_bundle=rule_bundle,
                 response=response,
                 pathway_used=None,
                 audit_checks=audit_checks,
+                persist_evaluation=persist_evaluation,
             )
             self._last_pending_alert_specs = self._build_pending_alert_specs_if_possible(
                 request=request,
@@ -380,13 +487,14 @@ class EligibilityService:
             confidence_class=confidence_class,
         )
         audit_checks.append(self._make_decision_trace_check(response))
-        response.audit_persisted = await self._persist_evaluation_if_possible(
+        response.audit_persisted = await self._persist_or_prepare_evaluation(
             request=request,
             assessment_date=assessment_date,
             rule_bundle=rule_bundle,
             response=response,
             pathway_used=response.pathway_used,
             audit_checks=audit_checks,
+            persist_evaluation=persist_evaluation,
         )
         self._last_pending_alert_specs = self._build_pending_alert_specs_if_possible(
             request=request,
@@ -409,6 +517,21 @@ class EligibilityService:
         pending = self._last_pending_alert_specs
         self._last_pending_alert_specs = ()
         return pending
+
+    def _require_prepared_persistence(
+        self,
+        case_id: str,
+    ) -> PreparedEvaluationPersistence:
+        """Return and clear the deferred replay payload captured during assessment."""
+
+        prepared = self._last_prepared_persistence
+        self._last_prepared_persistence = None
+        if prepared is None:
+            raise EvaluationPersistenceError(
+                "Interface assessment did not capture a replayable evaluation payload",
+                detail={"case_id": case_id, "reason": "evaluation_not_prepared"},
+            )
+        return prepared
 
     async def _build_request_from_case(
         self,
@@ -1204,10 +1327,94 @@ class EligibilityService:
                 "expected_value": check.get("expected_value"),
                 "observed_value": check.get("observed_value"),
                 "explanation": check.get("explanation"),
-                "details_json": check.get("details_json"),
+                "details_json": EligibilityService._compact_snapshot_details(
+                    check_type=check.get("check_type"),
+                    check_code=check.get("check_code"),
+                    details=check.get("details_json"),
+                ),
                 "linked_component_id": check.get("linked_component_id"),
             }
         )
+
+    @staticmethod
+    def _compact_snapshot_details(
+        *,
+        check_type: Any,
+        check_code: Any,
+        details: Any,
+    ) -> dict[str, Any] | None:
+        """Persist only the replay-critical subset of each summary payload."""
+
+        if not isinstance(details, Mapping):
+            return None
+
+        if check_type == "classification" and check_code == "HS6_RESOLUTION":
+            product = details.get("product")
+            if isinstance(product, Mapping):
+                return {
+                    "product": {
+                        "hs6_id": product.get("hs6_id"),
+                        "hs_version": product.get("hs_version"),
+                        "hs6_code": product.get("hs6_code"),
+                        "hs6_display": product.get("hs6_display"),
+                        "chapter": product.get("chapter"),
+                        "heading": product.get("heading"),
+                        "description": product.get("description"),
+                        "section": product.get("section"),
+                        "section_name": product.get("section_name"),
+                    }
+                }
+            return None
+
+        if check_type == "pathway" and check_code == "PATHWAY_EVALUATION":
+            pathway = details.get("pathway")
+            return {
+                "pathway": (
+                    {
+                        "pathway_id": pathway.get("pathway_id"),
+                        "pathway_code": pathway.get("pathway_code"),
+                        "pathway_label": pathway.get("pathway_label"),
+                        "priority_rank": pathway.get("priority_rank"),
+                    }
+                    if isinstance(pathway, Mapping)
+                    else None
+                ),
+                "result": details.get("result"),
+                "evaluated_expression": details.get("evaluated_expression"),
+                "missing_variables": details.get("missing_variables", []),
+                **(
+                    {"indeterminate": True}
+                    if details.get("indeterminate") is True
+                    else {}
+                ),
+            }
+
+        if check_type == "tariff" and check_code == "TARIFF_RESOLUTION":
+            tariff_resolution = details.get("tariff_resolution")
+            if isinstance(tariff_resolution, Mapping):
+                return {
+                    "tariff_resolution": {
+                        "preferential_rate": tariff_resolution.get("preferential_rate"),
+                        "base_rate": tariff_resolution.get("base_rate"),
+                        "schedule_status": tariff_resolution.get("schedule_status"),
+                        "tariff_status": tariff_resolution.get("tariff_status"),
+                        "provenance_ids": tariff_resolution.get("provenance_ids", []),
+                        "schedule_source_id": tariff_resolution.get("schedule_source_id"),
+                        "rate_source_id": tariff_resolution.get("rate_source_id"),
+                        "line_page_ref": tariff_resolution.get("line_page_ref"),
+                        "rate_page_ref": tariff_resolution.get("rate_page_ref"),
+                        "table_ref": tariff_resolution.get("table_ref"),
+                        "row_ref": tariff_resolution.get("row_ref"),
+                        "resolved_rate_year": tariff_resolution.get("resolved_rate_year"),
+                        "used_fallback_rate": tariff_resolution.get("used_fallback_rate", False),
+                    }
+                }
+            tariff_outcome = details.get("tariff_outcome")
+            if isinstance(tariff_outcome, Mapping):
+                return {"tariff_outcome": dict(tariff_outcome)}
+            return None
+
+        return dict(details)
 
     def _select_selected_pathway_check(
         self,
@@ -1275,7 +1482,8 @@ class EligibilityService:
         }
         try:
             mutable_checks = [dict(check) for check in audit_checks]
-            await self._attach_provenance_snapshots(mutable_checks)
+            # Provenance snapshots are hydrated lazily by AuditService so the assessment
+            # path does not block on extra source/provision reads before persisting.
             evaluation_data["decision_snapshot_json"] = self._build_decision_snapshot(
                 mutable_checks,
                 selected_pathway_code=response.pathway_used,
@@ -1311,6 +1519,40 @@ class EligibilityService:
                 extra={"case_id": request.case_id, "hs6_code": response.hs6_code},
             )
             return False
+
+    async def _persist_or_prepare_evaluation(
+        self,
+        *,
+        request: EligibilityRequest,
+        assessment_date: date,
+        rule_bundle: RuleResolutionResult,
+        response: EligibilityAssessmentResponse,
+        pathway_used: str | None,
+        audit_checks: Sequence[Mapping[str, Any]],
+        persist_evaluation: bool,
+    ) -> bool:
+        """Persist immediately or capture a compact replay payload for detached writes."""
+
+        if persist_evaluation:
+            self._last_prepared_persistence = None
+            return await self._persist_evaluation_if_possible(
+                request=request,
+                assessment_date=assessment_date,
+                rule_bundle=rule_bundle,
+                response=response,
+                pathway_used=pathway_used,
+                audit_checks=audit_checks,
+            )
+
+        self._last_persisted_evaluation_id = None
+        self._last_prepared_persistence = PreparedEvaluationPersistence(
+            request=request.model_copy(deep=True),
+            assessment_date=assessment_date,
+            rule_bundle=rule_bundle,
+            pathway_used=pathway_used,
+            audit_checks=tuple(dict(check) for check in audit_checks),
+        )
+        return False
 
     def _build_pending_alert_specs_if_possible(
         self,

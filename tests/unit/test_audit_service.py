@@ -832,6 +832,106 @@ async def test_get_decision_trace_prefers_persisted_provenance_snapshot() -> Non
 
 
 @pytest.mark.asyncio
+async def test_get_decision_trace_fetches_live_provenance_when_snapshot_missing() -> None:
+    """Replay should hydrate provenance from the sources repository when no snapshot was persisted."""
+
+    evaluation_id = _uuid(127)
+    case_id = _uuid(128)
+    source_id = str(_uuid(129))
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    sources_repository = AsyncMock()
+    service = AuditService(
+        evaluations_repository,
+        cases_repository,
+        sources_repository=sources_repository,
+    )
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(130),
+                evaluation_id=evaluation_id,
+                check_type="rule",
+                check_code="PSR_RESOLUTION",
+                passed=True,
+                details_json={
+                    "psr_rule": {
+                        "psr_id": str(_uuid(131)),
+                        "source_id": source_id,
+                        "appendix_version": "v0.1",
+                        "hs_version": "HS2017",
+                        "hs6_code": "110311",
+                        "hs_level": "subheading",
+                        "rule_scope": "subheading",
+                        "product_description": "Groats and meal of wheat",
+                        "legal_rule_text_verbatim": "CTH",
+                        "legal_rule_text_normalized": "CTH",
+                        "rule_status": "agreed",
+                        "effective_date": "2024-01-01",
+                        "page_ref": 1,
+                        "table_ref": "Appendix IV",
+                        "row_ref": "110311",
+                    },
+                },
+            ),
+            _check_row(
+                check_result_id=_uuid(132),
+                evaluation_id=evaluation_id,
+                check_type="decision",
+                check_code="FINAL_DECISION",
+                passed=True,
+                details_json={
+                    "final_decision": {
+                        "eligible": True,
+                        "failure_codes": [],
+                        "missing_facts": [],
+                    }
+                },
+            ),
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = None
+    sources_repository.get_source.return_value = {
+        "source_id": source_id,
+        "short_title": "Appendix IV",
+        "version_label": "2025.01",
+        "publication_date": "2025-01-01",
+        "effective_date": "2025-01-01",
+    }
+    sources_repository.get_provisions_for_source.return_value = [
+        {
+            "provision_id": str(_uuid(133)),
+            "source_id": source_id,
+            "instrument_name": "Appendix IV",
+            "article_ref": "Art. 6",
+            "annex_ref": "Annex 2",
+            "topic_primary": "origin_rules",
+            "page_start": 14,
+            "page_end": 14,
+            "provision_text_verbatim": "Change in tariff heading required.",
+            "provision_text_normalized": "cth",
+        }
+    ]
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.final_decision.provenance is not None
+    assert result.final_decision.provenance.rule is not None
+    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"
+    assert (
+        result.final_decision.provenance.rule.supporting_provisions[0].provision_text_verbatim
+        == "Change in tariff heading required."
+    )
+    sources_repository.get_source.assert_awaited_once_with(source_id)
+    assert sources_repository.get_provisions_for_source.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_get_decision_trace_rehydrates_summary_checks_from_decision_snapshot() -> None:
     """Snapshot-only evaluations should replay without persisted eligibility_check_result rows."""
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, Response
 
 from app.api.deps import require_assessment_rate_limit
-from app.api.deps import assessment_eligibility_service_context
+from app.api.deps import run_replayable_case_assessment, run_replayable_interface_assessment
 from app.api.deps import schedule_advisory_alert_dispatch
 from app.schemas.assessments import (
     CaseAssessmentRequest,
@@ -30,10 +30,9 @@ async def assess_case(
     response: Response,
     background_tasks: BackgroundTasks,
 ) -> EligibilityAssessmentResponse:
-    """Run one assessment and return only after the replayable transaction has closed."""
+    """Run one assessment and return only after replay persistence succeeds."""
 
-    async with assessment_eligibility_service_context() as eligibility_service:
-        assessment = await eligibility_service.assess_interface_request(payload)
+    assessment = await run_replayable_interface_assessment(payload)
     schedule_advisory_alert_dispatch(
         background_tasks,
         getattr(assessment, "pending_alert_specs", None),
@@ -53,10 +52,9 @@ async def assess_stored_case(
     response: Response,
     background_tasks: BackgroundTasks,
 ) -> EligibilityAssessmentResponse:
-    """Compatibility alias that closes the assessment transaction before responding."""
+    """Compatibility alias that persists replay state after the read snapshot closes."""
 
-    async with assessment_eligibility_service_context() as eligibility_service:
-        assessment = await eligibility_service.assess_interface_case(case_id, payload)
+    assessment = await run_replayable_case_assessment(case_id, payload)
     schedule_advisory_alert_dispatch(
         background_tasks,
         getattr(assessment, "pending_alert_specs", None),

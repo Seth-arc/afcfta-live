@@ -30,11 +30,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from pydantic import ValidationError
 
 from app.api.deps import (
-    assessment_eligibility_service_context,
     get_clarification_service,
     get_explanation_service,
     get_intake_service,
     require_assessment_rate_limit,
+    run_replayable_interface_assessment,
     schedule_advisory_alert_dispatch,
 )
 from app.config import Settings, get_settings
@@ -86,8 +86,9 @@ async def assistant_assess(
        ClarificationResponse. No DB connection made.
     3. Map draft to EligibilityRequest, stripping all NIM-only metadata. Return
        an error envelope if the mapping itself is rejected. No DB connection made.
-    4. Open a REPEATABLE READ DB session and call assess_interface_request() for
-       a guaranteed replayable audit trail. Set replay headers.
+    4. Open a REPEATABLE READ DB session, run the deterministic engine, close the
+       read snapshot, then persist the replay header on a detached write session.
+       Set replay headers.
     5. Generate plain-language explanation via ExplanationService (deterministic
        fallback always fires; explanation never alters assessment fields).
     6. Return combined AssistantResponseEnvelope.
@@ -198,8 +199,7 @@ async def assistant_assess(
     # returning. Persistence failure raises EvaluationPersistenceError → 500.
     # -------------------------------------------------------------------------
     t_engine = time.monotonic()
-    async with assessment_eligibility_service_context() as eligibility_service:
-        result = await eligibility_service.assess_interface_request(eligibility_request)
+    result = await run_replayable_interface_assessment(eligibility_request)
     engine_latency_ms = int((time.monotonic() - t_engine) * 1000)
     schedule_advisory_alert_dispatch(
         background_tasks,

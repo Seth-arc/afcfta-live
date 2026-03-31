@@ -4,14 +4,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Response
 
-from app.api.deps import require_assessment_rate_limit
-from app.api.deps import run_replayable_case_assessment, run_replayable_interface_assessment
-from app.api.deps import schedule_advisory_alert_dispatch
+from app.api.deps import (
+    _persist_prepared_interface_assessment,
+    assessment_eligibility_service_context,
+    require_assessment_rate_limit,
+    schedule_advisory_alert_dispatch,
+)
 from app.schemas.assessments import (
     CaseAssessmentRequest,
     EligibilityAssessmentResponse,
     EligibilityRequest,
 )
+from app.services.eligibility_service import PreparedInterfaceAssessment
 
 router = APIRouter(dependencies=[Depends(require_assessment_rate_limit)])
 
@@ -22,6 +26,29 @@ def _set_replay_headers(response: Response, *, case_id: str, evaluation_id: str)
     response.headers["X-AIS-Case-Id"] = case_id
     response.headers["X-AIS-Evaluation-Id"] = evaluation_id
     response.headers["X-AIS-Audit-URL"] = f"/api/v1/audit/evaluations/{evaluation_id}"
+
+
+async def run_replayable_interface_assessment(payload: EligibilityRequest):
+    """Run assessment in a repeatable-read scope, then persist replay state separately."""
+
+    async with assessment_eligibility_service_context() as eligibility_service:
+        prepared = await eligibility_service.prepare_interface_request_assessment(payload)
+        if not isinstance(prepared, PreparedInterfaceAssessment):
+            return await eligibility_service.assess_interface_request(payload)
+    return await _persist_prepared_interface_assessment(prepared)
+
+
+async def run_replayable_case_assessment(
+    case_id: str,
+    payload: CaseAssessmentRequest,
+):
+    """Run case-backed assessment in repeatable-read, then persist replay state separately."""
+
+    async with assessment_eligibility_service_context() as eligibility_service:
+        prepared = await eligibility_service.prepare_interface_case_assessment(case_id, payload)
+        if not isinstance(prepared, PreparedInterfaceAssessment):
+            return await eligibility_service.assess_interface_case(case_id, payload)
+    return await _persist_prepared_interface_assessment(prepared)
 
 
 @router.post("/assessments", response_model=EligibilityAssessmentResponse)

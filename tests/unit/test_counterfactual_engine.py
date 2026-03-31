@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from app.services.nim.counterfactual_engine import (
     CounterfactualEngine,
     CounterfactualResult,

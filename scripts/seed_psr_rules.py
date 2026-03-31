@@ -485,7 +485,7 @@ async def insert_applicability(session, rule: RuleSpec) -> int:
     scope_field = "chapter" if rule.hs_level == HsLevelEnum.CHAPTER else "heading"
     # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
     # `scope_field` is constrained to {"chapter","heading"} and remaining values are bound params.
-    statement = text(
+    statement = text(  # nosemgrep
         f"""
         INSERT INTO hs6_psr_applicability (
           applicability_id,

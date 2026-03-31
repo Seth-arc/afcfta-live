@@ -122,7 +122,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_decision_renderer.py -v
 ```
-
+# Completed 31 March
 ---
 
 ## Prompt 2 — Implement the counterfactual engine
@@ -180,7 +180,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_counterfactual_engine.py -v
 ```
-
+# Completed 31 March
 ---
 
 ## Prompt 3 — Implement the NIM rendering service

@@ -8,6 +8,8 @@ from typing import Any
 from sqlalchemy import delete, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.cache as cache
+from app.config import get_settings
 from app.db.models.sources import LegalProvision, SourceRegistry
 
 
@@ -190,6 +192,8 @@ class SourcesRepository:
         self,
         source_id: str,
         limit: int = 5,
+        *,
+        include_text: bool = False,
     ) -> list[Mapping[str, Any]]:
         """Return thin provision summaries for one source, ordered by authority weight.
 
@@ -200,18 +204,36 @@ class SourcesRepository:
         verbatim text.
         """
 
+        settings = get_settings()
+        cache_key = ("source_provisions", source_id, limit, include_text)
+        if settings.CACHE_STATIC_LOOKUPS:
+            hit, cached = cache.get(cache.provenance_store, cache_key)
+            if hit:
+                return cached
+
         provision_table = LegalProvision.__table__
-        statement = (
-            select(
-                provision_table.c.provision_id,
-                provision_table.c.source_id,
-                provision_table.c.instrument_name,
-                provision_table.c.article_ref,
-                provision_table.c.annex_ref,
-                provision_table.c.topic_primary,
-                provision_table.c.page_start,
-                provision_table.c.page_end,
+        selected_columns = [
+            provision_table.c.provision_id,
+            provision_table.c.source_id,
+            provision_table.c.instrument_name,
+            provision_table.c.article_ref,
+            provision_table.c.annex_ref,
+            provision_table.c.topic_primary,
+            provision_table.c.page_start,
+            provision_table.c.page_end,
+        ]
+        if include_text:
+            selected_columns.extend(
+                [
+                    provision_table.c.provision_text_verbatim,
+                    provision_table.c.provision_text_normalized,
+                    provision_table.c.effective_date,
+                    provision_table.c.expiry_date,
+                    provision_table.c.status,
+                ]
             )
+        statement = (
+            select(*selected_columns)
             .where(provision_table.c.source_id == source_id)
             .order_by(
                 provision_table.c.authority_weight.desc(),
@@ -220,7 +242,43 @@ class SourcesRepository:
             .limit(limit)
         )
         result = await self.session.execute(statement)
-        return list(result.mappings().all())
+        rows = [dict(row) for row in result.mappings().all()]
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.put(cache.provenance_store, cache_key, rows, settings.CACHE_TTL_SECONDS)
+        return rows
+
+    async def get_source_snapshot(
+        self,
+        source_id: str,
+        *,
+        provision_limit: int = 5,
+    ) -> Mapping[str, Any] | None:
+        """Return one source row plus provision snapshots suitable for audit persistence."""
+
+        settings = get_settings()
+        cache_key = ("source_snapshot", source_id, provision_limit)
+        if settings.CACHE_STATIC_LOOKUPS:
+            hit, cached = cache.get(cache.provenance_store, cache_key)
+            if hit:
+                return cached
+
+        source = await self.get_source(source_id)
+        if source is None:
+            if settings.CACHE_STATIC_LOOKUPS:
+                cache.put(cache.provenance_store, cache_key, None, settings.CACHE_TTL_SECONDS)
+            return None
+
+        snapshot = {
+            "source": dict(source),
+            "supporting_provisions": await self.get_provisions_for_source(
+                source_id,
+                limit=provision_limit,
+                include_text=True,
+            ),
+        }
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.put(cache.provenance_store, cache_key, snapshot, settings.CACHE_TTL_SECONDS)
+        return snapshot
 
     async def lookup_by_topic(self, topic: str, limit: int = 10) -> list[Mapping[str, Any]]:
         provision_table = LegalProvision.__table__

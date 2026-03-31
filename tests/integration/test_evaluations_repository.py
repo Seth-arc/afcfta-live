@@ -289,6 +289,52 @@ async def test_persist_evaluation_with_no_checks_returns_empty_check_list(
 
 
 @pytest.mark.asyncio
+async def test_persist_evaluation_supports_snapshot_only_mode(
+    repositories: tuple[AsyncSession, CasesRepository, EvaluationsRepository],
+) -> None:
+    """Snapshot-only persistence should skip eligibility_check_result inserts entirely."""
+
+    session, cases_repository, evaluations_repository = repositories
+    case_id = await _create_case(session, cases_repository)
+
+    result = await evaluations_repository.persist_evaluation(
+        {
+            **_evaluation_payload(case_id=case_id, evaluation_date=date(2025, 1, 4)),
+            "decision_snapshot_json": {
+                "snapshot_version": 1,
+                "final_decision_check": {
+                    "check_type": "decision",
+                    "check_code": "FINAL_DECISION",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {"final_decision": {"eligible": True}},
+                },
+            },
+        },
+        [
+            _check_payload(
+                check_type="decision",
+                check_code="FINAL_DECISION",
+                passed=True,
+                severity="info",
+                explanation="Final decision resolved.",
+            )
+        ],
+        persist_check_results=False,
+    )
+    await session.commit()
+
+    bundle = await evaluations_repository.get_evaluation_with_checks(
+        str(result["evaluation"]["evaluation_id"])
+    )
+
+    assert result["checks"] == []
+    assert bundle is not None
+    assert bundle["checks"] == []
+    assert bundle["evaluation"]["decision_snapshot_json"]["snapshot_version"] == 1
+
+
+@pytest.mark.asyncio
 async def test_add_facts_accepts_mixed_value_types_in_one_batch(
     repositories: tuple[AsyncSession, CasesRepository, EvaluationsRepository],
 ) -> None:

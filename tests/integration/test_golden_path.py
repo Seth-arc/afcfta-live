@@ -34,6 +34,7 @@ from app.db.models.status import StatusAssertion
 from app.db.session import assessment_session_context
 from app.db.models.tariffs import TariffScheduleHeader, TariffScheduleLine, TariffScheduleRateByYear
 from tests.fixtures.golden_cases import GOLDEN_CASES
+from tests.integration.seed_helpers import allocate_unused_hs6_code
 
 pytestmark = pytest.mark.integration
 
@@ -108,13 +109,13 @@ def _build_source(tag: str, *, source_type: SourceTypeEnum) -> SourceRegistry:
 async def _seed_snapshot_alignment_candidate() -> dict[str, str]:
     """Insert one deterministic two-year candidate with date-sensitive rule status overlays."""
 
-    hs6_code = f"97{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source("snapshot-rule", source_type=SourceTypeEnum.APPENDIX)
     tariff_source = _build_source("snapshot-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
     status_source = _build_source("snapshot-status", source_type=SourceTypeEnum.STATUS_NOTICE)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        hs6_code = await allocate_unused_hs6_code(session, prefix="97")
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,
@@ -237,11 +238,11 @@ async def _seed_snapshot_alignment_candidate() -> dict[str, str]:
 async def _seed_missing_schedule_candidate() -> dict[str, str]:
     """Insert one deterministic supported-corridor rule bundle without tariff coverage."""
 
-    hs6_code = f"95{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source("missing-schedule-rule", source_type=SourceTypeEnum.APPENDIX)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        hs6_code = await allocate_unused_hs6_code(session, prefix="95")
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,
@@ -308,7 +309,6 @@ async def _seed_blocker_audit_candidate(
 ) -> dict[str, str]:
     """Insert one deterministic blocker fixture with tariff coverage and optional corridor status."""
 
-    hs6_code = f"{code_prefix}{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source(f"{tag}-rule", source_type=SourceTypeEnum.APPENDIX)
     tariff_source = _build_source(f"{tag}-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
     status_source = (
@@ -319,6 +319,7 @@ async def _seed_blocker_audit_candidate(
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        hs6_code = await allocate_unused_hs6_code(session, prefix=code_prefix)
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,

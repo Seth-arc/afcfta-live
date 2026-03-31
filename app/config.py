@@ -29,6 +29,7 @@ class Settings(BaseSettings):
 
     # In-process cache for static reference lookups
     CACHE_STATIC_LOOKUPS: bool = True
+    CACHE_STATUS_LOOKUPS: bool = False
     CACHE_TTL_SECONDS: int = 300
 
     # API authentication
@@ -57,8 +58,11 @@ class Settings(BaseSettings):
 
     # Prometheus metrics scraping
     # When True, expose Prometheus-compatible metrics at /metrics for scrapers.
-    # Leave False unless a Prometheus-compatible collector is configured.
+    # Outside development/test/ci, metrics must remain authenticated.
     METRICS_ENABLED: bool = False
+    METRICS_AUTH_REQUIRED: bool = True
+    METRICS_AUTH_HEADER_NAME: str = "X-Metrics-Key"
+    METRICS_AUTH_KEY: str = ""
 
     # Optional external error tracking
     ERROR_TRACKING_BACKEND: str = "none"
@@ -88,6 +92,7 @@ class Settings(BaseSettings):
     # Leave empty to disable CORS headers (suitable for pure API / non-browser clients).
     # Example: CORS_ALLOW_ORIGINS=https://trader.afcfta.example,https://staging.afcfta.example
     CORS_ALLOW_ORIGINS: str = ""
+    ALLOWED_HOSTS: str = ""
 
     # Application metadata
     APP_TITLE: str = "AfCFTA Intelligence API"
@@ -104,18 +109,33 @@ class Settings(BaseSettings):
     def _nim_enabled_requires_companions(self) -> "Settings":
         """When NIM_ENABLED=true, NIM_BASE_URL, NIM_API_KEY, and NIM_MODEL must be non-empty."""
         if not self.NIM_ENABLED:
-            return self
-        missing: list[str] = []
-        if not self.NIM_BASE_URL:
-            missing.append("NIM_BASE_URL")
-        if not self.NIM_API_KEY:
-            missing.append("NIM_API_KEY")
-        if not self.NIM_MODEL:
-            missing.append("NIM_MODEL")
-        if missing:
+            pass
+        else:
+            missing: list[str] = []
+            if not self.NIM_BASE_URL:
+                missing.append("NIM_BASE_URL")
+            if not self.NIM_API_KEY:
+                missing.append("NIM_API_KEY")
+            if not self.NIM_MODEL:
+                missing.append("NIM_MODEL")
+            if missing:
+                raise ValueError(
+                    f"NIM_ENABLED=true but the following required fields are empty: "
+                    f"{', '.join(missing)}"
+                )
+
+        if self.METRICS_ENABLED and not self.METRICS_AUTH_REQUIRED and self.ENV not in {
+            "development",
+            "test",
+            "ci",
+        }:
             raise ValueError(
-                f"NIM_ENABLED=true but the following required fields are empty: "
-                f"{', '.join(missing)}"
+                "METRICS_AUTH_REQUIRED must remain true when METRICS_ENABLED=true "
+                "outside development/test/ci."
+            )
+        if self.ENV not in {"development", "test", "ci"} and not self.ALLOWED_HOSTS.strip():
+            raise ValueError(
+                "ALLOWED_HOSTS must be set outside development/test/ci."
             )
         return self
 

@@ -24,6 +24,35 @@ This is the layer that turns a safe, structured assistant into a **decision-supp
 
 ---
 
+# Freeze Window Guardrail (Mandatory)
+
+When the 48-hour contract freeze is active, Decision Renderer work must stay
+within the frozen public-surface rules from `docs/dev/pre_nim_gate_closure.md`.
+
+Allowed during freeze:
+
+- additive internal renderer/counterfactual logic
+- internal refactors that do not change public request/response contracts
+- tests and docs that do not alter frozen schema behavior
+
+Blocked during freeze:
+
+- edits to frozen schema files:
+  - `app/schemas/assessments.py`
+  - `app/schemas/cases.py`
+  - `app/schemas/audit.py`
+  - `app/schemas/nim/assistant.py`
+  - `app/schemas/nim/clarification.py`
+  - `app/schemas/nim/explanation.py`
+  - `app/schemas/nim/intake.py`
+- any serialized response-shape change for assessment, audit, or assistant
+- alias/discriminator/validation behavior changes that alter contract semantics
+
+If any blocked change is made, freeze is invalidated and a fresh full gate rerun
+is required from a clean commit before release declaration.
+
+---
+
 # What this layer is and is not
 
 ## It is

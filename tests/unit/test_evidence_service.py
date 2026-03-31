@@ -320,6 +320,63 @@ async def test_build_readiness_passes_assessment_date_to_repository_calls() -> N
     )
 
 
+@pytest.mark.asyncio
+async def test_build_readiness_for_targets_returns_first_target_with_content() -> None:
+    """Batch target lookup should stop on the first target that yields actual evidence content."""
+
+    repository = AsyncMock(spec=EvidenceRepository)
+    repository.get_readiness_inputs_for_targets.return_value = [
+        {
+            "entity_type": "pathway",
+            "entity_key": "PATHWAY:pathway-empty",
+            "requirements": [],
+            "questions": [],
+        },
+        {
+            "entity_type": "hs6_rule",
+            "entity_key": "HS6_RULE:psr-populated",
+            "requirements": [
+                build_requirement(
+                    "certificate_of_origin",
+                    "Certificate of origin",
+                    persona_mode="system",
+                )
+            ],
+            "questions": [
+                build_question(
+                    "Origin evidence reviewed?",
+                    persona_mode="system",
+                    risk_category="general",
+                )
+            ],
+        },
+    ]
+    service = EvidenceService(repository)
+
+    result = await service.build_readiness_for_targets(
+        [
+            ("pathway", "PATHWAY:pathway-empty"),
+            ("hs6_rule", "HS6_RULE:psr-populated"),
+        ],
+        persona_mode="exporter",
+        existing_documents=[],
+        confidence_class="complete",
+        assessment_date=_ASSESSMENT_DATE,
+    )
+
+    repository.get_readiness_inputs_for_targets.assert_awaited_once_with(
+        [
+            ("pathway", "PATHWAY:pathway-empty"),
+            ("hs6_rule", "HS6_RULE:psr-populated"),
+        ],
+        persona_mode="exporter",
+        risk_category=None,
+        as_of_date=_ASSESSMENT_DATE,
+    )
+    assert result.required_items == ["Certificate of origin"]
+    assert result.verification_questions == ["Origin evidence reviewed?"]
+
+
 def build_windowed_requirement(
     requirement_type: str,
     description: str,

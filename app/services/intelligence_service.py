@@ -38,22 +38,52 @@ class IntelligenceService:
     ) -> list[Mapping[str, Any]]:
         """Persist advisory alerts for the supported assessment trigger conditions."""
 
+        return await self.persist_alert_specs(
+            self.build_assessment_alert_specs(
+                request=request,
+                rule_bundle=rule_bundle,
+                tariff_result=tariff_result,
+                corridor_overlay=corridor_overlay,
+                response=response,
+            )
+        )
+
+    async def persist_alert_specs(
+        self,
+        specs: Sequence[Mapping[str, Any]],
+    ) -> list[Mapping[str, Any]]:
+        """Persist advisory alert specs, skipping duplicate active alerts."""
+
         created_alerts: list[Mapping[str, Any]] = []
-        for spec in self._build_alert_specs(
+        for spec in specs:
+            payload = dict(spec)
+            active_alerts = await self.intelligence_repository.get_active_alerts(
+                payload["entity_type"],
+                payload["entity_key"],
+            )
+            if self._has_matching_active_alert(active_alerts, payload["alert_type"]):
+                continue
+            created_alerts.append(await self.intelligence_repository.create_alert(payload))
+        return created_alerts
+
+    def build_assessment_alert_specs(
+        self,
+        *,
+        request: EligibilityRequest,
+        rule_bundle: RuleResolutionResult,
+        tariff_result: TariffResolutionResult | None,
+        corridor_overlay: StatusOverlay,
+        response: EligibilityAssessmentResponse,
+    ) -> list[dict[str, Any]]:
+        """Return advisory alert specs without performing any database writes."""
+
+        return self._build_alert_specs(
             request=request,
             rule_bundle=rule_bundle,
             tariff_result=tariff_result,
             corridor_overlay=corridor_overlay,
             response=response,
-        ):
-            active_alerts = await self.intelligence_repository.get_active_alerts(
-                spec["entity_type"],
-                spec["entity_key"],
-            )
-            if self._has_matching_active_alert(active_alerts, spec["alert_type"]):
-                continue
-            created_alerts.append(await self.intelligence_repository.create_alert(spec))
-        return created_alerts
+        )
 
     def _build_alert_specs(
         self,

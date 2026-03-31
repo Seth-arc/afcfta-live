@@ -11,8 +11,8 @@ Responsibility boundary:
 - Does NOT call the deterministic engine.
 
 Priority order for gap selection (deterministic, not model-driven):
-0. Intake rejection reasons that require a deterministic retry prompt
-   before any gap-based clarification (for example oversized input).
+0. Intake rejection reasons from non-HTTP callers or other internal paths that
+   require a deterministic retry prompt before any gap-based clarification.
 1. Required draft facts absent from NimAssessmentDraft (hs6_code, exporter,
    importer, year, persona_mode) — must be resolved before the engine can run.
 2. Missing production facts reported in the engine's `missing_facts` field

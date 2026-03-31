@@ -89,11 +89,13 @@ async def test_metrics_endpoint_returns_404_when_disabled(
 
 
 @pytest.mark.asyncio
-async def test_metrics_endpoint_returns_plaintext_metrics_when_enabled(
+async def test_metrics_endpoint_requires_auth_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
     test_settings: Settings,
 ) -> None:
     monkeypatch.setenv("METRICS_ENABLED", "true")
+    monkeypatch.setenv("METRICS_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("METRICS_AUTH_KEY", "pytest-metrics-key")
     _install_fake_instrumentator(monkeypatch)
     get_settings.cache_clear()
     main_module = _reload_main_module()
@@ -102,10 +104,73 @@ async def test_metrics_endpoint_returns_plaintext_metrics_when_enabled(
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get("/metrics")
 
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "METRICS_AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_accepts_metrics_header_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+) -> None:
+    monkeypatch.setenv("METRICS_ENABLED", "true")
+    monkeypatch.setenv("METRICS_AUTH_REQUIRED", "true")
+    monkeypatch.setenv("METRICS_AUTH_KEY", "pytest-metrics-key")
+    _install_fake_instrumentator(monkeypatch)
+    get_settings.cache_clear()
+    main_module = _reload_main_module()
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"X-Metrics-Key": "pytest-metrics-key"},
+    ) as client:
+        response = await client.get("/metrics")
+
     assert response.status_code == 200, response.text
     assert response.headers["content-type"].startswith("text/plain")
     assert "http_request_duration_seconds" in response.text
     assert "http_requests_total" in response.text
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_falls_back_to_api_key_when_metrics_key_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+) -> None:
+    monkeypatch.setenv("METRICS_ENABLED", "true")
+    monkeypatch.setenv("METRICS_AUTH_REQUIRED", "true")
+    monkeypatch.delenv("METRICS_AUTH_KEY", raising=False)
+    _install_fake_instrumentator(monkeypatch)
+    get_settings.cache_clear()
+    main_module = _reload_main_module()
+
+    transport = ASGITransport(app=main_module.app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={"X-API-Key": "pytest-api-key"},
+    ) as client:
+        response = await client.get("/metrics")
+
+    assert response.status_code == 200
+
+
+def test_settings_reject_public_metrics_outside_nonprod(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+) -> None:
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("METRICS_ENABLED", "true")
+    monkeypatch.setenv("METRICS_AUTH_REQUIRED", "false")
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError,
+        match="METRICS_AUTH_REQUIRED must remain true when METRICS_ENABLED=true outside development/test/ci.",
+    ):
+        get_settings()
 
 
 def test_create_app_fails_fast_when_metrics_enabled_but_dependency_missing(

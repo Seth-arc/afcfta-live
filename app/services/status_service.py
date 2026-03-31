@@ -1,4 +1,4 @@
-"""Reduce current status assertions and active transitions into an overlay."""
+"""Reduce current status assertions and active transitions into overlays."""
 
 from __future__ import annotations
 
@@ -20,27 +20,56 @@ class StatusService:
         entity_key: str,
         as_of_date: date | None = None,
     ) -> StatusOverlay:
-        """Fetch status plus transitions active on the requested date and derive overlays."""
+        """Fetch one status overlay active on the requested date."""
 
-        status = await self.status_repository.get_status(entity_type, entity_key, as_of_date)
-        transitions = await self.status_repository.get_active_transitions(
-            entity_type,
-            entity_key,
-            as_of_date,
-        )
+        overlays = await self.get_status_overlays([(entity_type, entity_key)], as_of_date)
+        return overlays[(entity_type, entity_key)]
+
+    async def get_status_overlays(
+        self,
+        targets: list[tuple[str, str]],
+        as_of_date: date | None = None,
+    ) -> dict[tuple[str, str], StatusOverlay]:
+        """Fetch multiple overlays in one repository round trip."""
+
+        rows = await self.status_repository.get_status_overlay_rows(targets, as_of_date)
+        overlays: dict[tuple[str, str], StatusOverlay] = {}
+        for row in rows:
+            entity_type = str(row["entity_type"])
+            entity_key = str(row["entity_key"])
+            overlays[(entity_type, entity_key)] = self._build_overlay(
+                status=row.get("status"),
+                transitions=row.get("transitions") or [],
+            )
+
+        for entity_type, entity_key in targets:
+            overlays.setdefault(
+                (entity_type, entity_key),
+                self._build_overlay(status=None, transitions=[]),
+            )
+        return overlays
+
+    def _build_overlay(
+        self,
+        *,
+        status: object,
+        transitions: list[object],
+    ) -> StatusOverlay:
+        """Transform repository payloads into one API-facing overlay."""
 
         active_transitions = [
             ActiveTransitionOverlay(
-                transition_type=transition["transition_type"],
-                description=transition["transition_text_verbatim"],
-                start_date=transition["start_date"],
-                end_date=transition["end_date"],
-                review_trigger=transition["review_trigger"],
+                transition_type=str(transition["transition_type"]),
+                description=str(transition["transition_text_verbatim"]),
+                start_date=transition.get("start_date"),
+                end_date=transition.get("end_date"),
+                review_trigger=transition.get("review_trigger"),
             )
             for transition in transitions
+            if isinstance(transition, dict)
         ]
 
-        if status is None:
+        if not isinstance(status, dict):
             return StatusOverlay(
                 status_type="unknown",
                 confidence_class="incomplete",
@@ -49,16 +78,16 @@ class StatusService:
                 source_text_verbatim=None,
             )
 
-        status_type = status["status_type"]
+        status_type = str(status["status_type"])
         constraints = self._build_constraints(status_type, active_transitions)
         return StatusOverlay(
             status_type=status_type,
-            effective_from=status["effective_from"],
-            effective_to=status["effective_to"],
+            effective_from=status.get("effective_from"),
+            effective_to=status.get("effective_to"),
             confidence_class=self._compute_confidence_class(status_type),
             active_transitions=active_transitions,
             constraints=constraints,
-            source_text_verbatim=status["status_text_verbatim"],
+            source_text_verbatim=status.get("status_text_verbatim"),
         )
 
     @staticmethod

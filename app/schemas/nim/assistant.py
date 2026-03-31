@@ -43,12 +43,11 @@ class AssistantContext(BaseModel):
 class AssistantRequest(BaseModel):
     """NIM assistant request: natural-language user input with optional context hints.
 
-    The 2000-character cap is enforced in IntakeService immediately before any
-    NIM call so oversized input can return a structured clarification response
-    instead of a schema-level 422.
+    `user_input` is capped at 2000 characters at the API boundary so oversized
+    requests fail with HTTP 422 before any NIM call can occur.
     """
 
-    user_input: str = Field(min_length=1)
+    user_input: str = Field(min_length=1, max_length=2000)
     context: AssistantContext | None = None
 
     model_config = ConfigDict(

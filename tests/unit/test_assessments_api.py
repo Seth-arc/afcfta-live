@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import date
 from types import SimpleNamespace
 from uuid import uuid4
@@ -72,26 +71,30 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
     evaluation_id = str(uuid4())
     captured_payloads: list[object] = []
     lifecycle: list[str] = []
+    scheduled_alert_specs: list[object] = []
+    pending_alert_specs = (
+        {
+            "alert_type": "data_quality_issue",
+            "entity_type": "corridor",
+            "entity_key": "corridor:GHA:NGA:110311",
+        },
+    )
 
-    class FakeEligibilityService:
-        async def assess_interface_request(self, payload) -> object:
-            lifecycle.append("service_called")
-            captured_payloads.append(payload)
-            return SimpleNamespace(
-                case_id=case_id,
-                evaluation_id=evaluation_id,
-                response=_assessment_response(),
-            )
+    async def fake_run(payload) -> object:
+        lifecycle.append("helper_called")
+        captured_payloads.append(payload)
+        return SimpleNamespace(
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+            response=_assessment_response(),
+            pending_alert_specs=pending_alert_specs,
+        )
 
-    @asynccontextmanager
-    async def fake_context():
-        lifecycle.append("context_enter")
-        try:
-            yield FakeEligibilityService()
-        finally:
-            lifecycle.append("context_exit")
-
-    monkeypatch.setattr("app.api.v1.assessments.assessment_eligibility_service_context", fake_context)
+    monkeypatch.setattr("app.api.v1.assessments.run_replayable_interface_assessment", fake_run)
+    monkeypatch.setattr(
+        "app.api.v1.assessments.schedule_advisory_alert_dispatch",
+        lambda background_tasks, specs: scheduled_alert_specs.append(specs),
+    )
 
     response = await async_client.post(
         "/api/v1/assessments",
@@ -100,7 +103,8 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
 
     assert response.status_code == 200, response.text
     assert captured_payloads[0].hs6_code == "110311"
-    assert lifecycle == ["context_enter", "service_called", "context_exit"]
+    assert lifecycle == ["helper_called"]
+    assert scheduled_alert_specs == [pending_alert_specs]
     assert response.headers["X-AIS-Case-Id"] == case_id
     assert response.headers["X-AIS-Evaluation-Id"] == evaluation_id
     assert response.headers["X-AIS-Audit-URL"] == f"/api/v1/audit/evaluations/{evaluation_id}"
@@ -164,28 +168,32 @@ async def test_assessments_case_alias_calls_interface_case_and_sets_headers(
     case_id = str(uuid4())
     evaluation_id = str(uuid4())
     lifecycle: list[str] = []
+    scheduled_alert_specs: list[object] = []
+    pending_alert_specs = (
+        {
+            "alert_type": "rule_status_changed",
+            "entity_type": "psr_rule",
+            "entity_key": "PSR:fixture",
+        },
+    )
 
-    class FakeEligibilityService:
-        async def assess_interface_case(self, requested_case_id: str, payload) -> object:
-            lifecycle.append("service_called")
-            assert requested_case_id == case_id
-            assert payload.year == 2025
-            assert payload.existing_documents == ["certificate_of_origin"]
-            return SimpleNamespace(
-                case_id=case_id,
-                evaluation_id=evaluation_id,
-                response=_assessment_response(),
-            )
+    async def fake_run(requested_case_id: str, payload) -> object:
+        lifecycle.append("helper_called")
+        assert requested_case_id == case_id
+        assert payload.year == 2025
+        assert payload.existing_documents == ["certificate_of_origin"]
+        return SimpleNamespace(
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+            response=_assessment_response(),
+            pending_alert_specs=pending_alert_specs,
+        )
 
-    @asynccontextmanager
-    async def fake_context():
-        lifecycle.append("context_enter")
-        try:
-            yield FakeEligibilityService()
-        finally:
-            lifecycle.append("context_exit")
-
-    monkeypatch.setattr("app.api.v1.assessments.assessment_eligibility_service_context", fake_context)
+    monkeypatch.setattr("app.api.v1.assessments.run_replayable_case_assessment", fake_run)
+    monkeypatch.setattr(
+        "app.api.v1.assessments.schedule_advisory_alert_dispatch",
+        lambda background_tasks, specs: scheduled_alert_specs.append(specs),
+    )
 
     response = await async_client.post(
         f"/api/v1/assessments/cases/{case_id}",
@@ -193,7 +201,8 @@ async def test_assessments_case_alias_calls_interface_case_and_sets_headers(
     )
 
     assert response.status_code == 200, response.text
-    assert lifecycle == ["context_enter", "service_called", "context_exit"]
+    assert lifecycle == ["helper_called"]
+    assert scheduled_alert_specs == [pending_alert_specs]
     assert response.headers["X-AIS-Case-Id"] == case_id
     assert response.headers["X-AIS-Evaluation-Id"] == evaluation_id
     assert response.json()["pathway_used"] == "CTH"
@@ -206,35 +215,21 @@ async def test_assessments_route_returns_structured_persistence_error_when_conte
 ) -> None:
     lifecycle: list[str] = []
 
-    class FakeEligibilityService:
-        async def assess_interface_request(self, payload) -> object:
-            lifecycle.append("service_called")
-            return SimpleNamespace(
-                case_id=str(uuid4()),
-                evaluation_id=str(uuid4()),
-                response=_assessment_response(),
-            )
+    async def failing_run(payload) -> object:
+        lifecycle.append("helper_called")
+        raise EvaluationPersistenceError(
+            "Assessment transaction failed while closing the replayable snapshot",
+            detail={"reason": "assessment_transaction_close_failed"},
+        )
 
-    @asynccontextmanager
-    async def failing_context():
-        lifecycle.append("context_enter")
-        try:
-            yield FakeEligibilityService()
-        finally:
-            lifecycle.append("context_exit")
-            raise EvaluationPersistenceError(
-                "Assessment transaction failed while closing the replayable snapshot",
-                detail={"reason": "assessment_transaction_close_failed"},
-            )
-
-    monkeypatch.setattr("app.api.v1.assessments.assessment_eligibility_service_context", failing_context)
+    monkeypatch.setattr("app.api.v1.assessments.run_replayable_interface_assessment", failing_run)
 
     response = await async_client.post(
         "/api/v1/assessments",
         json=_assessment_payload(),
     )
 
-    assert lifecycle == ["context_enter", "service_called", "context_exit"]
+    assert lifecycle == ["helper_called"]
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "EVALUATION_PERSISTENCE_ERROR"
     assert response.json()["error"]["details"] == {

@@ -4,6 +4,12 @@ Examples use the seeded v0.1 data set, especially HS6 `110311` on the
 `GHA -> NGA` corridor. Runtime-created ids such as `case_id` and `evaluation_id`
 are shown as example UUIDs.
 
+Unless stated otherwise, authenticated examples assume:
+
+```text
+X-API-Key: <your-api-key>
+```
+
 ## GET /api/v1/health
 
 Liveness check.
@@ -660,6 +666,19 @@ Returns one legal provision by `provision_id`.
 ## GET /api/v1/intelligence/corridors/{exporter}/{importer}
 
 Returns the active corridor profile for one supported corridor.
+
+Published seeded profile surface as of March 30, 2026:
+
+- `GHA -> NGA`
+- `CMR -> NGA`
+- `CIV -> NGA`
+- `SEN -> NGA`
+- `GHA -> CMR`
+
+The locked assessment corpus includes additional synthetic test-only corridors.
+Those scenarios validate deterministic assessments, but they do not imply that
+this endpoint will return a published `corridor_profile` row for every v0.1
+golden-case pair.
 
 ## GET /api/v1/intelligence/alerts
 

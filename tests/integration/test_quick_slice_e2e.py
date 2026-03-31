@@ -29,6 +29,7 @@ from app.db.models.rules import EligibilityRulePathway, HS6PSRApplicability, PSR
 from app.db.models.sources import SourceRegistry
 from app.db.models.status import StatusAssertion
 from app.db.models.tariffs import TariffScheduleHeader, TariffScheduleLine, TariffScheduleRateByYear
+from tests.integration.seed_helpers import allocate_unused_hs6_code
 
 
 pytestmark = pytest.mark.integration
@@ -184,11 +185,11 @@ async def _seed_pending_quick_slice_candidate() -> dict[str, str]:
 async def _seed_missing_schedule_quick_slice_candidate() -> dict[str, str]:
     """Insert one isolated agreed rule without tariff coverage for hard-blocker coverage."""
 
-    hs6_code = f"94{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source("missing-schedule-rule", source_type=SourceTypeEnum.APPENDIX)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        hs6_code = await allocate_unused_hs6_code(session, prefix="94")
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,
@@ -254,7 +255,6 @@ async def _seed_blocker_quick_slice_candidate(
 ) -> dict[str, str]:
     """Insert one isolated blocker fixture with optional corridor status overlay."""
 
-    hs6_code = f"{code_prefix}{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source(f"{tag}-rule", source_type=SourceTypeEnum.APPENDIX)
     tariff_source = _build_source(f"{tag}-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
     status_source = (
@@ -265,6 +265,7 @@ async def _seed_blocker_quick_slice_candidate(
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        hs6_code = await allocate_unused_hs6_code(session, prefix=code_prefix)
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,
@@ -397,13 +398,13 @@ async def _seed_not_operational_quick_slice_candidate() -> dict[str, str]:
 async def _seed_snapshot_consistency_candidate() -> dict[str, str]:
     """Insert one isolated two-year candidate with date-sensitive tariff and status state."""
 
-    hs6_code = f"96{int(uuid4().hex[:4], 16) % 10000:04d}"
     rule_source = _build_source("snapshot-rule", source_type=SourceTypeEnum.APPENDIX)
     tariff_source = _build_source("snapshot-tariff", source_type=SourceTypeEnum.TARIFF_SCHEDULE)
     status_source = _build_source("snapshot-status", source_type=SourceTypeEnum.STATUS_NOTICE)
 
     session_factory = get_async_session_factory()
     async with session_factory() as session:
+        hs6_code = await allocate_unused_hs6_code(session, prefix="96")
         product = HS6Product(
             hs_version="HS2017",
             hs6_code=hs6_code,

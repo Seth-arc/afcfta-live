@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -12,7 +11,6 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 
 from app.api.deps import (
-    get_assessment_eligibility_service,
     get_audit_service,
     get_cases_repository,
 )
@@ -164,6 +162,14 @@ async def test_create_case_with_assessment_commits_and_sets_replay_headers(
     rate_limit_calls: list[tuple[object, object]] = []
     commit_calls: list[str] = []
     assess_calls: list[tuple[str, object]] = []
+    scheduled_alert_specs: list[object] = []
+    pending_alert_specs = (
+        {
+            "alert_type": "data_quality_issue",
+            "entity_type": "corridor",
+            "entity_key": "corridor:GHA:NGA:110311",
+        },
+    )
 
     class FakeCasesRepository:
         def __init__(self) -> None:
@@ -183,24 +189,24 @@ async def test_create_case_with_assessment_commits_and_sets_replay_headers(
             assert requested_case_id == case_id
             return {"case": case_row, "facts": [fact_row]}
 
-    class FakeEligibilityService:
-        async def assess_interface_case(self, requested_case_id: str, payload) -> object:
-            assess_calls.append((requested_case_id, payload))
-            return SimpleNamespace(
-                case_id=case_id,
-                evaluation_id=evaluation_id,
-                response=_assessment_response(),
-            )
-
     async def fake_rate_limit(request, settings) -> None:
         rate_limit_calls.append((request, settings))
 
-    @asynccontextmanager
-    async def fake_context():
-        yield FakeEligibilityService()
+    async def fake_run(requested_case_id: str, payload) -> object:
+        assess_calls.append((requested_case_id, payload))
+        return SimpleNamespace(
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+            response=_assessment_response(),
+            pending_alert_specs=pending_alert_specs,
+        )
 
     monkeypatch.setattr("app.api.v1.cases.require_assessment_rate_limit", fake_rate_limit)
-    monkeypatch.setattr("app.api.v1.cases.assessment_eligibility_service_context", fake_context)
+    monkeypatch.setattr("app.api.v1.cases.run_replayable_case_assessment", fake_run)
+    monkeypatch.setattr(
+        "app.api.v1.cases.schedule_advisory_alert_dispatch",
+        lambda background_tasks, specs: scheduled_alert_specs.append(specs),
+    )
 
     async def override_cases_repository() -> FakeCasesRepository:
         return FakeCasesRepository()
@@ -246,6 +252,7 @@ async def test_create_case_with_assessment_commits_and_sets_replay_headers(
     assert commit_calls == ["commit"]
     assert assess_calls[0][0] == case_id
     assert assess_calls[0][1].existing_documents == ["certificate_of_origin"]
+    assert scheduled_alert_specs == [pending_alert_specs]
 
 
 @pytest.mark.asyncio
@@ -351,38 +358,46 @@ async def test_get_case_with_facts_returns_404_for_missing_case(
 async def test_case_assess_route_sets_replay_headers(
     app: FastAPI,
     async_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     case_id = str(uuid4())
     evaluation_id = str(uuid4())
+    scheduled_alert_specs: list[object] = []
+    pending_alert_specs = (
+        {
+            "alert_type": "rule_status_changed",
+            "entity_type": "psr_rule",
+            "entity_key": "PSR:fixture",
+        },
+    )
 
-    class FakeEligibilityService:
-        async def assess_interface_case(self, requested_case_id: str, payload) -> object:
-            assert requested_case_id == case_id
-            assert payload.year == 2025
-            assert payload.existing_documents == ["certificate_of_origin"]
-            return SimpleNamespace(
-                case_id=case_id,
-                evaluation_id=evaluation_id,
-                response=_assessment_response(),
-            )
-
-    async def override_service() -> FakeEligibilityService:
-        return FakeEligibilityService()
-
-    app.dependency_overrides[get_assessment_eligibility_service] = override_service
-
-    try:
-        response = await async_client.post(
-            f"/api/v1/cases/{case_id}/assess",
-            json={"year": 2025, "submitted_documents": ["certificate_of_origin"]},
+    async def fake_run(requested_case_id: str, payload) -> object:
+        assert requested_case_id == case_id
+        assert payload.year == 2025
+        assert payload.existing_documents == ["certificate_of_origin"]
+        return SimpleNamespace(
+            case_id=case_id,
+            evaluation_id=evaluation_id,
+            response=_assessment_response(),
+            pending_alert_specs=pending_alert_specs,
         )
-    finally:
-        app.dependency_overrides.pop(get_assessment_eligibility_service, None)
+
+    monkeypatch.setattr("app.api.v1.cases.run_replayable_case_assessment", fake_run)
+    monkeypatch.setattr(
+        "app.api.v1.cases.schedule_advisory_alert_dispatch",
+        lambda background_tasks, specs: scheduled_alert_specs.append(specs)
+    )
+
+    response = await async_client.post(
+        f"/api/v1/cases/{case_id}/assess",
+        json={"year": 2025, "submitted_documents": ["certificate_of_origin"]},
+    )
 
     assert response.status_code == 200, response.text
     assert response.headers["X-AIS-Case-Id"] == case_id
     assert response.headers["X-AIS-Evaluation-Id"] == evaluation_id
     assert response.json()["audit_persisted"] is True
+    assert scheduled_alert_specs == [pending_alert_specs]
 
 
 @pytest.mark.asyncio

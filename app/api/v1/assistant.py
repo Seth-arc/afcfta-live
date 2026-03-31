@@ -6,8 +6,8 @@ Orchestration boundary:
   truth for all legal decision fields.
 - The DB connection for the engine is opened lazily: only when the draft
   passes all completeness and confidence checks and the engine call is
-  actually needed. Clarification and 422 responses are served without
-  any DB access.
+  actually needed. Clarification responses and schema-level 422s are served
+  without any DB access.
 - assess_interface_request() guarantees a replayable audit trail before
   returning. Persistence failure propagates as 500 — no unreplayable
   decision is ever returned to the caller.
@@ -15,7 +15,7 @@ Orchestration boundary:
 - Rate limiting matches the /assessments route (assessment_rate_limit).
 
 Early-exit conditions (no DB connection, no engine call):
-1. Intake rejects oversized input and requests a shorter retry.
+1. FastAPI rejects `user_input` longer than 2000 characters with HTTP 422.
 2. Required draft facts missing (hs6_code, exporter, importer, year, persona_mode).
 3. NIM confidence below _MIN_NIM_CONFIDENCE (0.7) when present.
 4. to_eligibility_request() raises ValueError or ValidationError (malformed draft).
@@ -26,15 +26,16 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from pydantic import ValidationError
 
 from app.api.deps import (
-    assessment_eligibility_service_context,
     get_clarification_service,
     get_explanation_service,
     get_intake_service,
     require_assessment_rate_limit,
+    run_replayable_interface_assessment,
+    schedule_advisory_alert_dispatch,
 )
 from app.config import Settings, get_settings
 from app.schemas.nim.assistant import (
@@ -65,6 +66,7 @@ _MIN_NIM_CONFIDENCE: float = 0.7
 async def assistant_assess(
     payload: AssistantRequest,
     response: Response,
+    background_tasks: BackgroundTasks,
     intake_service: IntakeService = Depends(get_intake_service),
     clarification_service: ClarificationService = Depends(get_clarification_service),
     explanation_service: ExplanationService = Depends(get_explanation_service),
@@ -73,7 +75,7 @@ async def assistant_assess(
     """NIM-assisted eligibility assessment.
 
     The DB connection is opened lazily: only on the assessment path, after
-    all completeness checks pass. Clarification and 422 responses are served
+    all completeness checks pass. Clarification responses and schema-level 422s are served
     without any DB access.
 
     Orchestration flow:
@@ -84,8 +86,9 @@ async def assistant_assess(
        ClarificationResponse. No DB connection made.
     3. Map draft to EligibilityRequest, stripping all NIM-only metadata. Return
        an error envelope if the mapping itself is rejected. No DB connection made.
-    4. Open a REPEATABLE READ DB session and call assess_interface_request() for
-       a guaranteed replayable audit trail. Set replay headers.
+    4. Open a REPEATABLE READ DB session, run the deterministic engine, close the
+       read snapshot, then persist the replay header on a detached write session.
+       Set replay headers.
     5. Generate plain-language explanation via ExplanationService (deterministic
        fallback always fires; explanation never alters assessment fields).
     6. Return combined AssistantResponseEnvelope.
@@ -196,9 +199,12 @@ async def assistant_assess(
     # returning. Persistence failure raises EvaluationPersistenceError → 500.
     # -------------------------------------------------------------------------
     t_engine = time.monotonic()
-    async with assessment_eligibility_service_context() as eligibility_service:
-        result = await eligibility_service.assess_interface_request(eligibility_request)
+    result = await run_replayable_interface_assessment(eligibility_request)
     engine_latency_ms = int((time.monotonic() - t_engine) * 1000)
+    schedule_advisory_alert_dispatch(
+        background_tasks,
+        getattr(result, "pending_alert_specs", None),
+    )
 
     audit_url = f"/api/v1/audit/evaluations/{result.evaluation_id}"
     response.headers["X-AIS-Case-Id"] = result.case_id

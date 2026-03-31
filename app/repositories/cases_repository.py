@@ -9,6 +9,8 @@ from typing import Any
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.core.cache as cache
+from app.config import get_settings
 from app.db.models.cases import CaseFile, CaseInputFact
 
 
@@ -46,6 +48,7 @@ class CasesRepository:
         if not facts:
             return []
 
+        settings = get_settings()
         fact_table = CaseInputFact.__table__
         rows: list[dict[str, Any]] = []
         insertable_columns = {
@@ -95,14 +98,25 @@ class CasesRepository:
 
         if not return_ids:
             await self.session.execute(insert(fact_table).values(rows))
+            if settings.CACHE_STATIC_LOOKUPS:
+                cache.case_store.pop(("case-with-facts", case_id), None)
             return []
 
         statement = insert(fact_table).values(rows).returning(fact_table.c.fact_id)
         result = await self.session.execute(statement)
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.case_store.pop(("case-with-facts", case_id), None)
         return [str(fact_id) for fact_id in result.scalars().all()]
 
     async def get_case_with_facts(self, case_id: str) -> Mapping[str, Any] | None:
         """Return a case row with all associated facts."""
+
+        settings = get_settings()
+        cache_key = ("case-with-facts", case_id)
+        if settings.CACHE_STATIC_LOOKUPS:
+            hit, cached = cache.get(cache.case_store, cache_key)
+            if hit:
+                return cached
 
         case_table = CaseFile.__table__
         fact_table = CaseInputFact.__table__
@@ -111,6 +125,8 @@ class CasesRepository:
         case_result = await self.session.execute(case_statement)
         case_row = case_result.mappings().first()
         if case_row is None:
+            if settings.CACHE_STATIC_LOOKUPS:
+                cache.put(cache.case_store, cache_key, None, settings.CACHE_TTL_SECONDS)
             return None
 
         fact_statement = (
@@ -123,7 +139,10 @@ class CasesRepository:
             )
         )
         fact_result = await self.session.execute(fact_statement)
-        return {
+        bundle = {
             "case": case_row,
             "facts": list(fact_result.mappings().all()),
         }
+        if settings.CACHE_STATIC_LOOKUPS:
+            cache.put(cache.case_store, cache_key, bundle, settings.CACHE_TTL_SECONDS)
+        return bundle

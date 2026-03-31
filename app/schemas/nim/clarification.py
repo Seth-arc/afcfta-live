@@ -6,8 +6,8 @@ NIM is used only for phrasing — the gap selection logic lives in the service,
 not in the model.
 
 Clarification handling order:
-1. NIM intake rejection reasons that require a deterministic retry prompt
-   before any gap-based question (for example oversized input).
+1. NIM intake rejection reasons from non-HTTP callers or other internal paths
+   that require a deterministic retry prompt before any gap-based question.
 2. Required engine facts absent from the draft (hs6_code, exporter, importer,
    year, persona_mode) — must be resolved before the engine can run at all.
 3. Missing production facts reported in the engine's `missing_facts` field
@@ -41,10 +41,11 @@ class ClarificationContext(BaseModel):
     `failure_codes` are engine failure codes from `failures` that may help
     the clarification service pick the most actionable question.
 
-    `nim_rejection_reason` is set when the intake layer intentionally declines
-    to send the user's text to NIM (for example because it exceeds the
-    AGENTS.md input-length boundary) and the assistant should ask the user to
-    resend a shorter description.
+    `nim_rejection_reason` is set when an internal intake path intentionally
+    declines to send the user's text to NIM (for example because a non-HTTP
+    caller bypassed the AssistantRequest schema and exceeded the AGENTS.md
+    input-length boundary) and the assistant should ask the user to resend a
+    shorter description.
 
     At least one of missing_draft_facts, missing_engine_facts,
     missing_evidence, or nim_rejection_reason must be present. A context with

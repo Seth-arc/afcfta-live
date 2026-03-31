@@ -14,9 +14,13 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.core.countries import V01_CORRIDORS
 from app.core.entity_keys import make_entity_key
+from app.core.load_test_fixtures import LOAD_FIXTURE_CREATED_BY, LOAD_TEST_FIXTURES
 from app.core.enums import (
     AuthorityTierEnum,
+    CaseSubmissionStatusEnum,
     CorridorStatusEnum,
+    FactSourceTypeEnum,
+    FactValueTypeEnum,
     HsLevelEnum,
     InstrumentTypeEnum,
     OperatorTypeEnum,
@@ -38,6 +42,7 @@ from app.core.enums import (
 from app.db.models.evidence import EvidenceRequirement, VerificationQuestion
 from app.db.models.hs import HS6Product
 from app.db.models.intelligence import CorridorProfile
+from app.db.models.cases import CaseFile, CaseInputFact
 from app.db.models.rules import (
     EligibilityRulePathway,
     HS6PSRApplicability,
@@ -858,6 +863,62 @@ def load_existing_hs6_ids(session: Session) -> dict[str, UUID]:
     return {hs6_code: hs6_id for hs6_code, hs6_id in rows}
 
 
+def build_load_case_rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Build deterministic replayable cases for the load harness."""
+
+    cases: list[dict[str, object]] = []
+    facts: list[dict[str, object]] = []
+
+    for fixture in LOAD_TEST_FIXTURES:
+        request = fixture["request"]
+        case_id = UUID(str(fixture["case_id"]))
+        cases.append(
+            {
+                "case_id": case_id,
+                "case_external_ref": str(fixture["case_external_ref"]),
+                "persona_mode": PersonaModeEnum(str(request["persona_mode"])),
+                "exporter_state": str(request["exporter"]),
+                "importer_state": str(request["importer"]),
+                "hs_code": str(request["hs6_code"]),
+                "hs_version": str(request["hs_version"]),
+                "submission_status": CaseSubmissionStatusEnum.SUBMITTED,
+                "title": f"Load fixture {fixture['slug']}",
+                "notes": "Deterministic replayable case used by tests/load payloads.",
+                "created_by": LOAD_FIXTURE_CREATED_BY,
+                "updated_by": LOAD_FIXTURE_CREATED_BY,
+            }
+        )
+
+        for fact_order, fact in enumerate(request["production_facts"], start=1):
+            fact_value_type = FactValueTypeEnum(str(fact["fact_value_type"]))
+            fact_value_number = fact.get("fact_value_number")
+            facts.append(
+                {
+                    "fact_id": seed_uuid(f"load-case-fact/{fixture['slug']}/{fact_order}"),
+                    "case_id": case_id,
+                    "fact_type": str(fact["fact_type"]),
+                    "fact_key": str(fact["fact_key"]),
+                    "fact_value_type": fact_value_type,
+                    "fact_value_text": fact.get("fact_value_text"),
+                    "fact_value_number": (
+                        Decimal(str(fact_value_number))
+                        if fact_value_number is not None
+                        else None
+                    ),
+                    "fact_value_boolean": fact.get("fact_value_boolean"),
+                    "fact_value_date": None,
+                    "fact_value_json": None,
+                    "unit": None,
+                    "source_type": FactSourceTypeEnum.USER_INPUT,
+                    "source_reference": None,
+                    "confidence_score": Decimal("1.000"),
+                    "fact_order": fact_order,
+                }
+            )
+
+    return cases, facts
+
+
 def build_seed_rows(existing_hs6_ids: dict[str, UUID] | None = None) -> dict[str, dict[str, object]]:
     """Build all seeded rows in forward FK dependency order."""
 
@@ -977,6 +1038,7 @@ def build_seed_rows(existing_hs6_ids: dict[str, UUID] | None = None) -> dict[str
     lines: list[dict[str, object]] = []
     rates: list[dict[str, object]] = []
     corridor_profiles: list[dict[str, object]] = []
+    load_cases, load_case_facts = build_load_case_rows()
 
     for product_index, spec in enumerate(PRODUCT_SPECS, start=1):
         hs6_code = spec["hs6_code"]
@@ -1376,6 +1438,16 @@ def build_seed_rows(existing_hs6_ids: dict[str, UUID] | None = None) -> dict[str
             "table": CorridorProfile.__table__,
             "pk": "corridor_profile_id",
             "rows": corridor_profiles,
+        },
+        "case_file": {
+            "table": CaseFile.__table__,
+            "pk": "case_id",
+            "rows": load_cases,
+        },
+        "case_input_fact": {
+            "table": CaseInputFact.__table__,
+            "pk": "fact_id",
+            "rows": load_case_facts,
         },
     }
 

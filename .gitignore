@@ -9,7 +9,6 @@ tests/*-test-report/
 .env.sentry
 .env.local
 .env.*.local
-AGENTS.md
 docs/dev/prompts/
 .vscode/
 .claude/

@@ -237,6 +237,61 @@ async def test_create_app_adds_cors_middleware_when_origins_are_configured(
     assert response.headers["access-control-allow-credentials"] == "true"
 
 
+def test_settings_require_allowed_hosts_outside_nonprod(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+) -> None:
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.delenv("ALLOWED_HOSTS", raising=False)
+    get_settings.cache_clear()
+
+    with pytest.raises(
+        ValueError,
+        match="ALLOWED_HOSTS must be set outside development/test/ci.",
+    ):
+        get_settings()
+
+
+@pytest.mark.asyncio
+async def test_create_app_disables_docs_and_openapi_outside_nonprod(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+) -> None:
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("ALLOWED_HOSTS", "testserver")
+    get_settings.cache_clear()
+    main_module = _reload_main_module()
+    app = main_module.create_app()
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        docs_response = await client.get("/docs")
+        openapi_response = await client.get("/openapi.json")
+
+    assert docs_response.status_code == 404
+    assert openapi_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_app_rejects_untrusted_hosts_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    test_settings: Settings,
+) -> None:
+    monkeypatch.setenv("ALLOWED_HOSTS", "testserver")
+    get_settings.cache_clear()
+    main_module = _reload_main_module()
+    app = main_module.create_app()
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/health",
+            headers={"Host": "evil.example"},
+        )
+
+    assert response.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_lifespan_rejects_multiple_workers_without_redis(
     monkeypatch: pytest.MonkeyPatch,

@@ -38,13 +38,15 @@ http://localhost:8000/api/v1
 
 ## Authentication
 
-Authentication is planned as an API-key header.
+Authentication is enforced with an API-key header on all protected routes.
 
-- Planned header: `X-API-Key`
-- v0.1 status: not enforced
+- Header: `X-API-Key`
+- Public routes: `GET /api/v1/health`, `GET /api/v1/health/ready`
+- Protected routes: all other `/api/v1/*` endpoints
+- Failure mode: HTTP `401` with the shared structured error envelope
 
-You can call the API in v0.1 without authentication unless your deployment
-adds it at the gateway or reverse proxy.
+Deployments should still treat the configured key as a shared secret and rotate
+it through environment management rather than hardcoding it into client code.
 
 ## Request And Response Format
 
@@ -97,15 +99,25 @@ path such as `/api/v2`.
 
 ## Rate Limits
 
-- v0.1: none
+- Assessment routes default to `10` requests per `60` seconds per principal.
+- Other protected routes default to `120` requests per `60` seconds per principal.
+- The limiter can be disabled for controlled load testing with `RATE_LIMIT_ENABLED=false`.
 
-If you place AIS behind an API gateway, apply rate limits there.
+For multi-worker deployments, keep `REDIS_URL` configured so rate limits remain
+shared across workers.
 
 ## Supported Scope In v0.1
 
 - Countries: `NGA`, `GHA`, `CIV`, `SEN`, `CMR`
+- Published active corridor profiles: `GHA -> NGA`, `CMR -> NGA`, `CIV -> NGA`,
+  `SEN -> NGA`, `GHA -> CMR`
 - Core example corridor in this documentation: `GHA -> NGA`
 - Core product example in this documentation: HS6 `110311` for groats and meal of wheat
+
+The locked golden assessment corpus is broader than the published corridor-profile
+surface. A valid v0.1 assessment corridor can still return `404` from the
+intelligence profile endpoint when no active `corridor_profile` row is published
+for that exact exporter/importer pair.
 
 ## User-Facing Versus Internal Layers
 

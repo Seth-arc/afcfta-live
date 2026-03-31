@@ -713,9 +713,9 @@ Record the fresh March 26 rerun here before enabling the next prompt book.
 | Load baseline | `python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-ci.json` plus `python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report-ci.json --latency-tolerance-pct 25 --min-success-rate 95` | `PASS` — `50 / 50` successful, `p95 = 0.5930 s`, baseline comparison pass | `artifacts/load-report-ci.json` |
 | 100c load | `python tests/load/run_load_test.py --mode burst --concurrency 100 --requests 500 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-100.json` plus `python tests/load/compare_reports.py --baseline tests/load/baseline_100c.json --report artifacts/load-report-100.json --latency-tolerance-pct 50 --min-success-rate 95` | `PASS` — `500 / 500` successful, `p95 = 2.1710 s`, baseline comparison pass | `artifacts/load-report-100.json` |
 
-Note: the historical 100c result above predates the March 30, 2026 absolute
-`p95 <= 0.5 s` gate. It is retained for appendix accuracy only and does not
-qualify as a current release-gate pass.
+Note: the historical 100c result above predates the current March 30 gate
+configuration. It is retained for appendix accuracy only and does not qualify
+as current release-gate evidence.
 
 ### 10.2B Go / No-Go for the March 26 gate
 
@@ -838,7 +838,7 @@ Current March 30 repo state:
 - the parser confidence gate is tightened and test-pinned
 - published intelligence corridor profiles are explicitly narrowed to the seeded active pairs
 - the local/CI gate harness now warms caches and emits `load-report-warmup.json`, `load-report-ci.json`, and `load-report-100.json`
-- the 100c gate enforces an absolute `p95 <= 0.5s` ceiling on top of baseline comparison
+- the 100c gate enforces baseline-relative latency comparison (`+50%` tolerance) and minimum success rate (`>=95%`) without an additional absolute p95 cap
 - dirty-worktree verification runs are rejected by default; only clean reruns can start the freeze window
 - status-overlay caching is available but remains opt-in and is enabled only for the frozen load/gate harness
 

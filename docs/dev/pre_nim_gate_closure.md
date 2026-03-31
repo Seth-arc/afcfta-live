@@ -185,7 +185,7 @@ to infer:
 - the parser confidence gate was tightened in `scripts/parsers/validation_runner.py`
 - the published intelligence corridor profile surface is explicitly narrowed to the seeded active pairs
 - the load harness now emits `load-report-warmup.json`, `load-report-ci.json`, and `load-report-100.json`
-- the 100c gate now enforces an absolute `p95 <= 0.5s` ceiling in addition to the stored baseline comparison
+- the 100c gate now enforces baseline-relative latency comparison (`+50%` tolerance) and minimum success rate (`>=95%`) without an additional absolute p95 cap
 - static reference, case bundle, provenance snapshot, and opt-in status overlay caching are available to support the March 30 load rerun
 
 The following still require local execution before trader UI work can be

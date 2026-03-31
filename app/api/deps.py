@@ -265,25 +265,36 @@ require_assessment_rate_limit = require_rate_limit("assessments")
 def _build_eligibility_service(session: AsyncSession) -> EligibilityService:
     """Create the assessment orchestrator bound to one database session."""
 
+    hs_repository = HSRepository(session)
+    rules_repository = RulesRepository(session)
+    tariffs_repository = TariffsRepository(session)
+    status_repository = StatusRepository(session)
+    evidence_repository = EvidenceRepository(session)
+    cases_repository = CasesRepository(session)
+    evaluations_repository = EvaluationsRepository(session)
+    sources_repository = SourcesRepository(session)
+    intelligence_repository = IntelligenceRepository(session)
+
     return EligibilityService(
-        classification_service=ClassificationService(HSRepository(session)),
+        classification_service=ClassificationService(hs_repository),
         rule_resolution_service=RuleResolutionService(
-            hs_repository=HSRepository(session),
-            rules_repository=RulesRepository(session),
+            hs_repository=hs_repository,
+            rules_repository=rules_repository,
         ),
-        tariff_resolution_service=TariffResolutionService(TariffsRepository(session)),
-        status_service=StatusService(StatusRepository(session)),
-        evidence_service=EvidenceService(EvidenceRepository(session)),
+        tariff_resolution_service=TariffResolutionService(tariffs_repository),
+        status_service=StatusService(status_repository),
+        evidence_service=EvidenceService(evidence_repository),
         fact_normalization_service=FactNormalizationService(),
         expression_evaluator=ExpressionEvaluator(),
         general_origin_rules_service=GeneralOriginRulesService(),
-        cases_repository=CasesRepository(session),
-        evaluations_repository=EvaluationsRepository(session),
-        intelligence_service=IntelligenceService(IntelligenceRepository(session)),
+        cases_repository=cases_repository,
+        evaluations_repository=evaluations_repository,
+        sources_repository=sources_repository,
+        intelligence_service=IntelligenceService(intelligence_repository),
         audit_service=AuditService(
-            evaluations_repository=EvaluationsRepository(session),
-            cases_repository=CasesRepository(session),
-            sources_repository=SourcesRepository(session),
+            evaluations_repository=evaluations_repository,
+            cases_repository=cases_repository,
+            sources_repository=sources_repository,
         ),
     )
 

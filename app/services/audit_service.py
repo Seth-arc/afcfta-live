@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from app.core.exceptions import AuditTrailNotFoundError
 from app.core.logging import log_event
@@ -69,10 +71,11 @@ class AuditService:
             )
 
         evaluation = EligibilityEvaluationResponse.model_validate(evaluation_bundle["evaluation"])
-        checks = [
+        persisted_checks = [
             EligibilityCheckResultResponse.model_validate(check)
             for check in evaluation_bundle["checks"]
         ]
+        checks = self._merge_snapshot_checks(evaluation, persisted_checks)
 
         case_bundle = await self.cases_repository.get_case_with_facts(str(evaluation.case_id))
         case = (
@@ -194,6 +197,136 @@ class AuditService:
                 detail={"case_id": case_id},
             )
         return str(evaluations[0]["evaluation_id"])
+
+    def _merge_snapshot_checks(
+        self,
+        evaluation: EligibilityEvaluationResponse,
+        checks: Sequence[EligibilityCheckResultResponse],
+    ) -> list[EligibilityCheckResultResponse]:
+        """Prefer snapshot-backed summary checks when the evaluation header carries them."""
+
+        snapshot_checks = self._build_snapshot_checks(evaluation)
+        if not snapshot_checks:
+            return list(checks)
+
+        snapshot_keys = {self._check_identity(check) for check in snapshot_checks}
+        merged = list(snapshot_checks)
+        merged.extend(check for check in checks if self._check_identity(check) not in snapshot_keys)
+        return merged
+
+    def _build_snapshot_checks(
+        self,
+        evaluation: EligibilityEvaluationResponse,
+    ) -> list[EligibilityCheckResultResponse]:
+        """Rehydrate compact snapshot content into API-facing summary checks."""
+
+        snapshot = evaluation.decision_snapshot_json
+        if not isinstance(snapshot, dict):
+            return []
+
+        ordered_payloads: list[dict[str, Any]] = []
+        for key in (
+            "classification_check",
+            "rule_check",
+            "tariff_check",
+        ):
+            payload = snapshot.get(key)
+            if isinstance(payload, dict):
+                ordered_payloads.append(payload)
+
+        blocker_payloads = snapshot.get("blocker_checks")
+        if isinstance(blocker_payloads, list):
+            ordered_payloads.extend(
+                payload for payload in blocker_payloads if isinstance(payload, dict)
+            )
+
+        for key in (
+            "selected_pathway_check",
+            "general_rules_check",
+            "status_check",
+            "evidence_check",
+            "final_decision_check",
+        ):
+            payload = snapshot.get(key)
+            if isinstance(payload, dict):
+                ordered_payloads.append(payload)
+
+        created_at = self._snapshot_created_at(snapshot, evaluation.created_at)
+        return [
+            self._snapshot_check_row(
+                evaluation=evaluation,
+                payload=payload,
+                ordinal=ordinal,
+                created_at=created_at,
+            )
+            for ordinal, payload in enumerate(ordered_payloads, start=1)
+        ]
+
+    def _snapshot_check_row(
+        self,
+        *,
+        evaluation: EligibilityEvaluationResponse,
+        payload: dict[str, Any],
+        ordinal: int,
+        created_at: datetime | None,
+    ) -> EligibilityCheckResultResponse:
+        """Build a deterministic synthetic check row from one persisted snapshot entry."""
+
+        raw_passed = payload.get("passed")
+        severity = payload.get("severity")
+        if not isinstance(severity, str):
+            severity = "info" if raw_passed is not False else "major"
+        if payload.get("check_type") == "blocker" and raw_passed is False:
+            severity = "blocker"
+
+        return EligibilityCheckResultResponse.model_validate(
+            {
+                "check_result_id": uuid5(
+                    NAMESPACE_URL,
+                    (
+                        f"afcfta-live:{evaluation.evaluation_id}:"
+                        f"{payload.get('check_type')}:{payload.get('check_code')}:{ordinal}"
+                    ),
+                ),
+                "evaluation_id": evaluation.evaluation_id,
+                "check_type": payload.get("check_type"),
+                "check_code": payload.get("check_code"),
+                "passed": raw_passed,
+                "severity": severity,
+                "expected_value": payload.get("expected_value"),
+                "observed_value": payload.get("observed_value"),
+                "explanation": payload.get("explanation") or "Rehydrated from decision snapshot",
+                "details_json": payload.get("details_json"),
+                "linked_component_id": payload.get("linked_component_id"),
+                "created_at": created_at,
+            }
+        )
+
+    @staticmethod
+    def _snapshot_created_at(
+        snapshot: dict[str, Any],
+        fallback: datetime | None,
+    ) -> datetime | None:
+        """Use the persisted snapshot capture time when available."""
+
+        captured_at = snapshot.get("captured_at")
+        if isinstance(captured_at, str):
+            try:
+                return datetime.fromisoformat(captured_at)
+            except ValueError:
+                return fallback
+        return fallback
+
+    @staticmethod
+    def _check_identity(
+        check: EligibilityCheckResultResponse,
+    ) -> tuple[str, str, str | None]:
+        """Return a stable identity for deduplicating synthesized and persisted checks."""
+
+        linked_component_id = (
+            str(check.linked_component_id) if check.linked_component_id is not None else None
+        )
+        return (check.check_type, check.check_code, linked_component_id)
 
     def _build_hs6_snapshot(
         self,
@@ -465,16 +598,33 @@ class AuditService:
         rule_trace = None
         if isinstance(rule_payload, dict):
             rule_source_id = rule_payload.get("source_id")
+            rule_snapshot = self._decode_provenance_snapshot(
+                checks,
+                check_type="rule",
+                check_code="PSR_RESOLUTION",
+            )
             rule_provisions = (
-                await self._fetch_provision_summaries(
-                    str(rule_source_id),
-                    evaluation_id=evaluation_id,
+                self._snapshot_provisions(rule_snapshot)
+                if rule_snapshot is not None
+                else (
+                    await self._fetch_provision_summaries(
+                        str(rule_source_id),
+                        evaluation_id=evaluation_id,
+                    )
+                    if rule_source_id is not None
+                    else []
                 )
-                if rule_source_id is not None
-                else []
             )
             rule_trace = RuleProvenanceTrace(
                 source_id=rule_source_id,
+                source_short_title=self._snapshot_source_value(rule_snapshot, "short_title"),
+                source_version_label=self._snapshot_source_value(rule_snapshot, "version_label"),
+                source_publication_date=self._snapshot_source_value(
+                    rule_snapshot,
+                    "publication_date",
+                ),
+                source_effective_date=self._snapshot_source_value(rule_snapshot, "effective_date"),
+                snapshot_captured_at=self._snapshot_captured_at(rule_snapshot),
                 page_ref=rule_payload.get("page_ref"),
                 table_ref=rule_payload.get("table_ref"),
                 row_ref=rule_payload.get("row_ref"),
@@ -484,17 +634,40 @@ class AuditService:
         tariff_trace = None
         if isinstance(tariff_payload, dict):
             schedule_source_id = tariff_payload.get("schedule_source_id")
+            tariff_snapshot = self._decode_provenance_snapshot(
+                checks,
+                check_type="tariff",
+                check_code="TARIFF_RESOLUTION",
+            )
             tariff_provisions = (
-                await self._fetch_provision_summaries(
-                    str(schedule_source_id),
-                    evaluation_id=evaluation_id,
+                self._snapshot_provisions(tariff_snapshot)
+                if tariff_snapshot is not None
+                else (
+                    await self._fetch_provision_summaries(
+                        str(schedule_source_id),
+                        evaluation_id=evaluation_id,
+                    )
+                    if schedule_source_id is not None
+                    else []
                 )
-                if schedule_source_id is not None
-                else []
             )
             tariff_trace = TariffProvenanceTrace(
                 schedule_source_id=schedule_source_id,
                 rate_source_id=tariff_payload.get("rate_source_id"),
+                source_short_title=self._snapshot_source_value(tariff_snapshot, "short_title"),
+                source_version_label=self._snapshot_source_value(
+                    tariff_snapshot,
+                    "version_label",
+                ),
+                source_publication_date=self._snapshot_source_value(
+                    tariff_snapshot,
+                    "publication_date",
+                ),
+                source_effective_date=self._snapshot_source_value(
+                    tariff_snapshot,
+                    "effective_date",
+                ),
+                snapshot_captured_at=self._snapshot_captured_at(tariff_snapshot),
                 line_page_ref=tariff_payload.get("line_page_ref"),
                 rate_page_ref=tariff_payload.get("rate_page_ref"),
                 table_ref=tariff_payload.get("table_ref"),
@@ -505,6 +678,58 @@ class AuditService:
         if rule_trace is None and tariff_trace is None:
             return None
         return DecisionProvenanceTrace(rule=rule_trace, tariff=tariff_trace)
+
+    def _decode_provenance_snapshot(
+        self,
+        checks: Sequence[EligibilityCheckResultResponse],
+        *,
+        check_type: str,
+        check_code: str,
+    ) -> dict[str, Any] | None:
+        """Return a persisted provenance snapshot when present on a summary check."""
+
+        for check in checks:
+            if check.check_type != check_type or check.check_code != check_code:
+                continue
+            details = self._details(check)
+            snapshot = details.get("provenance_snapshot")
+            if isinstance(snapshot, dict):
+                return snapshot
+        return None
+
+    @staticmethod
+    def _snapshot_source_value(snapshot: dict[str, Any] | None, key: str) -> Any:
+        """Read one source-level field from a persisted provenance snapshot."""
+
+        if not isinstance(snapshot, dict):
+            return None
+        source = snapshot.get("source")
+        if not isinstance(source, dict):
+            return None
+        return source.get(key)
+
+    @staticmethod
+    def _snapshot_captured_at(snapshot: dict[str, Any] | None) -> Any:
+        """Return the snapshot capture timestamp when present."""
+
+        if not isinstance(snapshot, dict):
+            return None
+        return snapshot.get("captured_at")
+
+    @staticmethod
+    def _snapshot_provisions(snapshot: dict[str, Any] | None) -> list[ProvisionSummary]:
+        """Decode persisted provision snapshots into API-facing models."""
+
+        if not isinstance(snapshot, dict):
+            return []
+        provisions = snapshot.get("supporting_provisions")
+        if not isinstance(provisions, list):
+            return []
+        return [
+            ProvisionSummary.model_validate(provision)
+            for provision in provisions
+            if isinstance(provision, dict)
+        ]
 
     async def _fetch_provision_summaries(
         self,

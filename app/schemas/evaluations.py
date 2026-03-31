@@ -22,6 +22,7 @@ class EligibilityEvaluationResponse(BaseModel):
     confidence_class: str
     rule_status_at_evaluation: RuleStatusEnum | str
     tariff_status_at_evaluation: str
+    decision_snapshot_json: dict[str, Any] | None = Field(default=None, exclude=True)
     created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)

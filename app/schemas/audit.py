@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +33,8 @@ class ProvisionSummary(BaseModel):
     topic_primary: str
     page_start: int | None = None
     page_end: int | None = None
+    provision_text_verbatim: str | None = None
+    provision_text_normalized: str | None = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
@@ -89,6 +92,11 @@ class RuleProvenanceTrace(BaseModel):
     """
 
     source_id: UUID | None = None
+    source_short_title: str | None = None
+    source_version_label: str | None = None
+    source_publication_date: date | None = None
+    source_effective_date: date | None = None
+    snapshot_captured_at: datetime | None = None
     page_ref: int | None = None
     table_ref: str | None = None
     row_ref: str | None = None
@@ -107,6 +115,11 @@ class TariffProvenanceTrace(BaseModel):
 
     schedule_source_id: UUID | None = None
     rate_source_id: UUID | None = None
+    source_short_title: str | None = None
+    source_version_label: str | None = None
+    source_publication_date: date | None = None
+    source_effective_date: date | None = None
+    snapshot_captured_at: datetime | None = None
     line_page_ref: int | None = None
     rate_page_ref: int | None = None
     table_ref: str | None = None

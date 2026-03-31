@@ -105,22 +105,19 @@ async def test_assistant_rejects_missing_user_input(
 
 
 @pytest.mark.asyncio
-async def test_assistant_returns_clarification_for_oversized_user_input(
+async def test_assistant_rejects_oversized_user_input_with_422(
     async_client: AsyncClient,
 ) -> None:
-    """Oversized input must return a clarification response, not a schema-level 422."""
+    """Oversized input must fail validation before any NIM orchestration runs."""
 
     response = await async_client.post(
         ASSISTANT_URL,
         json={"user_input": "x" * (NIM_MAX_INPUT_CHARS + 1)},
     )
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 422, response.text
     body = response.json()
-    assert body["response_type"] == "clarification"
-    assert body["clarification"] is not None
-    assert "longer than 2000 characters" in body["clarification"]["question"]
-    assert body["audit_persisted"] is False
+    assert any(error["loc"] == ["body", "user_input"] for error in body["detail"])
 
 
 @pytest.mark.asyncio

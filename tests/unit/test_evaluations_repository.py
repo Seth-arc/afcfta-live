@@ -91,6 +91,41 @@ async def test_persist_evaluation_skips_check_insert_when_no_checks() -> None:
     assert len(session.calls) == 2
 
 
+async def test_persist_evaluation_skips_check_insert_when_snapshot_only_mode_enabled() -> None:
+    evaluation_row = {"evaluation_id": uuid4(), "case_id": uuid4()}
+    session = RecordingSession(
+        [
+            FakeResult(),
+            FakeResult(one_mapping=evaluation_row),
+        ]
+    )
+    repository = EvaluationsRepository(session)
+
+    result = await repository.persist_evaluation(
+        {
+            "case_id": evaluation_row["case_id"],
+            "overall_outcome": "eligible",
+            "confidence_class": "complete",
+            "rule_status_at_evaluation": "agreed",
+            "tariff_status_at_evaluation": "in_force",
+            "decision_snapshot_json": {"snapshot_version": 1},
+        },
+        [
+            {
+                "check_type": "decision",
+                "check_code": "FINAL_DECISION",
+                "passed": True,
+                "severity": "info",
+                "explanation": "resolved",
+            }
+        ],
+        persist_check_results=False,
+    )
+
+    assert result == {"evaluation": evaluation_row, "checks": []}
+    assert len(session.calls) == 2
+
+
 async def test_get_evaluation_with_checks_returns_none_when_missing() -> None:
     session = RecordingSession([FakeResult(first_mapping=None)])
     repository = EvaluationsRepository(session)

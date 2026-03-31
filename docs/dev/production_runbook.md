@@ -21,7 +21,8 @@ does not yet exist.
 7. [Parser and tariff-schedule promotion](#7-parser-and-tariff-schedule-promotion)
 8. [Before enabling NIM integration](#8-before-enabling-nim-integration)
 9. [Before enabling a trader-facing UI](#9-before-enabling-a-trader-facing-ui)
-10. [Production Gate Stabilisation — 2026-03-26](#10-production-gate-stabilisation--2026-03-26)
+10. [March 30 Gate Status](#10-march-30-gate-status)
+11. [Tuning UVICORN_WORKERS](#11-tuning-uvicorn_workers)
 
 ---
 
@@ -79,6 +80,8 @@ Recommended production overrides (all optional, but review each before first dep
 | `RATE_LIMIT_DEFAULT_MAX_REQUESTS` | `120` | All other routes |
 | `UVICORN_WORKERS` | `1` | Safe baseline until Redis-backed rate limiting is enabled; raise only after `REDIS_URL` is live |
 | `CACHE_STATIC_LOOKUPS` | `false` | Enable only after establishing a no-cache baseline |
+| `CACHE_STATUS_LOOKUPS` | `false` | Keep disabled in production unless the status dataset is frozen for a controlled perf run |
+| `ALLOWED_HOSTS` | _(required)_ | Comma-separated hostnames accepted by `TrustedHostMiddleware`; must be set outside development/test/ci |
 | `LOG_LEVEL` | `INFO` | Do not ship `DEBUG` to production |
 | `LOG_FORMAT` | `json` | Keep `json` for log aggregation pipelines |
 
@@ -113,7 +116,19 @@ is ready.
 
 ## Scaling to multiple workers
 
-Current state (as of 2026-03-26): Redis enabled, UVICORN_WORKERS=2, rate limiting active.
+Production default remains `UVICORN_WORKERS=1` until Redis-backed rate limiting
+is live and the higher worker count has been validated on the target dataset.
+
+For the March 30, 2026 load/gate harness only, the local rerun target is:
+
+- `REDIS_URL=redis://localhost:6379/0`
+- `UVICORN_WORKERS=4`
+- `DB_POOL_SIZE=8`
+- `DB_POOL_MAX_OVERFLOW=8`
+- `CACHE_STATIC_LOOKUPS=true`
+- `CACHE_STATUS_LOOKUPS=true`
+- `RATE_LIMIT_ENABLED=false`
+- `LOG_REQUESTS_ENABLED=false`
 
 The API must stay on a single Uvicorn worker until Redis-backed rate limiting is
 active. `_lifespan()` in [app/main.py](../../app/main.py) raises `RuntimeError`
@@ -129,7 +144,8 @@ Promotion sequence:
 3. Before changing worker count, ensure database pool sizing is adequate:
    `DB_POOL_SIZE + DB_POOL_MAX_OVERFLOW` must accommodate
    `UVICORN_WORKERS × peak concurrent REPEATABLE READ sessions`.
-   The CI 100-concurrency baseline uses `DB_POOL_SIZE=20` and `DB_POOL_MAX_OVERFLOW=80`.
+   The March 30 CI/local gate harness uses `DB_POOL_SIZE=8` and
+   `DB_POOL_MAX_OVERFLOW=8`.
 4. Raise `UVICORN_WORKERS` in `.env.prod` for direct image/runtime parity, and
    raise the `--workers` value in [docker-compose.prod.yml](../../docker-compose.prod.yml)
    from `1` to the tested target.
@@ -558,6 +574,11 @@ for controlled access but will block any NIM that issues more than 10 assessment
 minute per principal. Set the limit to match the expected NIM throughput or assign a
 separate principal with a higher limit.
 
+### 8.5 Assistant input boundary is enforced at the API layer
+
+`AssistantRequest.user_input` is capped at 2000 characters. Requests above that
+boundary now fail with HTTP 422 before any NIM call is attempted.
+
 ---
 
 ## 9. Before enabling a trader-facing UI
@@ -579,16 +600,46 @@ limit explicitly before public launch.
 
 ### 9.3 Log aggregation is capturing structured request logs
 
-The API emits JSON-structured request logs with `request_id`, `authenticated_principal`,
+The API emits JSON-structured request logs with `request_id`,
+`authenticated_principal`, `method`, `route`, `status_code`, and `latency_ms`.
+Confirm the log pipeline is ingesting those fields before public traffic arrives
+so you have a baseline for latency and error-rate alerting.
+
+### 9.4 Assessment responses are verified against golden cases
+
+Run the locked golden corpus through the live API and confirm all 15 cases pass.
+The current acceptance slice in `tests/fixtures/golden_cases.py` covers 9 distinct
+HS6 products across 6 directed corridors and 9 HS chapters.
+
+```bash
+python -m pytest tests/integration/test_golden_path.py -v
+```
+
+All 15 must return the expected `eligible` value and `pathway_used`.
+
+### 9.5 Database backup confirmed
+
+Confirm a database backup was taken and the restore procedure has been tested at
+least once in staging before accepting trader submissions.
+
+### 9.6 Coverage gaps noted in testing.md are not on the critical path
+
+Review [docs/dev/testing.md](testing.md) for the list of repository paths only
+reachable with a live stack that are not yet covered by integration tests.
+Confirm none of those paths are exercised by the first trader-facing flows
+before enabling public access.
 
 ---
 
-## 10. Production Gate Stabilisation — 2026-03-26
+## Historical Appendix - Production Gate Stabilisation (2026-03-26)
 
 This section records the verified closure state of the 2026-03-26 production-gate
 audit cycle. `docs/dev/AFCFTA-LIVE_REPO_AUDIT_2026-03-26.md` was not present in the
 repository, so verification was performed against the audit prompt outputs plus the
 final repository state after Prompts 1–7 of the production-gate prompt book.
+
+Historical only. Do not use this appendix as the current March 30 go/no-go
+control; use Section 10 and `docs/dev/pre_nim_gate_closure.md` instead.
 
 Use [pre_nim_gate_closure.md](/c:/Users/ssnguna/Local%20Sites/afcfta-live/docs/dev/pre_nim_gate_closure.md)
 as the operator checklist for the frozen schema set, required March 26 rerun
@@ -606,7 +657,8 @@ commands, published artifact names, and the 48-hour no-schema-change rule.
 - Prompt 3 — NIM input boundary closed.
   `parse_user_input()` now rejects oversized input at 2000 characters without
   truncation, returns a structured draft rejection reason to orchestration, and
-  keeps NIM-only metadata out of engine requests.
+  keeps NIM-only metadata out of engine requests. On the March 30 head, public
+  assistant API calls now fail earlier at schema validation with HTTP 422.
 - Prompt 4 — Evidence risk-filter wiring closed.
   `confidence_class` is now threaded into evidence readiness. Because the current
   `verification_question.risk_category` data model is domain-specific rather than
@@ -661,6 +713,10 @@ Record the fresh March 26 rerun here before enabling the next prompt book.
 | Load baseline | `python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-ci.json` plus `python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report-ci.json --latency-tolerance-pct 25 --min-success-rate 95` | `PASS` — `50 / 50` successful, `p95 = 0.5930 s`, baseline comparison pass | `artifacts/load-report-ci.json` |
 | 100c load | `python tests/load/run_load_test.py --mode burst --concurrency 100 --requests 500 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-100.json` plus `python tests/load/compare_reports.py --baseline tests/load/baseline_100c.json --report artifacts/load-report-100.json --latency-tolerance-pct 50 --min-success-rate 95` | `PASS` — `500 / 500` successful, `p95 = 2.1710 s`, baseline comparison pass | `artifacts/load-report-100.json` |
 
+Note: the historical 100c result above predates the March 30, 2026 absolute
+`p95 <= 0.5 s` gate. It is retained for appendix accuracy only and does not
+qualify as a current release-gate pass.
+
 ### 10.2B Go / No-Go for the March 26 gate
 
 - `[x]` Schema freeze is active for the contracts listed in `docs/dev/pre_nim_gate_closure.md`
@@ -700,7 +756,7 @@ Next allowed prompt book:
 - `[x]` `docker-compose.prod.yml` overrides `--workers 1` explicitly
 - `[x]` Evidence `risk_category` wiring is explicit and documented as a safe stub/TODO
 - `[x]` Golden-path tests passed with the evidence change in place
-- `[x]` `parse_user_input()` handles input longer than 2000 characters without truncation
+- `[x]` `parse_user_input()` handles input longer than 2000 characters without truncation on internal/direct-call paths
 - `[x]` NIM metadata never appears in `EligibilityRequest` after mapping
 - `[x]` `nim_rejection_reason` reaches the orchestration layer through the draft
 - `[x]` Golden cases cover 6 directed corridors
@@ -764,14 +820,47 @@ public access.
 
 ---
 
-## 10. Tuning UVICORN_WORKERS
+## 10. March 30 Gate Status
+
+This is the current go/no-go control for the March 30, 2026 head.
+
+Use [docs/dev/pre_nim_gate_closure.md](pre_nim_gate_closure.md) as the source of
+truth for:
+
+- the frozen schema set
+- the canonical rerun command
+- the artifact bundle that must be published
+- the 48-hour no-schema-change rule
+
+Current March 30 repo state:
+
+- `AGENTS.md` is restored and published at the repo root
+- the parser confidence gate is tightened and test-pinned
+- published intelligence corridor profiles are explicitly narrowed to the seeded active pairs
+- the local/CI gate harness now warms caches and emits `load-report-warmup.json`, `load-report-ci.json`, and `load-report-100.json`
+- the 100c gate enforces an absolute `p95 <= 0.5s` ceiling on top of baseline comparison
+- dirty-worktree verification runs are rejected by default; only clean reruns can start the freeze window
+- status-overlay caching is available but remains opt-in and is enabled only for the frozen load/gate harness
+
+What is still pending on March 30:
+
+- a fresh full verification rerun on the current head
+- publication of `artifacts/verification/<git-sha>/manifest.json` and the associated XML/JSON reports
+- deliberate refresh of `tests/load/baseline.json` and `tests/load/baseline_100c.json` if the accepted rerun becomes the new baseline
+
+Until those three items are complete, do not declare the repo formally cleared
+for trader UI work.
+
+---
+
+## 11. Tuning UVICORN_WORKERS
 
 The default production baseline is `UVICORN_WORKERS=1`. Do not raise this value
 until the Redis-backed rate-limiter path in [Scaling to multiple workers](#scaling-to-multiple-workers)
 is complete. After Redis is active, use this section to validate and tune a higher
 worker count with a measured comparison rather than treating `2` as a default.
 
-### 10.1 Run the comparison harness
+### 11.1 Run the comparison harness
 
 Before changing `UVICORN_WORKERS` in `.env.prod`, first complete the Redis
 enablement steps in [Scaling to multiple workers](#scaling-to-multiple-workers).
@@ -799,14 +888,14 @@ python tests/load/run_multi_worker_comparison.py \
 | Multi-worker p95 latency | ≤ single-worker p95 |
 | `pool_pressure` on both instances | not `saturated` |
 
-### 10.2 Pool sizing when raising workers
+### 11.2 Pool sizing when raising workers
 
 Each Uvicorn worker holds its own connection pool.  With `UVICORN_WORKERS=4`
 and `DB_POOL_SIZE=5`, the API can hold up to 20 simultaneous database
 connections.  Confirm your PostgreSQL `max_connections` setting can accommodate
 `UVICORN_WORKERS × (DB_POOL_SIZE + DB_POOL_MAX_OVERFLOW)` before deploying.
 
-### 10.3 Apply the change
+### 11.3 Apply the change
 
 Once Redis is active and the comparison run passes:
 

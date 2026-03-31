@@ -1,13 +1,13 @@
 {
   "config": {
     "mode": "burst",
-    "base_url": "http://localhost:8000",
+    "base_url": "http://127.0.0.1:8002",
     "auth_header": "X-API-Key",
     "concurrency": 10,
     "total_requests": 50,
     "timeout_s": 30.0,
     "fail_under_pct": 95.0,
-    "payload_count": 5
+    "payload_count": 100
   },
   "mode": "burst",
   "metrics": {
@@ -18,15 +18,15 @@
     "network_errors": 0,
     "other_failures": 0,
     "success_rate_pct": 100.0,
-    "wall_elapsed_s": 1.103,
-    "throughput_rps": 45.32,
+    "wall_elapsed_s": 0.391,
+    "throughput_rps": 127.88,
     "latency_s": {
-      "min": 0.1041,
-      "p50": 0.1353,
-      "p75": 0.1422,
-      "p95": 0.5746,
-      "p99": 0.5841,
-      "max": 0.5841,
+      "min": 0.015,
+      "p50": 0.031,
+      "p75": 0.047,
+      "p95": 0.359,
+      "p99": 0.375,
+      "max": 0.375,
       "sample_count": 50
     }
   }

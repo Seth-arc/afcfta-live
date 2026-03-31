@@ -35,9 +35,10 @@ class EvaluationsRepository:
         check_results: Sequence[Mapping[str, Any]],
         *,
         lock_case: bool = True,
+        persist_check_results: bool = True,
         return_inserted_checks: bool = True,
     ) -> Mapping[str, Any]:
-        """Atomically insert one evaluation and all of its check rows."""
+        """Atomically insert one evaluation and, optionally, its check rows."""
 
         evaluation_table = EligibilityEvaluation.__table__
         check_table = EligibilityCheckResult.__table__
@@ -63,7 +64,7 @@ class EvaluationsRepository:
             evaluation_row = evaluation_result.mappings().one()
 
             inserted_checks: list[Mapping[str, Any]] = []
-            if check_results:
+            if persist_check_results and check_results:
                 rows: list[dict[str, Any]] = []
                 insertable_columns = {
                     "evaluation_id",

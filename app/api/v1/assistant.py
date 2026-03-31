@@ -6,8 +6,8 @@ Orchestration boundary:
   truth for all legal decision fields.
 - The DB connection for the engine is opened lazily: only when the draft
   passes all completeness and confidence checks and the engine call is
-  actually needed. Clarification and 422 responses are served without
-  any DB access.
+  actually needed. Clarification responses and schema-level 422s are served
+  without any DB access.
 - assess_interface_request() guarantees a replayable audit trail before
   returning. Persistence failure propagates as 500 — no unreplayable
   decision is ever returned to the caller.
@@ -15,7 +15,7 @@ Orchestration boundary:
 - Rate limiting matches the /assessments route (assessment_rate_limit).
 
 Early-exit conditions (no DB connection, no engine call):
-1. Intake rejects oversized input and requests a shorter retry.
+1. FastAPI rejects `user_input` longer than 2000 characters with HTTP 422.
 2. Required draft facts missing (hs6_code, exporter, importer, year, persona_mode).
 3. NIM confidence below _MIN_NIM_CONFIDENCE (0.7) when present.
 4. to_eligibility_request() raises ValueError or ValidationError (malformed draft).
@@ -73,7 +73,7 @@ async def assistant_assess(
     """NIM-assisted eligibility assessment.
 
     The DB connection is opened lazily: only on the assessment path, after
-    all completeness checks pass. Clarification and 422 responses are served
+    all completeness checks pass. Clarification responses and schema-level 422s are served
     without any DB access.
 
     Orchestration flow:

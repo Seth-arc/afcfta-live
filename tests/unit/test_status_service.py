@@ -57,8 +57,14 @@ async def test_agreed_status_maps_to_complete_confidence() -> None:
     """Agreed status should produce complete confidence."""
 
     repository = AsyncMock()
-    repository.get_status.return_value = _status_row("agreed")
-    repository.get_active_transitions.return_value = []
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": _status_row("agreed"),
+            "transitions": [],
+        }
+    ]
     service = StatusService(repository)
 
     result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
@@ -72,8 +78,14 @@ async def test_provisional_status_maps_to_provisional_confidence() -> None:
     """Provisional status should downgrade confidence."""
 
     repository = AsyncMock()
-    repository.get_status.return_value = _status_row("provisional")
-    repository.get_active_transitions.return_value = []
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": _status_row("provisional"),
+            "transitions": [],
+        }
+    ]
     service = StatusService(repository)
 
     result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
@@ -87,8 +99,14 @@ async def test_pending_status_adds_constraint_message() -> None:
     """Pending status should carry the enforceability warning."""
 
     repository = AsyncMock()
-    repository.get_status.return_value = _status_row("pending")
-    repository.get_active_transitions.return_value = []
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": _status_row("pending"),
+            "transitions": [],
+        }
+    ]
     service = StatusService(repository)
 
     result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
@@ -103,8 +121,14 @@ async def test_no_status_found_returns_unknown_overlay() -> None:
     """The service must never return null when no assertion exists."""
 
     repository = AsyncMock()
-    repository.get_status.return_value = None
-    repository.get_active_transitions.return_value = []
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": None,
+            "transitions": [],
+        }
+    ]
     service = StatusService(repository)
 
     result = await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}")
@@ -118,9 +142,13 @@ async def test_active_transition_is_included_in_overlay() -> None:
     """Active transitions should surface in both transitions and constraints."""
 
     repository = AsyncMock()
-    repository.get_status.return_value = _status_row("agreed")
-    repository.get_active_transitions.return_value = [
-        _transition_row("Transitional quota applies through 2026.")
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": _status_row("agreed"),
+            "transitions": [_transition_row("Transitional quota applies through 2026.")],
+        }
     ]
     service = StatusService(repository)
 
@@ -135,16 +163,54 @@ async def test_get_status_overlay_passes_as_of_date_to_repository() -> None:
     """The service should forward the requested assessment date to repository lookups."""
 
     repository = AsyncMock()
-    repository.get_status.return_value = _status_row("agreed")
-    repository.get_active_transitions.return_value = []
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": _status_row("agreed"),
+            "transitions": [],
+        }
+    ]
     service = StatusService(repository)
     as_of_date = date(2025, 1, 1)
 
     await service.get_status_overlay("psr_rule", f"PSR:{_uuid(3)}", as_of_date)
 
-    repository.get_status.assert_awaited_once_with("psr_rule", f"PSR:{_uuid(3)}", as_of_date)
-    repository.get_active_transitions.assert_awaited_once_with(
-        "psr_rule",
-        f"PSR:{_uuid(3)}",
+    repository.get_status_overlay_rows.assert_awaited_once_with(
+        [("psr_rule", f"PSR:{_uuid(3)}")],
         as_of_date,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_status_overlays_returns_all_requested_targets() -> None:
+    """Batch overlay lookup should preserve both requested targets."""
+
+    repository = AsyncMock()
+    repository.get_status_overlay_rows.return_value = [
+        {
+            "entity_type": "corridor",
+            "entity_key": "CORRIDOR:GHA:NGA:110311",
+            "status": _status_row("agreed") | {"entity_type": "corridor"},
+            "transitions": [],
+        },
+        {
+            "entity_type": "psr_rule",
+            "entity_key": f"PSR:{_uuid(3)}",
+            "status": _status_row("pending"),
+            "transitions": [_transition_row("Transition applies.")],
+        },
+    ]
+    service = StatusService(repository)
+
+    result = await service.get_status_overlays(
+        [
+            ("corridor", "CORRIDOR:GHA:NGA:110311"),
+            ("psr_rule", f"PSR:{_uuid(3)}"),
+        ]
+    )
+
+    assert result[("corridor", "CORRIDOR:GHA:NGA:110311")].status_type == "agreed"
+    assert result[("psr_rule", f"PSR:{_uuid(3)}")].active_transitions[0].description == (
+        "Transition applies."
     )

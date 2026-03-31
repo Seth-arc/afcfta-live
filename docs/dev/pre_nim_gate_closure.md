@@ -1,22 +1,22 @@
 # Pre-NIM Gate Closure
 
-Operator checklist for closing the remaining March 26, 2026 blockers before
-starting the next primary prompt book.
+Operator checklist for the March 30, 2026 contract-freeze and gate rerun.
 
 Use this document together with:
 
+- `AGENTS.md`
 - `docs/dev/production_runbook.md`
 - `tests/unit/test_contract_freeze.py`
 - `tests/contract_constants.py`
 
-This gate is not complete until the current head has passed the full rerun
-suite and the contract freeze window has started.
+This gate is not complete until the current head has passed the full rerun suite
+and the resulting artifact bundle has been published from the current commit.
 
 ---
 
-## 1. Frozen Schemas
+## 1. Frozen Public Surface
 
-Treat the following public contracts as frozen for the March 26 gate:
+Treat the following public contracts as frozen on the March 30, 2026 head:
 
 ### Assessment request and response
 
@@ -66,185 +66,133 @@ Treat the following public contracts as frozen for the March 26 gate:
   - `NimConfidence`
   - `NimAssessmentDraft`
 
-The freeze mechanism is the existing contract test suite in
-`tests/unit/test_contract_freeze.py`, backed by the field-order and field-set
-constants in `tests/contract_constants.py`. Do not create a parallel freeze
-policy. If a deliberate contract edit is approved for any frozen schema,
-update those existing freeze tests and constants first, then rerun the full
-March 26 gate from Section 3.
+The freeze mechanism remains the existing contract suite in
+`tests/unit/test_contract_freeze.py`, backed by
+`tests/contract_constants.py`. Do not create a parallel freeze policy.
+
+`AGENTS.md` is now restored and published again at the repo root. Treat it as
+part of the operator-facing contract during this freeze window.
 
 ---
 
-## 2. What Counts As A Schema Change
+## 2. What Resets The Freeze
 
-Any of the following resets the freeze window and requires a fresh full gate rerun:
+Any of the following requires a fresh full gate rerun:
 
 - adding, removing, or renaming a field on any frozen schema
 - changing field order where `tests/contract_constants.py` pins order
 - changing required vs optional behavior
 - changing accepted aliases or canonical field names
 - changing discriminator values such as assistant `response_type`
-- changing serialized top-level response shape for assessments, audit replay, or assistant responses
+- changing the serialized top-level response shape for assessments, audit replay, or assistant responses
 - changing validation rules in a way that alters the public request or response contract
 
-Non-contract internal refactors do not break the freeze if they do not change the
-observable schema, serialized field set, or validation semantics.
+Internal refactors do not reset the freeze if they leave the observable schema,
+serialized field set, and validation semantics unchanged.
 
 ---
 
-## 3. Gate Rerun Required On The March 26 Head
+## 3. Canonical March 30 Rerun Path
 
-Run the following suite on the current March 26, 2026 head before starting the
-freeze window.
-
-### Unit gate
+Recommended local rerun command:
 
 ```bash
-python -m pytest tests/unit --cov --cov-report=term-missing --cov-report=xml:artifacts/unit-coverage.xml
+python scripts/local_gate_runner.py --host 127.0.0.1 --port 8002 --api-key <API_KEY>
 ```
 
-Publishes:
+Run it only from a clean commit. `scripts/run_verification.py` now refuses a
+dirty worktree unless `--allow-dirty` is passed for a diagnostic-only run that
+cannot start the freeze window.
 
-- `artifacts/unit-coverage.xml`
+What it does:
 
-### Integration gate
+- seeds deterministic fixture data unless `--skip-seed` is passed
+- starts a local API with the March 30 gate defaults
+- delegates to `scripts/run_verification.py`
+- writes the canonical manual artifact bundle to `artifacts/verification/<git-sha>/`
+
+The March 30 gate defaults for load runs are:
+
+- `RATE_LIMIT_ENABLED=false`
+- `LOG_REQUESTS_ENABLED=false`
+- `CACHE_STATIC_LOOKUPS=true`
+- `CACHE_STATUS_LOOKUPS=true`
+- `UVICORN_WORKERS=4`
+- `DB_POOL_SIZE=8`
+- `DB_POOL_MAX_OVERFLOW=8`
+
+Raw verification entry point when the API is already running:
 
 ```bash
-python -m pytest tests/integration --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml
+python scripts/run_verification.py --base-url http://127.0.0.1:8002 --api-key <API_KEY>
 ```
-
-Publishes:
-
-- `artifacts/integration-coverage.xml`
-
-### Assistant and NIM gate
-
-```bash
-python -m pytest tests/integration/test_assistant_api.py tests/integration/test_nim_full_flow.py -v --junitxml=artifacts/assistant-nim-tests.xml --cov=app.api.v1.assistant --cov=app.services.nim --cov=app.schemas.nim --cov-report=term-missing --cov-report=xml:artifacts/assistant-nim-coverage.xml
-```
-
-Publishes:
-
-- `artifacts/assistant-nim-tests.xml`
-- `artifacts/assistant-nim-coverage.xml`
-
-### Load baseline gate
-
-```bash
-python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --api-key <API_KEY> --report artifacts/load-report-ci.json
-python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report-ci.json --latency-tolerance-pct 25 --min-success-rate 95
-```
-
-Publishes:
-
-- `artifacts/load-report-ci.json`
-
-### 100-concurrency load gate
-
-```bash
-python tests/load/run_load_test.py --mode burst --concurrency 100 --requests 500 --api-key <API_KEY> --report artifacts/load-report-100.json
-python tests/load/compare_reports.py --baseline tests/load/baseline_100c.json --report artifacts/load-report-100.json --latency-tolerance-pct 50 --min-success-rate 95
-```
-
-Publishes:
-
-- `artifacts/load-report-100.json`
 
 ---
 
-## 4. Artifact Set To Publish
+## 4. Artifact Bundle To Publish
 
-Publish or archive this exact set for the March 26 gate cycle:
+Publish the entire `artifacts/verification/<git-sha>/` directory produced by the
+rerun. At minimum, review and retain:
 
-- `artifacts/unit-coverage.xml`
-- `artifacts/integration-coverage.xml`
-- `artifacts/assistant-nim-tests.xml`
-- `artifacts/assistant-nim-coverage.xml`
-- `artifacts/load-report-ci.json`
-- `artifacts/load-report-100.json`
+- `manifest.json`
+- `database-preflight.log`
+- `unit-tests.xml`
+- `unit-coverage.xml`
+- `integration-tests.xml`
+- `integration-coverage.xml`
+- `assistant-nim-tests.xml`
+- `assistant-nim-coverage.xml`
+- `load-report-warmup.json`
+- `load-report-ci.json`
+- `load-report-ci-compare.log`
+- `load-report-100.json`
+- `load-report-100-compare.log`
 
-If any command writes a JUnit XML or other report to a different path locally,
-normalize it back to these filenames before declaring the gate complete.
+If a March 30 rerun is accepted as the new load baseline, deliberately refresh:
 
----
+- `tests/load/baseline.json`
+- `tests/load/baseline_100c.json`
 
-## 5. Current Gate Run Record (March 26, 2026 Head)
-
-Record the fresh March 26 rerun results here before declaring the gate complete.
-
-### Unit results
-
-- Command:
-  `python -m pytest tests/unit --cov --cov-report=term-missing --cov-report=xml:artifacts/unit-coverage.xml`
-- Result: `544 passed`
-- Coverage summary: `90.14%` total coverage
-- Attach/archive:
-  - `artifacts/unit-coverage.xml`
-
-### Integration results
-
-- Command:
-  `python -m pytest tests/integration --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml`
-- Result: `215 passed`
-- Coverage summary: `85.95%` total coverage
-- Attach/archive:
-  - `artifacts/integration-coverage.xml`
-
-### Assistant and NIM results
-
-- Command:
-  `python -m pytest tests/integration/test_assistant_api.py tests/integration/test_nim_full_flow.py -v --junitxml=artifacts/assistant-nim-tests.xml --cov=app.api.v1.assistant --cov=app.services.nim --cov=app.schemas.nim --cov-report=term-missing --cov-report=xml:artifacts/assistant-nim-coverage.xml`
-- Result: `50 passed`
-- Coverage summary: `79.46%` total coverage
-- Attach/archive:
-  - `artifacts/assistant-nim-tests.xml`
-  - `artifacts/assistant-nim-coverage.xml`
-
-### Load baseline result
-
-- Command:
-  `python tests/load/run_load_test.py --mode burst --concurrency 10 --requests 50 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-ci.json`
-- Comparison:
-  `python tests/load/compare_reports.py --baseline tests/load/baseline.json --report artifacts/load-report-ci.json --latency-tolerance-pct 25 --min-success-rate 95`
-- Result: `PASS` — `50 / 50` successful, `0` rate-limited, `0` network errors, `p95 = 0.5930 s`, baseline comparison `PASS` (`+3.2%` vs `+25%` ceiling)
-- Attach/archive:
-  - `artifacts/load-report-ci.json`
-
-### 100-concurrency load result
-
-- Command:
-  `python tests/load/run_load_test.py --mode burst --concurrency 100 --requests 500 --url http://127.0.0.1:8000 --api-key dev-local-key --report artifacts/load-report-100.json`
-- Comparison:
-  `python tests/load/compare_reports.py --baseline tests/load/baseline_100c.json --report artifacts/load-report-100.json --latency-tolerance-pct 50 --min-success-rate 95`
-- Result: `PASS` — `500 / 500` successful, `0` rate-limited, `0` network errors, `p95 = 2.1710 s`, baseline comparison `PASS` (`-63.8%` vs `+50%` ceiling)
-- Attach/archive:
-  - `artifacts/load-report-100.json`
-
-### Go / No-Go checklist
-
-- [x] Schema freeze is active for the frozen contracts in Section 1
-- [x] Readiness regression is fixed
-- [x] Provenance topic filters and aliases are live
-- [x] Current locked coverage statement is published
-- [x] All five gate result blocks above are marked passed on the March 26 head
-
-The 48-hour soak does not start from partial progress. It starts only after every
-gate result block above is marked passed and this checklist is fully green.
+Do not update either baseline file from a failing or partial run.
 
 ---
 
-## 6. Current Locked Coverage Slice
+## 5. Current March 30 Ledger
 
-The canonical March 26, 2026 acceptance slice is derived from
-`tests/fixtures/golden_cases.py` and currently covers:
+Populate this ledger only after executing the rerun on the current head.
 
-- 9 distinct HS6 products
-- 6 directed corridors
-- 15 golden cases
-- 9 HS chapters
+| Gate | Status | Evidence |
+|---|---|---|
+| Contract freeze test suite | `PENDING LOCAL RERUN` | `tests/unit/test_contract_freeze.py` |
+| Unit suite | `PENDING LOCAL RERUN` | `artifacts/verification/<git-sha>/unit-tests.xml` and `unit-coverage.xml` |
+| Integration suite | `PENDING LOCAL RERUN` | `artifacts/verification/<git-sha>/integration-tests.xml` and `integration-coverage.xml` |
+| Assistant/NIM suite | `PENDING LOCAL RERUN` | `artifacts/verification/<git-sha>/assistant-nim-tests.xml` and `assistant-nim-coverage.xml` |
+| 10c load gate | `PENDING LOCAL RERUN` | `artifacts/verification/<git-sha>/load-report-ci.json` and `load-report-ci-compare.log` |
+| 100c load gate | `PENDING LOCAL RERUN` | `artifacts/verification/<git-sha>/load-report-100.json` and `load-report-100-compare.log` |
+| Artifact publication | `PENDING LOCAL RERUN` | `artifacts/verification/<git-sha>/manifest.json` |
 
-Use these figures in the README, runbook, and gate log. Do not restate older
-coverage claims from the pre-expansion slice.
+Do not mark this ledger passed from the older March 25 or March 26 evidence.
+
+---
+
+## 6. Current Repo Truth On March 30, 2026
+
+These statements are true on the current repo head and do not require the rerun
+to infer:
+
+- public contract freeze tests remain the canonical freeze mechanism
+- `AGENTS.md` is restored and published at the repo root
+- the parser confidence gate was tightened in `scripts/parsers/validation_runner.py`
+- the published intelligence corridor profile surface is explicitly narrowed to the seeded active pairs
+- the load harness now emits `load-report-warmup.json`, `load-report-ci.json`, and `load-report-100.json`
+- the 100c gate now enforces an absolute `p95 <= 0.5s` ceiling in addition to the stored baseline comparison
+- static reference, case bundle, provenance snapshot, and opt-in status overlay caching are available to support the March 30 load rerun
+
+The following still require local execution before trader UI work can be
+declared unblocked:
+
+- a full passing March 30 verification manifest on the current head
+- refreshed 10c and 100c committed baselines from that accepted rerun
 
 ---
 
@@ -252,10 +200,9 @@ coverage claims from the pre-expansion slice.
 
 The 48-hour freeze window starts only when all of the following are true:
 
-- the full gate suite above passed on the March 26 head
-- the readiness probe regression is fixed
-- provenance topic filters and aliases are live and test-pinned
-- the current HS6 coverage statement has been reconciled and published
+- the full rerun suite above passes on the March 30, 2026 head
+- the artifact bundle is published from the current commit
+- the load baselines are refreshed only if the accepted rerun is intended to become the new baseline
 
 During the 48-hour soak:
 
@@ -264,46 +211,23 @@ During the 48-hour soak:
 - no alias changes are allowed for canonical public fields
 - any contract change immediately invalidates the soak and requires a fresh full gate rerun
 
-Record the freeze start timestamp explicitly in the production runbook or gate log.
+Record the freeze start timestamp in `docs/dev/production_runbook.md` only after
+the current head passes.
 
 ---
 
 ## 8. Operator Checklist
 
-- [x] Confirm the frozen schema set has not changed since the gate rerun started
-- [x] Run the unit gate and publish `artifacts/unit-coverage.xml`
-- [x] Run the integration gate and publish `artifacts/integration-coverage.xml`
-- [x] Run the assistant/NIM gate and publish `artifacts/assistant-nim-tests.xml`
-- [x] Publish `artifacts/assistant-nim-coverage.xml`
-- [x] Run the load baseline gate and publish `artifacts/load-report-ci.json`
-- [x] Run the 100-concurrency load gate and publish `artifacts/load-report-100.json`
-- [x] Publish the locked coverage statement: 9 HS6 products, 6 directed corridors, 15 golden cases, 9 HS chapters
-- [x] Confirm all gate checks passed on the March 26 head
-- [x] Record the freeze start timestamp
-- [x] Enforce a 48-hour no-schema-change window before starting the next primary prompt book
+- [ ] Confirm the frozen schema set has not changed since the March 30 rerun started
+- [ ] Confirm `git status --short` is empty before starting the rerun
+- [ ] Run `python scripts/local_gate_runner.py --host 127.0.0.1 --port 8002 --api-key <API_KEY>`
+- [ ] Review `artifacts/verification/<git-sha>/manifest.json`
+- [ ] Confirm unit, integration, assistant/NIM, 10c, and 100c entries all passed
+- [ ] Publish the full `artifacts/verification/<git-sha>/` directory
+- [ ] Refresh `tests/load/baseline.json` only if the accepted 10c report becomes the new baseline
+- [ ] Refresh `tests/load/baseline_100c.json` only if the accepted 100c report becomes the new baseline
+- [ ] Record the freeze start timestamp in `docs/dev/production_runbook.md`
+- [ ] Enforce the 48-hour no-schema-change window before trader UI work
 
-Once every item above is complete, the repo is cleared for the next gate-dependent handoff.
-
----
-
-## 9. Final Gate-Closure Summary
-
-Status for the March 26, 2026 head: **PASSED / FORMALLY CLEARED**.
-
-Reason:
-
-- the March 26 rerun ledger in Section 5 is fully populated with passing unit,
-  integration, assistant/NIM, and load evidence
-- the Go / No-Go checklist is fully green
-- the locked coverage statement is published and the readiness/provenance fixes are live
-
-Schema freeze start timestamp:
-
-- `2026-03-26T10:32:57.1600046-04:00`
-
-Next prompt-book handoff:
-
-- the next allowed primary prompt book is **Decision Renderer**
-- **NIM Readiness** is already complete and the freeze is now in effect
-- **NIM Integration** is post-readiness follow-on work only, not the next primary
-  build step
+Until every item above is checked, the repo is not formally cleared for a
+trader-facing UI release.

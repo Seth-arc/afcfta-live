@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 import logging
 
@@ -66,6 +67,73 @@ class EvidenceService:
             risk_category=risk_category,
             as_of_date=assessment_date,
         )
+        return self._build_result(
+            requirements=requirements,
+            questions=questions,
+            persona_mode=resolved_persona,
+            existing_documents=existing_documents,
+        )
+
+    async def build_readiness_for_targets(
+        self,
+        targets: list[tuple[str, str]],
+        *,
+        persona_mode: str,
+        existing_documents: list[str],
+        confidence_class: str | None = None,
+        assessment_date: date | None = None,
+    ) -> EvidenceReadinessResult:
+        """Resolve ordered evidence targets in one repository round trip."""
+
+        if assessment_date is None:
+            log_event(
+                _logger,
+                logging.WARNING,
+                event="evidence_service_missing_assessment_date",
+                message="evidence_service called without assessment_date â€” snapshot isolation relies on caller transaction boundary",
+            )
+
+        resolved_persona = self._normalize_persona_mode(persona_mode)
+        risk_category = (
+            None if confidence_class is None else _CONFIDENCE_TO_RISK.get(confidence_class)
+        )
+        lookup_rows = await self.evidence_repository.get_readiness_inputs_for_targets(
+            targets,
+            persona_mode=resolved_persona,
+            risk_category=risk_category,
+            as_of_date=assessment_date,
+        )
+
+        fallback_result: EvidenceReadinessResult | None = None
+        for row in lookup_rows:
+            result = self._build_result(
+                requirements=row.get("requirements") or [],
+                questions=row.get("questions") or [],
+                persona_mode=resolved_persona,
+                existing_documents=existing_documents,
+            )
+            if fallback_result is None:
+                fallback_result = result
+            if self._result_has_content(result):
+                return result
+
+        return fallback_result or EvidenceReadinessResult(
+            required_items=[],
+            missing_items=[],
+            verification_questions=[],
+            readiness_score=1.0,
+            completeness_ratio=1.0,
+        )
+
+    def _build_result(
+        self,
+        *,
+        requirements: list[Mapping[str, object]],
+        questions: list[Mapping[str, object]],
+        persona_mode: str,
+        existing_documents: list[str],
+    ) -> EvidenceReadinessResult:
+        """Construct one readiness result from repository rows."""
 
         required_map: dict[str, str] = {}
         for requirement in requirements:
@@ -97,7 +165,7 @@ class EvidenceService:
         verification_questions = [
             question["question_text"]
             for question in questions
-            if self._normalize_value(question["persona_mode"]) in {resolved_persona, "system"}
+            if self._normalize_value(question["persona_mode"]) in {persona_mode, "system"}
         ]
 
         return EvidenceReadinessResult(
@@ -107,6 +175,12 @@ class EvidenceService:
             readiness_score=readiness_score,
             completeness_ratio=readiness_score,
         )
+
+    @staticmethod
+    def _result_has_content(result: EvidenceReadinessResult) -> bool:
+        """Return True when a readiness result includes actual requirements or questions."""
+
+        return bool(result.required_items or result.verification_questions)
 
     async def get_readiness(
         self,

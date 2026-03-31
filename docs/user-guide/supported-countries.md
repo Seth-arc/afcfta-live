@@ -6,65 +6,66 @@ The current country list in v0.1 is:
 
 - Nigeria (`NGA`)
 - Ghana (`GHA`)
-- Côte d'Ivoire (`CIV`)
+- Cote d'Ivoire (`CIV`)
 - Senegal (`SEN`)
 - Cameroon (`CMR`)
 
 If you use a country outside this list, AIS returns a corridor-not-supported error.
 
-## Supported Corridors
+## Published Active Corridor Profiles
 
-The seeded and tested corridor coverage in v0.1 is:
+The seeded `corridor_profile` surface currently published through the intelligence
+API is intentionally narrower than the full locked acceptance corpus. As of
+March 30, 2026, the active published corridor-profile pairs are:
 
 - `GHA -> NGA`
 - `CMR -> NGA`
+- `CIV -> NGA`
+- `SEN -> NGA`
+- `GHA -> CMR`
 
-These are the corridors currently loaded with tariff data and used in the end-to-end examples and test coverage.
+`GET /api/v1/intelligence/corridors/{exporter}/{importer}` should be treated as
+supported only for those five directed pairs.
 
-## What “Supported” Means
+## Acceptance Coverage Is Broader Than Published Profiles
 
-When a country or corridor is supported, that means AIS has the necessary legal and operational data loaded for decision support, including:
+The locked golden assessment slice covers 6 directed corridors, including
+synthetic test-seeded acceptance scenarios such as `CIV -> SEN` and `NGA -> GHA`.
+Those cases validate assessment behavior, but they are not the same thing as
+published active `corridor_profile` rows.
+
+That distinction matters:
+
+- a country can be in scope for v0.1
+- a corridor can be valid for deterministic assessment tests
+- but the intelligence profile endpoint can still return `404` if no active
+  corridor profile has been seeded for that exact pair
+
+## What "Supported" Means
+
+When a country or corridor is supported for operational use, AIS has the
+necessary legal and operational data loaded for that surface, including:
 
 - product-specific rule data
 - tariff data for the corridor
 - status-aware decision logic
 - evidence and audit support
+- an active corridor profile when using the intelligence profile endpoint
 
-In practice, you should treat a corridor as truly usable only when the relevant corridor data is actually loaded.
+Always verify:
 
-## What Is NOT Supported In v0.1
+- the country is in scope
+- the corridor data exists for the API surface you are calling
+- the tariff and status outputs are not provisional or missing
+
+## What Is Not Supported In v0.1
 
 v0.1 does not support:
 
-- other African countries outside the five-country list above
+- countries outside the five-country list above
 - HS8 or HS10 computation as a decision layer
-  AIS accepts longer input codes, but truncates them to HS6 for computation.
 - real-time legal update feeds
 - automatic legal monitoring across all African jurisdictions
-- full-continent tariff and corridor coverage
+- full-continent tariff and corridor-profile coverage
 
-## Important Limitation
-
-The country list and the corridor data are not the same thing.
-
-- A country may be in the supported country list
-- but that does not automatically mean every corridor involving that country has full tariff and operational data loaded
-
-For that reason, always verify:
-
-- the country is in scope
-- the corridor data exists
-- the tariff and status outputs are not provisional or missing
-
-## Planned Expansions
-
-Planned future expansion areas include:
-
-- more AfCFTA member states
-- more corridor pairs
-- broader tariff coverage
-- deeper operational status coverage
-- richer evidence and audit coverage
-- better update cadence for legal and schedule data
-
-Until those expansions are loaded, use AIS as a scoped v0.1 decision-support engine rather than a full-Africa production clearance platform.
+AIS accepts longer product codes on input, but truncates them to HS6 for computation.

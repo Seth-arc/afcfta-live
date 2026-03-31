@@ -60,7 +60,6 @@ A prompt is only complete when all of the following are true:
 ---
 
 ## Required Preconditions
-jijiji
 Before Prompt 1, verify all of these are already true:
 
 - NIM readiness book is complete (Prompts 1–12 done)

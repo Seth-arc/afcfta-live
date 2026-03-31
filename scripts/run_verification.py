@@ -47,6 +47,11 @@ def parse_args() -> argparse.Namespace:
         description="Run current-commit verification suites and publish artifacts.",
     )
     parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow diagnostic runs from a dirty worktree. Do not use for release-gate publication.",
+    )
+    parser.add_argument(
         "--skip-unit",
         action="store_true",
         help="Skip the unit-test suite.",
@@ -311,6 +316,7 @@ def _load_results(
     concurrency: int,
     requests: int,
     baseline_path: Path,
+    max_p95_latency_s: float | None = None,
 ) -> list[CommandResult]:
     report_path = artifact_dir / f"{name}.json"
     load_result = _run_command(
@@ -349,11 +355,47 @@ def _load_results(
             "95",
             "--latency-tolerance-pct",
             tolerance,
+            *(
+                ["--max-p95-latency-s", str(max_p95_latency_s)]
+                if max_p95_latency_s is not None
+                else []
+            ),
         ],
         log_path=artifact_dir / f"{name}-compare.log",
     )
     compare_result.report_path = str(report_path)
     return [load_result, compare_result]
+
+
+def _load_warmup(
+    *,
+    artifact_dir: Path,
+    base_url: str,
+    api_key: str,
+) -> CommandResult:
+    report_path = artifact_dir / "load-report-warmup.json"
+    warmup_result = _run_command(
+        name="load-report-warmup",
+        command=[
+            sys.executable,
+            "tests/load/run_load_test.py",
+            "--mode",
+            "burst",
+            "--url",
+            base_url,
+            "--api-key",
+            api_key,
+            "--concurrency",
+            "2",
+            "--requests",
+            "20",
+            "--report",
+            str(report_path),
+        ],
+        log_path=artifact_dir / "load-report-warmup.log",
+    )
+    warmup_result.report_path = str(report_path)
+    return warmup_result
 
 
 def _write_manifest(
@@ -377,6 +419,13 @@ def _write_manifest(
 
 def main() -> int:
     args = parse_args()
+    if _git_dirty() and not args.allow_dirty:
+        print(
+            "Refusing to run verification from a dirty worktree. Commit or stash changes first, "
+            "or pass --allow-dirty for a diagnostic-only run that cannot start the freeze window.",
+            file=sys.stderr,
+        )
+        return 2
     artifact_dir = Path(args.artifacts_root) / _git_sha()
     shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -440,9 +489,16 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+        results.append(
+            _load_warmup(
+                artifact_dir=artifact_dir,
+                base_url=args.base_url,
+                api_key=args.api_key,
+            )
+        )
         results.extend(
             _load_results(
-                name="load-report-10c",
+                name="load-report-ci",
                 artifact_dir=artifact_dir,
                 base_url=args.base_url,
                 api_key=args.api_key,
@@ -453,13 +509,14 @@ def main() -> int:
         )
         results.extend(
             _load_results(
-                name="load-report-100c",
+                name="load-report-100",
                 artifact_dir=artifact_dir,
                 base_url=args.base_url,
                 api_key=args.api_key,
                 concurrency=100,
                 requests=500,
                 baseline_path=DEFAULT_LARGE_LOAD_BASELINE,
+                max_p95_latency_s=0.5,
             )
         )
 

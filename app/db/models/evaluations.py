@@ -72,6 +72,7 @@ class EligibilityEvaluation(Base):
         nullable=False,
     )
     tariff_status_at_evaluation: Mapped[str] = mapped_column(Text, nullable=False)
+    decision_snapshot_json: Mapped[dict[str, Any] | list[Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

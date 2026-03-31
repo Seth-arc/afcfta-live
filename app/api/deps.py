@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.services.nim.clarification_service import ClarificationService
     from app.services.nim.explanation_service import ExplanationService
     from app.services.nim.intake_service import IntakeService
+    from app.services.nim.rendering_service import RenderingService
 
 from fastapi import BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -566,3 +567,12 @@ def get_explanation_service(
     from app.services.nim.explanation_service import ExplanationService
 
     return ExplanationService(nim_client)
+
+
+def get_rendering_service(
+    nim_client: "NimClient" = Depends(get_nim_client),
+) -> "RenderingService":
+    """Return a RenderingService bound to the request-scoped NimClient."""
+    from app.services.nim.rendering_service import RenderingService
+
+    return RenderingService(nim_client)

@@ -93,6 +93,7 @@ ASSISTANT_RESPONSE_ENVELOPE_FIELDS = frozenset({
     "clarification",
     "explanation",
     "explanation_fallback_used",
+    "assistant_rendering",
     "error",
 })
 

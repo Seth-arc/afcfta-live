@@ -249,7 +249,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/unit/test_rendering_service.py -v
 ```
-
+# Completed 31 March
 ---
 
 ## Prompt 4 — Wire the rendering layer into the assistant orchestration

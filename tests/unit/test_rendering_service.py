@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from app.schemas.nim.rendering import NimRendering
 from app.services.nim.client import NimClient, NimClientError
-from app.services.nim.decision_renderer import DecisionRenderer, RenderedDecision
+from app.services.nim.decision_renderer import RenderedDecision
 from app.services.nim.rendering_service import (
     RenderingService,
     _check_headline_contradiction,

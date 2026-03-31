@@ -261,19 +261,70 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
     shared_rule_resolution = AsyncMock()
     rule_resolution_service.resolve_rule_bundle = shared_rule_resolution
     rule_resolution_service.resolve_rule_bundle_by_hs6_id = shared_rule_resolution
+    status_service = AsyncMock()
+    evidence_service = AsyncMock()
+
+    async def _get_status_overlays(
+        targets: list[tuple[str, str]],
+        as_of_date: date | None = None,
+    ) -> dict[tuple[str, str], StatusOverlay]:
+        overlays: dict[tuple[str, str], StatusOverlay] = {}
+        for entity_type, entity_key in targets:
+            overlays[(entity_type, entity_key)] = await status_service.get_status_overlay(
+                entity_type,
+                entity_key,
+                as_of_date,
+            )
+        return overlays
+
+    async def _build_readiness_for_targets(
+        targets: list[tuple[str, str]],
+        *,
+        persona_mode: str,
+        existing_documents: list[str],
+        confidence_class: str | None = None,
+        assessment_date: date | None = None,
+    ) -> EvidenceReadinessResult:
+        fallback: EvidenceReadinessResult | None = None
+        for entity_type, entity_key in targets:
+            result = await evidence_service.build_readiness(
+                entity_type=entity_type,
+                entity_key=entity_key,
+                persona_mode=persona_mode,
+                existing_documents=existing_documents,
+                confidence_class=confidence_class,
+                assessment_date=assessment_date,
+            )
+            if fallback is None:
+                fallback = result
+            if result.required_items or result.verification_questions:
+                return result
+        return fallback or EvidenceReadinessResult(
+            required_items=[],
+            missing_items=[],
+            verification_questions=[],
+            readiness_score=1.0,
+            completeness_ratio=1.0,
+        )
+
+    status_service.get_status_overlays.side_effect = _get_status_overlays
+    evidence_service.build_readiness_for_targets.side_effect = _build_readiness_for_targets
+
+    intelligence_service = Mock()
+    intelligence_service.build_assessment_alert_specs.return_value = []
 
     deps = {
         "classification_service": AsyncMock(),
         "rule_resolution_service": rule_resolution_service,
         "tariff_resolution_service": AsyncMock(),
-        "status_service": AsyncMock(),
-        "evidence_service": AsyncMock(),
+        "status_service": status_service,
+        "evidence_service": evidence_service,
         "fact_normalization_service": Mock(),
         "expression_evaluator": Mock(),
         "general_origin_rules_service": Mock(),
         "cases_repository": AsyncMock(),
         "evaluations_repository": AsyncMock(),
-        "intelligence_service": AsyncMock(),
+        "intelligence_service": intelligence_service,
     }
     return EligibilityService(**deps), deps
 
@@ -446,9 +497,10 @@ async def test_architecture_blocker_rule_status_pending_skips_pathway_evaluation
     assert result.failures == ["RULE_STATUS_PENDING"]
     assert result.missing_facts == []
     assert result.confidence_class == "provisional"
-    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    deps["intelligence_service"].build_assessment_alert_specs.assert_called_once()
     assert deps["status_service"].get_status_overlay.await_args_list == [
         call("corridor", "CORRIDOR:GHA:NGA:030389", date(2025, 1, 1)),
+        call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),
     ]
     deps["fact_normalization_service"].normalize_facts.assert_not_called()
     deps["expression_evaluator"].evaluate.assert_not_called()
@@ -743,12 +795,13 @@ async def test_architecture_blocker_missing_tariff_schedule_skips_pathway_evalua
     assert result.confidence_class == "complete"
     assert deps["status_service"].get_status_overlay.await_args_list == [
         call("corridor", "CORRIDOR:GHA:NGA:110311", date(2025, 1, 1)),
+        call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),
     ]
     deps["fact_normalization_service"].normalize_facts.assert_not_called()
     deps["expression_evaluator"].evaluate.assert_not_called()
     deps["general_origin_rules_service"].evaluate.assert_not_called()
     deps["evidence_service"].build_readiness.assert_not_called()
-    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    deps["intelligence_service"].build_assessment_alert_specs.assert_called_once()
     persisted_checks = _assert_persisted_blocker_audit(
         deps,
         case_id=str(_uuid(250)),
@@ -799,7 +852,7 @@ async def test_architecture_blocker_corridor_not_yet_operational_skips_pathway_e
     deps["expression_evaluator"].evaluate.assert_not_called()
     deps["general_origin_rules_service"].evaluate.assert_not_called()
     deps["evidence_service"].build_readiness.assert_not_called()
-    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    deps["intelligence_service"].build_assessment_alert_specs.assert_called_once()
     _assert_persisted_blocker_audit(
         deps,
         case_id=str(_uuid(260)),
@@ -1035,11 +1088,17 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
     )
     auto_case_id = str(_uuid(400))
     evaluation_id = str(_uuid(401))
+    pending_alert_spec = {
+        "alert_type": "data_quality_issue",
+        "entity_type": "corridor",
+        "entity_key": "corridor:GHA:NGA:110311",
+    }
     deps["cases_repository"].create_case.return_value = auto_case_id
     deps["evaluations_repository"].persist_evaluation.return_value = {
         "evaluation": {"evaluation_id": evaluation_id},
         "checks": [],
     }
+    deps["intelligence_service"].build_assessment_alert_specs.return_value = [pending_alert_spec]
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
     deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
@@ -1064,6 +1123,7 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
     assert result.case_id == auto_case_id
     assert result.evaluation_id == evaluation_id
     assert result.response.eligible is True
+    assert result.pending_alert_specs == (pending_alert_spec,)
 
     deps["cases_repository"].create_case.assert_awaited_once()
     created_case = deps["cases_repository"].create_case.await_args.args[0]
@@ -1088,6 +1148,57 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
     persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
     assert persisted_evaluation["case_id"] == auto_case_id
     deps["evaluations_repository"].get_latest_evaluation_for_case.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_prepare_interface_request_assessment_defers_evaluation_persistence() -> None:
+    """Prepared interface runs should capture replay payload without writing the evaluation yet."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
+    )
+    auto_case_id = str(_uuid(405))
+    pending_alert_spec = {
+        "alert_type": "data_quality_issue",
+        "entity_type": "corridor",
+        "entity_key": "corridor:GHA:NGA:110311",
+    }
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["intelligence_service"].build_assessment_alert_specs.return_value = [pending_alert_spec]
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
+    )
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    prepared = await service.prepare_interface_request_assessment(request)
+
+    assert prepared.case_id == auto_case_id
+    assert prepared.response.eligible is True
+    assert prepared.response.audit_persisted is False
+    assert prepared.pending_alert_specs == (pending_alert_spec,)
+    assert prepared.evaluation_persistence is not None
+    assert prepared.evaluation_persistence.request.case_id == auto_case_id
+    deps["evaluations_repository"].persist_evaluation.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1425,3 +1536,167 @@ async def test_assessment_falls_back_to_rule_type_evidence_when_specific_targets
             assessment_date=date(2025, 1, 1),
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() -> None:
+    """Persistence should keep source references but defer provenance enrichment off the hot path."""
+
+    service, deps = _service()
+    case_id = str(_uuid(500))
+    rule_source_id = _uuid(501)
+    schedule_source_id = _uuid(502)
+    rate_source_id = _uuid(503)
+    request = _request(
+        hs6_code="110311",
+        facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+        case_id=case_id,
+    )
+    rule_bundle = _rule_bundle(hs6_code="110311").model_copy(
+        update={
+            "psr_rule": _rule_bundle(hs6_code="110311").psr_rule.model_copy(
+                update={"source_id": rule_source_id}
+            )
+        }
+    )
+    tariff_result = _tariff_result().model_copy(
+        update={
+            "schedule_source_id": schedule_source_id,
+            "rate_source_id": rate_source_id,
+        }
+    )
+    deps["sources_repository"] = AsyncMock()
+    service.sources_repository = deps["sources_repository"]
+    deps["sources_repository"].get_source_snapshot.side_effect = [
+        {
+            "source": {
+                "source_id": str(rule_source_id),
+                "short_title": "Appendix IV",
+                "version_label": "2025.01",
+                "publication_date": date(2025, 1, 1),
+                "effective_date": date(2025, 1, 1),
+            },
+            "supporting_provisions": [
+                {
+                    "provision_id": str(_uuid(510)),
+                    "source_id": str(rule_source_id),
+                    "instrument_name": "Appendix IV",
+                    "article_ref": "Art. 6",
+                    "annex_ref": "Annex 2",
+                    "topic_primary": "origin_rules",
+                    "page_start": 14,
+                    "page_end": 14,
+                    "provision_text_verbatim": "Change in tariff heading required.",
+                    "provision_text_normalized": "cth",
+                    "effective_date": date(2025, 1, 1),
+                    "expiry_date": None,
+                    "status": "active",
+                }
+            ],
+        },
+        {
+            "source": {
+                "source_id": str(schedule_source_id),
+                "short_title": "Nigeria Schedule",
+                "version_label": "2025-gazette",
+                "publication_date": date(2025, 1, 1),
+                "effective_date": date(2025, 1, 1),
+            },
+            "supporting_provisions": [
+                {
+                    "provision_id": str(_uuid(511)),
+                    "source_id": str(schedule_source_id),
+                    "instrument_name": "Tariff Schedule",
+                    "article_ref": None,
+                    "annex_ref": "Schedule A",
+                    "topic_primary": "tariff_schedule",
+                    "page_start": 9,
+                    "page_end": 9,
+                    "provision_text_verbatim": "Preferential rate is 0%.",
+                    "provision_text_normalized": "preferential rate zero",
+                    "effective_date": date(2025, 1, 1),
+                    "expiry_date": None,
+                    "status": "active",
+                }
+            ],
+        },
+    ]
+    deps["evaluations_repository"].persist_evaluation.return_value = {
+        "evaluation": {"evaluation_id": str(_uuid(520))},
+        "checks": [],
+    }
+    response = EligibilityAssessmentResponse(
+        hs6_code="110311",
+        eligible=True,
+        pathway_used="CTH",
+        rule_status="agreed",
+        tariff_outcome=service._build_tariff_outcome(tariff_result),
+        failures=[],
+        missing_facts=[],
+        evidence_required=[],
+        missing_evidence=[],
+        readiness_score=1.0,
+        completeness_ratio=1.0,
+        confidence_class="complete",
+    )
+    audit_checks = [
+        service._make_audit_check(
+            check_type="rule",
+            check_code="PSR_RESOLUTION",
+            passed=True,
+            severity="info",
+            expected_value="110311",
+            observed_value=str(rule_bundle.psr_rule.psr_id),
+            explanation="Resolved the governing PSR rule bundle",
+            details_json={
+                "psr_rule": rule_bundle.psr_rule.model_dump(mode="json"),
+                "applicability_type": rule_bundle.applicability_type,
+            },
+        ),
+        service._make_tariff_trace_check(tariff_result),
+    ]
+
+    persisted = await service._persist_evaluation_if_possible(
+        request=request,
+        assessment_date=date(2025, 1, 1),
+        rule_bundle=rule_bundle,
+        response=response,
+        pathway_used="CTH",
+        audit_checks=audit_checks,
+    )
+
+    assert persisted is True
+    assert (
+        deps["evaluations_repository"].persist_evaluation.await_args.kwargs["persist_check_results"]
+        is False
+    )
+    persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
+    persisted_checks = deps["evaluations_repository"].persist_evaluation.await_args.args[1]
+    rule_check = next(check for check in persisted_checks if check["check_code"] == "PSR_RESOLUTION")
+    tariff_check = next(
+        check for check in persisted_checks if check["check_code"] == "TARIFF_RESOLUTION"
+    )
+
+    assert rule_check["details_json"]["psr_rule"]["source_id"] == str(rule_source_id)
+    assert "provenance_snapshot" not in rule_check["details_json"]
+    assert (
+        tariff_check["details_json"]["tariff_resolution"]["schedule_source_id"]
+        == str(schedule_source_id)
+    )
+    assert "provenance_snapshot" not in tariff_check["details_json"]
+    assert (
+        persisted_evaluation["decision_snapshot_json"]["rule_check"]["details_json"]["psr_rule"][
+            "source_id"
+        ]
+        == str(rule_source_id)
+    )
+    assert "provenance_snapshot" not in persisted_evaluation["decision_snapshot_json"][
+        "rule_check"
+    ]["details_json"]
+    assert (
+        persisted_evaluation["decision_snapshot_json"]["tariff_check"]["details_json"][
+            "tariff_resolution"
+        ]["schedule_source_id"]
+        == str(schedule_source_id)
+    )
+    assert deps["sources_repository"].get_source_snapshot.await_count == 0

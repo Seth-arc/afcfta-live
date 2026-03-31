@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
+
+import pytest
 
 from app.repositories.cases_repository import CasesRepository
 
@@ -86,3 +89,60 @@ async def test_get_case_with_facts_returns_case_and_ordered_facts() -> None:
     result = await repository.get_case_with_facts(str(case_row["case_id"]))
 
     assert result == {"case": case_row, "facts": [fact_row]}
+
+
+@pytest.mark.asyncio
+async def test_get_case_with_facts_returns_cached_value_on_cache_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = RecordingSession([])
+    repository = CasesRepository(session)
+    cached_bundle = {"case": {"case_id": uuid4()}, "facts": [{"fact_id": uuid4()}]}
+
+    monkeypatch.setattr(
+        "app.repositories.cases_repository.get_settings",
+        lambda: SimpleNamespace(CACHE_STATIC_LOOKUPS=True, CACHE_TTL_SECONDS=300),
+    )
+    monkeypatch.setattr(
+        "app.repositories.cases_repository.cache.get",
+        lambda store, key: (True, cached_bundle),
+    )
+
+    result = await repository.get_case_with_facts(str(uuid4()))
+
+    assert result == cached_bundle
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_case_with_facts_queries_and_caches_on_cache_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case_row = {"case_id": uuid4()}
+    fact_row = {"fact_id": uuid4()}
+    session = RecordingSession(
+        [
+            FakeResult(first_mapping=case_row),
+            FakeResult(all_mappings=[fact_row]),
+        ]
+    )
+    repository = CasesRepository(session)
+    put_calls: list[tuple[object, object, object, object]] = []
+
+    monkeypatch.setattr(
+        "app.repositories.cases_repository.get_settings",
+        lambda: SimpleNamespace(CACHE_STATIC_LOOKUPS=True, CACHE_TTL_SECONDS=300),
+    )
+    monkeypatch.setattr(
+        "app.repositories.cases_repository.cache.get",
+        lambda store, key: (False, None),
+    )
+    monkeypatch.setattr(
+        "app.repositories.cases_repository.cache.put",
+        lambda store, key, value, ttl: put_calls.append((store, key, value, ttl)),
+    )
+
+    result = await repository.get_case_with_facts(str(case_row["case_id"]))
+
+    assert result == {"case": case_row, "facts": [fact_row]}
+    assert put_calls

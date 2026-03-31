@@ -34,12 +34,15 @@ import asyncio
 import sys
 
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
+from sqlalchemy import text
 
 import app.core.cache as reference_cache
 import app.db.base as _db_base
 import app.db.session as _db_session
+from app.core.load_test_fixtures import LOAD_FIXTURE_CREATED_BY
 
 # Switch to SelectorEventLoop on Windows so that asyncpg transport teardown
 # drops pending writes silently instead of crashing with AttributeError.
@@ -73,6 +76,135 @@ def _nullpool_engine() -> None:  # type: ignore[return]
     _db_base.get_engine = _orig_base  # type: ignore[assignment]
     _db_session.get_engine = _orig_session  # type: ignore[assignment]
     _db_base.get_engine.cache_clear()
+
+
+@pytest_asyncio.fixture(autouse=True, scope="session")
+async def _reset_mutable_integration_state(
+    _nullpool_engine: None,
+) -> None:  # type: ignore[return]
+    """Clear prior synthetic state so integration suites are rerunnable on the same DB.
+
+    The local pre-production audit runs integration files multiple times against one
+    seeded database. Without a session-start cleanup, previously inserted synthetic
+    rows can collide with deterministic fixture codes or fixed repository fixtures.
+    """
+
+    reference_cache.clear_all()
+    session_factory = _db_base.get_async_session_factory()
+    async with session_factory() as session:
+        async with session.begin():
+            statements = [
+                "DELETE FROM eligibility_check_result",
+                "DELETE FROM eligibility_evaluation",
+                "DELETE FROM alert_event",
+                f"""
+                DELETE FROM case_input_fact
+                WHERE case_id IN (
+                    SELECT case_id
+                    FROM case_file
+                    WHERE created_by IS DISTINCT FROM '{LOAD_FIXTURE_CREATED_BY}'
+                )
+                """,
+                f"""
+                DELETE FROM case_file
+                WHERE created_by IS DISTINCT FROM '{LOAD_FIXTURE_CREATED_BY}'
+                """,
+                """
+                DELETE FROM transition_clause
+                WHERE source_id IN (
+                    SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM status_assertion
+                WHERE source_id IN (
+                    SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM legal_provision
+                WHERE source_id IN (
+                    SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM tariff_schedule_rate_by_year
+                WHERE source_id IN (
+                    SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                )
+                OR schedule_line_id IN (
+                    SELECT tsl.schedule_line_id
+                    FROM tariff_schedule_line tsl
+                    JOIN tariff_schedule_header tsh
+                      ON tsh.schedule_id = tsl.schedule_id
+                    JOIN source_registry sr
+                      ON sr.source_id = tsh.source_id
+                    WHERE sr.source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM tariff_schedule_line
+                WHERE schedule_id IN (
+                    SELECT tsh.schedule_id
+                    FROM tariff_schedule_header tsh
+                    JOIN source_registry sr
+                      ON sr.source_id = tsh.source_id
+                    WHERE sr.source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM tariff_schedule_header
+                WHERE source_id IN (
+                    SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM hs6_psr_applicability
+                WHERE psr_id IN (
+                    SELECT psr_id FROM psr_rule
+                    WHERE source_id IN (
+                        SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                    )
+                )
+                """,
+                """
+                DELETE FROM eligibility_rule_pathway
+                WHERE psr_id IN (
+                    SELECT psr_id FROM psr_rule
+                    WHERE source_id IN (
+                        SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                    )
+                )
+                """,
+                """
+                DELETE FROM psr_rule_component
+                WHERE psr_id IN (
+                    SELECT psr_id FROM psr_rule
+                    WHERE source_id IN (
+                        SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                    )
+                )
+                """,
+                """
+                DELETE FROM psr_rule
+                WHERE source_id IN (
+                    SELECT source_id FROM source_registry WHERE source_group = 'pytest'
+                )
+                """,
+                """
+                DELETE FROM hs6_product
+                WHERE description LIKE 'Synthetic %'
+                """,
+                """
+                DELETE FROM source_registry
+                WHERE source_group = 'pytest'
+                """,
+            ]
+            for statement in statements:
+                await session.execute(text(statement))
+    reference_cache.clear_all()
+    yield
+    reference_cache.clear_all()
 
 
 @pytest.fixture(autouse=True)

@@ -1,33 +1,33 @@
 {
   "config": {
     "mode": "burst",
-    "base_url": "http://localhost:8000",
+    "base_url": "http://127.0.0.1:8002",
     "auth_header": "X-API-Key",
     "concurrency": 100,
     "total_requests": 500,
     "timeout_s": 30.0,
     "fail_under_pct": 95.0,
-    "payload_count": 5
+    "payload_count": 100
   },
   "mode": "burst",
   "metrics": {
     "scenario": "sustained-concurrent",
     "total_requests": 500,
-    "successful_2xx": 500,
+    "successful_2xx": 480,
     "rate_limited_429": 0,
-    "network_errors": 0,
+    "network_errors": 20,
     "other_failures": 0,
-    "success_rate_pct": 100.0,
-    "wall_elapsed_s": 10.453,
-    "throughput_rps": 47.83,
+    "success_rate_pct": 96.0,
+    "wall_elapsed_s": 30.234,
+    "throughput_rps": 16.54,
     "latency_s": {
-      "min": 0.203,
-      "p50": 1.266,
-      "p75": 2.375,
-      "p95": 5.609,
-      "p99": 7.125,
-      "max": 9.203,
-      "sample_count": 500
+      "min": 0.078,
+      "p50": 0.844,
+      "p75": 1.469,
+      "p95": 3.515,
+      "p99": 4.969,
+      "max": 5.485,
+      "sample_count": 480
     }
   }
 }

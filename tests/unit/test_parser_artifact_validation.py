@@ -8,7 +8,11 @@ from scripts.parsers.applicability_builder import validate_output_rows as valida
 from scripts.parsers.pathway_builder import build_output_rows as build_pathway_output_rows
 from scripts.parsers.pathway_builder import validate_output_rows as validate_pathway_output_rows
 from scripts.parsers.rule_decomposer import validate_output_rows as validate_decomposed_output_rows
-from scripts.parsers.validation_runner import enforce_parser_artifact_contracts
+from scripts.parsers.validation_runner import (
+    enforce_parser_artifact_contracts,
+    run_parser_artifact_checks,
+    validate_parser_confidence_rows,
+)
 
 
 def test_validate_decomposed_rows_reports_missing_vnm_threshold_basis() -> None:
@@ -85,6 +89,67 @@ def test_validate_applicability_rows_requires_priority_to_match_precedence() -> 
     assert result.passed is False
     assert any(issue.field == "priority_rank" for issue in result.issues)
     assert any("match applicability_type precedence" in issue.message for issue in result.issues)
+
+
+def test_validate_parser_confidence_rows_rejects_low_confidence_executable_component() -> None:
+    rows = [
+        {
+            "hs_code": "0101",
+            "component_type": "CTH",
+            "raw_rule_text": "A change to heading 01.01 from any other heading.",
+            "confidence_score": "0.5",
+        }
+    ]
+
+    result = validate_parser_confidence_rows(rows)
+
+    assert result.passed is False
+    assert any(issue.field == "confidence_score" for issue in result.issues)
+    assert any("sub-1.0 confidence is only allowed for PROCESS/NOTE" in issue.message for issue in result.issues)
+
+
+def test_run_parser_artifact_checks_allows_isolated_process_manual_review_rows() -> None:
+    decomposed_rows = [
+        {
+            "page_num": "1",
+            "raw_description": "Example chemical product",
+            "raw_rule_text": "Manufacture from chemical materials of any heading",
+            "pending_flag": "False",
+            "hs_code": "2801",
+            "hs_level": "heading",
+            "hs_display": "28.01",
+            "component_type": "PROCESS",
+            "operator_type": "standalone",
+            "component_order": "1",
+            "threshold_percent": "",
+            "threshold_basis": "",
+            "tariff_shift_level": "",
+            "specific_process_text": "Manufacture from chemical materials of any heading",
+            "normalized_expression": "",
+            "confidence_score": "0.5",
+        }
+    ]
+    pathway_rows = [asdict(row) for row in build_pathway_output_rows(decomposed_rows)]
+    applicability_rows = [
+        {
+            "hs6_code": "280110",
+            "hs6_id": "1",
+            "psr_hs_code": "2801",
+            "applicability_type": "inherited_heading",
+            "priority_rank": "2",
+        }
+    ]
+
+    results = run_parser_artifact_checks(
+        decomposed_rows=decomposed_rows,
+        pathway_rows=pathway_rows,
+        applicability_rows=applicability_rows,
+    )
+    confidence_result = next(
+        result for result in results if result.artifact_type == "parser confidence gate"
+    )
+
+    assert confidence_result.passed is True
 
 
 def test_enforce_parser_artifact_contracts_raises_actionable_error() -> None:

@@ -27,6 +27,7 @@ AfCFTA is the world's largest free trade area by country count. Using it in prac
 - Direct and case-backed eligibility assessment
 - Evidence readiness
 - Status-aware outputs with snapshot-aligned rule and tariff resolution
+- API-key authentication and route-group rate limiting
 - Full audit trail, including latest-evaluation retrieval by case
 - Source and legal provision lookup APIs
 - Corridor profile and alert listing APIs
@@ -35,7 +36,7 @@ AfCFTA is the world's largest free trade area by country count. Using it in prac
 
 ## Locked Coverage Slice
 
-The canonical March 26, 2026 acceptance slice is derived from
+The canonical March 30, 2026 acceptance slice is derived from
 `tests/fixtures/golden_cases.py` and currently covers:
 
 - 9 distinct HS6 products
@@ -53,6 +54,19 @@ User-facing capabilities exposed by the API:
 - audit replay by evaluation or by case
 - provenance lookup for sources and legal provisions
 - corridor intelligence profiles and alert listing
+
+Published active corridor-profile surface in the seeded March 30, 2026 dataset:
+
+- `GHA -> NGA`
+- `CMR -> NGA`
+- `CIV -> NGA`
+- `SEN -> NGA`
+- `GHA -> CMR`
+
+The locked golden corpus still exercises 6 directed corridors. The extra
+acceptance-only corridors are synthetic assessment fixtures, not published
+`corridor_profile` rows, so `GET /api/v1/intelligence/corridors/{exporter}/{importer}`
+can legitimately return `404` outside the five pairs above.
 
 Internal infrastructure that supports those capabilities but is not itself a user API:
 
@@ -101,6 +115,7 @@ First working API call:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/assessments \
+  -H "X-API-Key: replace-with-a-local-dev-secret" \
   -H "Content-Type: application/json" \
   -d '{
     "hs6_code": "110311",
@@ -304,21 +319,27 @@ If the API container exits immediately, that means `./.env.prod` is absent or in
 
 ## Continuous Integration
 
-The repository CI workflow lives at [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and runs four incremental stages:
+The repository CI workflow lives at [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
+Current CI stages:
+
+- secret scan
+- SAST
 - lint via `ruff`
 - unit tests with coverage report
 - integration tests against PostgreSQL with migrations, seed data, and enforced coverage threshold
+- assistant/NIM integration tests
+- 10c/100c load baseline regression checks
 - production Docker image build validation
 
 CI report locations:
 
 | Artifact name | File | Contents |
 |---|---|---|
-| `unit-test-report` | `artifacts/unit-tests.xml` | JUnit XML for unit tests |
-| `unit-coverage-report` | `artifacts/coverage.xml` | Cobertura XML coverage for unit run |
-| `integration-test-report` | `artifacts/integration-tests.xml` | JUnit XML for integration tests |
-| `integration-coverage-report` | `artifacts/coverage.xml` | Cobertura XML coverage for full-stack run |
+| `unit-test-report-${sha}` | `artifacts/unit-tests.xml` | JUnit XML for unit tests |
+| `unit-coverage-report-${sha}` | `artifacts/unit-coverage.xml` | Cobertura XML coverage for the unit run |
+| `integration-test-report-${sha}` | `artifacts/integration-tests.xml` | JUnit XML for integration tests |
+| `integration-coverage-report-${sha}` | `artifacts/integration-coverage.xml` | Cobertura XML coverage for the integration run |
 
 The integration job enforces a **75 % minimum coverage threshold** against the `app` source tree.
 This is the measured first-pass floor: unit tests alone reach 84 %, and 75 % leaves headroom
@@ -327,6 +348,14 @@ See [docs/dev/testing.md](docs/dev/testing.md) for the explicit coverage command
 code areas that need the next wave of tests.
 
 ## Load Testing
+
+March 30, 2026 gate note:
+
+- Use `artifacts/load-report-ci.json` for the 10-concurrency gate (`50` requests).
+- Use `artifacts/load-report-100.json` for the 100-concurrency gate (`500` requests).
+- The load harness now round-robins across `100` deterministic replayable payloads backed by seeded case ids.
+- The 100c regression gate compares against [`tests/load/baseline_100c.json`](tests/load/baseline_100c.json) and enforces an absolute `p95 <= 0.5s` ceiling.
+- The full local rerun/publish path is `python scripts/local_gate_runner.py ...`, which emits the canonical manual gate bundle under `artifacts/verification/<git-sha>/` and now refuses dirty worktrees unless you pass `--allow-dirty` for a diagnostic-only run.
 
 A lightweight load test harness lives in [`tests/load/`](tests/load/).
 It requires no special tooling — only a running stack and `httpx` (already a dev dependency).
@@ -342,6 +371,9 @@ The harness sends 200 requests across 5 deterministic seeded payloads (GHA→NGA
 CMR→NGA VNM, CIV→NGA WO, SEN→NGA VNM, CMR→NGA VNM-fail) with 50 concurrent workers.
 It captures success rate, throughput (req/s), and latency percentiles (p50/p75/p95/p99)
 for successful requests only.
+
+Current harness behavior: it round-robins through `100` deterministic replayable
+payloads backed by seeded case ids while issuing the requested burst volume.
 
 Output: human-readable terminal summary + `artifacts/load-report.json`.
 Exit code 1 if success rate falls below `--fail-under` (default 95 %).

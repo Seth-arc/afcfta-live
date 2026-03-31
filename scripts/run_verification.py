@@ -28,6 +28,20 @@ ASSISTANT_TEST_PATHS = (
     "tests/integration/test_assistant_api.py",
     "tests/integration/test_nim_full_flow.py",
 )
+IGNORED_GIT_STATUS_DIR_MARKERS = (
+    "__pycache__/",
+    ".hypothesis/",
+    ".pytest_cache/",
+    "artifacts/",
+)
+IGNORED_GIT_STATUS_SUFFIXES = (
+    ".pyc",
+    ".pyo",
+    ".pyd",
+)
+IGNORED_GIT_STATUS_BASENAMES = (
+    ".coverage",
+)
 
 
 @dataclass(slots=True)
@@ -45,6 +59,11 @@ class CommandResult:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run current-commit verification suites and publish artifacts.",
+    )
+    parser.add_argument(
+        "--allow-dirty",
+        action="store_true",
+        help="Allow diagnostic runs from a dirty worktree. Do not use for release-gate publication.",
     )
     parser.add_argument(
         "--skip-unit",
@@ -100,8 +119,57 @@ def _git_sha() -> str:
     return _git_value("rev-parse", "--short", "HEAD", fallback="nogit")
 
 
+def _normalize_git_status_path(path: str) -> str:
+    """Normalize one porcelain path so generated-file filters are platform-stable."""
+
+    return path.strip().strip('"').replace("\\", "/")
+
+
+def _is_ignored_git_status_path(path: str) -> bool:
+    """Return True when a dirty path is generated cache/junk that should not block the gate."""
+
+    normalized_path = _normalize_git_status_path(path)
+    if not normalized_path:
+        return False
+
+    if any(marker in normalized_path for marker in IGNORED_GIT_STATUS_DIR_MARKERS):
+        return True
+
+    basename = normalized_path.rsplit("/", 1)[-1]
+    if basename in IGNORED_GIT_STATUS_BASENAMES:
+        return True
+    if basename.startswith(".coverage."):
+        return True
+    if any(normalized_path.endswith(suffix) for suffix in IGNORED_GIT_STATUS_SUFFIXES):
+        return True
+    return False
+
+
+def _git_dirty_paths() -> list[str]:
+    """Return dirty worktree paths after filtering generated cache artifacts."""
+
+    try:
+        output = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+
+    dirty_paths: list[str] = []
+    for line in output.splitlines():
+        if not line:
+            continue
+        path = line[3:] if len(line) > 3 else line
+        if _is_ignored_git_status_path(path):
+            continue
+        dirty_paths.append(_normalize_git_status_path(path))
+    return dirty_paths
+
+
 def _git_dirty() -> bool:
-    return bool(_git_value("status", "--porcelain", fallback=""))
+    return bool(_git_dirty_paths())
 
 
 def _display_command(command: list[str]) -> str:
@@ -311,6 +379,7 @@ def _load_results(
     concurrency: int,
     requests: int,
     baseline_path: Path,
+    max_p95_latency_s: float | None = None,
 ) -> list[CommandResult]:
     report_path = artifact_dir / f"{name}.json"
     load_result = _run_command(
@@ -349,11 +418,47 @@ def _load_results(
             "95",
             "--latency-tolerance-pct",
             tolerance,
+            *(
+                ["--max-p95-latency-s", str(max_p95_latency_s)]
+                if max_p95_latency_s is not None
+                else []
+            ),
         ],
         log_path=artifact_dir / f"{name}-compare.log",
     )
     compare_result.report_path = str(report_path)
     return [load_result, compare_result]
+
+
+def _load_warmup(
+    *,
+    artifact_dir: Path,
+    base_url: str,
+    api_key: str,
+) -> CommandResult:
+    report_path = artifact_dir / "load-report-warmup.json"
+    warmup_result = _run_command(
+        name="load-report-warmup",
+        command=[
+            sys.executable,
+            "tests/load/run_load_test.py",
+            "--mode",
+            "burst",
+            "--url",
+            base_url,
+            "--api-key",
+            api_key,
+            "--concurrency",
+            "2",
+            "--requests",
+            "20",
+            "--report",
+            str(report_path),
+        ],
+        log_path=artifact_dir / "load-report-warmup.log",
+    )
+    warmup_result.report_path = str(report_path)
+    return warmup_result
 
 
 def _write_manifest(
@@ -377,6 +482,13 @@ def _write_manifest(
 
 def main() -> int:
     args = parse_args()
+    if _git_dirty() and not args.allow_dirty:
+        print(
+            "Refusing to run verification from a dirty worktree. Commit or stash changes first, "
+            "or pass --allow-dirty for a diagnostic-only run that cannot start the freeze window.",
+            file=sys.stderr,
+        )
+        return 2
     artifact_dir = Path(args.artifacts_root) / _git_sha()
     shutil.rmtree(artifact_dir, ignore_errors=True)
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -440,9 +552,16 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+        results.append(
+            _load_warmup(
+                artifact_dir=artifact_dir,
+                base_url=args.base_url,
+                api_key=args.api_key,
+            )
+        )
         results.extend(
             _load_results(
-                name="load-report-10c",
+                name="load-report-ci",
                 artifact_dir=artifact_dir,
                 base_url=args.base_url,
                 api_key=args.api_key,
@@ -453,7 +572,7 @@ def main() -> int:
         )
         results.extend(
             _load_results(
-                name="load-report-100c",
+                name="load-report-100",
                 artifact_dir=artifact_dir,
                 base_url=args.base_url,
                 api_key=args.api_key,

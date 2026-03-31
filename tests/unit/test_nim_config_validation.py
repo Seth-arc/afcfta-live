@@ -10,7 +10,7 @@ from app.config import Settings
 _BASE_KWARGS = {
     "DATABASE_URL": "postgresql+asyncpg://u:p@localhost/db",
     "API_AUTH_KEY": "test-key",
-    "ENV": "testing",
+    "ENV": "test",
 }
 
 

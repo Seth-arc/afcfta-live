@@ -5,13 +5,16 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
+from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
+import app.core.cache as cache
+from app.config import get_settings
 from app.core.countries import V01_CORRIDORS
 from app.core.entity_keys import make_entity_key
 from app.core.enums import LegalOutcome
@@ -53,6 +56,28 @@ class InterfaceAssessmentResult:
     response: EligibilityAssessmentResponse
     case_id: str
     evaluation_id: str
+    pending_alert_specs: tuple[dict[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class PreparedEvaluationPersistence:
+    """Replay-critical payload captured during assessment for deferred persistence."""
+
+    request: EligibilityRequest
+    assessment_date: date
+    rule_bundle: RuleResolutionResult
+    pathway_used: str | None
+    audit_checks: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class PreparedInterfaceAssessment:
+    """Interface assessment plus deferred persistence payload after the read snapshot closes."""
+
+    response: EligibilityAssessmentResponse
+    case_id: str
+    pending_alert_specs: tuple[dict[str, Any], ...] = ()
+    evaluation_persistence: PreparedEvaluationPersistence | None = None
 
 
 class EligibilityService:
@@ -70,6 +95,7 @@ class EligibilityService:
         general_origin_rules_service: Any,
         cases_repository: Any | None,
         evaluations_repository: Any | None,
+        sources_repository: Any | None = None,
         intelligence_service: Any | None = None,
         audit_service: Any | None = None,
     ) -> None:
@@ -83,14 +109,19 @@ class EligibilityService:
         self.general_origin_rules_service = general_origin_rules_service
         self.cases_repository = cases_repository
         self.evaluations_repository = evaluations_repository
+        self.sources_repository = sources_repository
         self.intelligence_service = intelligence_service
         self.audit_service = audit_service
         self._last_persisted_evaluation_id: str | None = None
+        self._last_pending_alert_specs: tuple[dict[str, Any], ...] = ()
+        self._last_prepared_persistence: PreparedEvaluationPersistence | None = None
 
     async def assess_case(
         self,
         case_id: str,
         request: CaseAssessmentRequest,
+        *,
+        persist_evaluation: bool = True,
     ) -> EligibilityAssessmentResponse:
         """Load one stored case, rehydrate its facts, and assess it through the direct path.
 
@@ -103,7 +134,10 @@ class EligibilityService:
             year=request.year,
             existing_documents=request.existing_documents,
         )
-        return await self.assess(eligibility_request)
+        return await self.assess(
+            eligibility_request,
+            persist_evaluation=persist_evaluation,
+        )
 
     async def assess_interface_request(
         self,
@@ -112,6 +146,8 @@ class EligibilityService:
         """Guarantee a replayable persisted evaluation for interface-triggered direct runs."""
 
         self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
         replayable_request = await self._ensure_replayable_request(request)
         response = await self.assess(replayable_request)
         evaluation_id = self._require_persisted_evaluation_id(replayable_request.case_id)
@@ -119,6 +155,7 @@ class EligibilityService:
             response=response,
             case_id=str(replayable_request.case_id),
             evaluation_id=evaluation_id,
+            pending_alert_specs=self._consume_pending_alert_specs(),
         )
 
     async def assess_interface_case(
@@ -129,18 +166,99 @@ class EligibilityService:
         """Return a case-backed assessment together with explicit replay identifiers."""
 
         self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
         response = await self.assess_case(case_id, request)
         evaluation_id = self._require_persisted_evaluation_id(case_id)
         return InterfaceAssessmentResult(
             response=response,
             case_id=case_id,
             evaluation_id=evaluation_id,
+            pending_alert_specs=self._consume_pending_alert_specs(),
         )
 
-    async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
+    async def prepare_interface_request_assessment(
+        self,
+        request: EligibilityRequest,
+    ) -> PreparedInterfaceAssessment:
+        """Compute one interface-triggered assessment and defer replay persistence."""
+
+        self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
+        replayable_request = await self._ensure_replayable_request(request)
+        response = await self.assess(replayable_request, persist_evaluation=False)
+        return PreparedInterfaceAssessment(
+            response=response,
+            case_id=str(replayable_request.case_id),
+            pending_alert_specs=self._consume_pending_alert_specs(),
+            evaluation_persistence=self._require_prepared_persistence(
+                str(replayable_request.case_id)
+            ),
+        )
+
+    async def prepare_interface_case_assessment(
+        self,
+        case_id: str,
+        request: CaseAssessmentRequest,
+    ) -> PreparedInterfaceAssessment:
+        """Compute one case-backed assessment and defer replay persistence."""
+
+        self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
+        response = await self.assess_case(case_id, request, persist_evaluation=False)
+        return PreparedInterfaceAssessment(
+            response=response,
+            case_id=case_id,
+            pending_alert_specs=self._consume_pending_alert_specs(),
+            evaluation_persistence=self._require_prepared_persistence(case_id),
+        )
+
+    async def finalize_prepared_interface_assessment(
+        self,
+        prepared: PreparedInterfaceAssessment,
+    ) -> InterfaceAssessmentResult:
+        """Persist one prepared assessment on a short-lived detached write session."""
+
+        response = prepared.response.model_copy(deep=True)
+        persistence = prepared.evaluation_persistence
+        if persistence is None:
+            raise EvaluationPersistenceError(
+                "Prepared interface assessment did not capture a replayable evaluation payload",
+                detail={"case_id": prepared.case_id, "reason": "evaluation_not_prepared"},
+            )
+
+        self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
+        response.audit_persisted = await self._persist_evaluation_if_possible(
+            request=persistence.request,
+            assessment_date=persistence.assessment_date,
+            rule_bundle=persistence.rule_bundle,
+            response=response,
+            pathway_used=persistence.pathway_used,
+            audit_checks=persistence.audit_checks,
+        )
+        evaluation_id = self._require_persisted_evaluation_id(prepared.case_id)
+        return InterfaceAssessmentResult(
+            response=response,
+            case_id=prepared.case_id,
+            evaluation_id=evaluation_id,
+            pending_alert_specs=prepared.pending_alert_specs,
+        )
+
+    async def assess(
+        self,
+        request: EligibilityRequest,
+        *,
+        persist_evaluation: bool = True,
+    ) -> EligibilityAssessmentResponse:
         """Execute one full assessment inside the caller's request-scoped DB snapshot."""
 
         self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
+        self._last_prepared_persistence = None
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
 
@@ -195,9 +313,15 @@ class EligibilityService:
             )
         )
 
-        tariff_result: TariffResolutionResult | None = None
+        corridor_key = make_entity_key(
+            "corridor",
+            exporter=request.exporter,
+            importer=request.importer,
+            hs6_code=product.hs6_code,
+        )
+        rule_key = make_entity_key("psr_rule", psr_id=rule_bundle.psr_rule.psr_id)
         try:
-            tariff_result = await self.tariff_resolution_service.resolve_tariff_bundle(
+            tariff_lookup = await self.tariff_resolution_service.resolve_tariff_bundle(
                 request.exporter,
                 request.importer,
                 request.hs_version,
@@ -205,8 +329,20 @@ class EligibilityService:
                 request.year,
                 assessment_date=assessment_date,
             )
-            audit_checks.append(self._make_tariff_trace_check(tariff_result))
-        except TariffNotFoundError:
+        except TariffNotFoundError as exc:
+            tariff_lookup = exc
+        status_overlays = await self.status_service.get_status_overlays(
+            [
+                ("corridor", corridor_key),
+                ("psr_rule", rule_key),
+            ],
+            assessment_date,
+        )
+        corridor_overlay = status_overlays[("corridor", corridor_key)]
+        rule_overlay = status_overlays[("psr_rule", rule_key)]
+
+        tariff_result: TariffResolutionResult | None
+        if isinstance(tariff_lookup, TariffNotFoundError):
             tariff_result = None
             audit_checks.append(
                 self._make_audit_check(
@@ -220,18 +356,11 @@ class EligibilityService:
                     details_json={"tariff_outcome": None},
                 )
             )
-
-        corridor_key = make_entity_key(
-            "corridor",
-            exporter=request.exporter,
-            importer=request.importer,
-            hs6_code=product.hs6_code,
-        )
-        corridor_overlay = await self.status_service.get_status_overlay(
-            "corridor",
-            corridor_key,
-            assessment_date,
-        )
+        elif isinstance(tariff_lookup, Exception):
+            raise tariff_lookup
+        else:
+            tariff_result = tariff_lookup
+            audit_checks.append(self._make_tariff_trace_check(tariff_result))
 
         blocker_checks, blocker_failure_codes, blocker_missing_facts = self._run_blocker_checks(
             rule_bundle=rule_bundle,
@@ -261,21 +390,21 @@ class EligibilityService:
                 ),
             )
             audit_checks.append(self._make_decision_trace_check(response))
-            response.audit_persisted = await self._persist_evaluation_if_possible(
+            response.audit_persisted = await self._persist_or_prepare_evaluation(
                 request=request,
                 assessment_date=assessment_date,
                 rule_bundle=rule_bundle,
                 response=response,
                 pathway_used=None,
                 audit_checks=audit_checks,
+                persist_evaluation=persist_evaluation,
             )
-            await self._emit_alerts_if_possible(
+            self._last_pending_alert_specs = self._build_pending_alert_specs_if_possible(
                 request=request,
                 rule_bundle=rule_bundle,
                 tariff_result=tariff_result,
                 corridor_overlay=corridor_overlay,
                 response=response,
-                assessment_date=assessment_date,
             )
             self._log_assessment(
                 request=request,
@@ -319,12 +448,6 @@ class EligibilityService:
             if general_rules_result.direct_transport_check == "not_checked":
                 missing_facts = self._merge_unique(missing_facts, ["direct_transport"])
 
-        rule_key = make_entity_key("psr_rule", psr_id=rule_bundle.psr_rule.psr_id)
-        rule_overlay = await self.status_service.get_status_overlay(
-            "psr_rule",
-            rule_key,
-            assessment_date,
-        )
         audit_checks.extend(self._serialize_status_overlay(rule_overlay))
 
         confidence_class = self._combine_confidence_class(
@@ -364,21 +487,21 @@ class EligibilityService:
             confidence_class=confidence_class,
         )
         audit_checks.append(self._make_decision_trace_check(response))
-        response.audit_persisted = await self._persist_evaluation_if_possible(
+        response.audit_persisted = await self._persist_or_prepare_evaluation(
             request=request,
             assessment_date=assessment_date,
             rule_bundle=rule_bundle,
             response=response,
             pathway_used=response.pathway_used,
             audit_checks=audit_checks,
+            persist_evaluation=persist_evaluation,
         )
-        await self._emit_alerts_if_possible(
+        self._last_pending_alert_specs = self._build_pending_alert_specs_if_possible(
             request=request,
             rule_bundle=rule_bundle,
             tariff_result=tariff_result,
             corridor_overlay=corridor_overlay,
             response=response,
-            assessment_date=assessment_date,
         )
         self._log_assessment(
             request=request,
@@ -387,6 +510,28 @@ class EligibilityService:
             started_at=started_at,
         )
         return response
+
+    def _consume_pending_alert_specs(self) -> tuple[dict[str, Any], ...]:
+        """Return and clear any advisory alert specs prepared during the last assessment."""
+
+        pending = self._last_pending_alert_specs
+        self._last_pending_alert_specs = ()
+        return pending
+
+    def _require_prepared_persistence(
+        self,
+        case_id: str,
+    ) -> PreparedEvaluationPersistence:
+        """Return and clear the deferred replay payload captured during assessment."""
+
+        prepared = self._last_prepared_persistence
+        self._last_prepared_persistence = None
+        if prepared is None:
+            raise EvaluationPersistenceError(
+                "Interface assessment did not capture a replayable evaluation payload",
+                detail={"case_id": case_id, "reason": "evaluation_not_prepared"},
+            )
+        return prepared
 
     async def _build_request_from_case(
         self,
@@ -953,25 +1098,16 @@ class EligibilityService:
     ) -> Any:
         """Resolve readiness from the most specific evidence target with compatibility fallbacks."""
 
-        fallback_result: Any | None = None
-        for entity_type, entity_key in self._resolve_evidence_targets(
-            rule_bundle=rule_bundle,
-            selected_pathway=selected_pathway,
-        ):
-            result = await self.evidence_service.build_readiness(
-                entity_type=entity_type,
-                entity_key=entity_key,
-                persona_mode=persona_mode,
-                existing_documents=list(existing_documents),
-                confidence_class=confidence_class,
-                assessment_date=assessment_date,
-            )
-            if fallback_result is None:
-                fallback_result = result
-            if self._evidence_result_has_content(result):
-                return result
-
-        return fallback_result
+        return await self.evidence_service.build_readiness_for_targets(
+            self._resolve_evidence_targets(
+                rule_bundle=rule_bundle,
+                selected_pathway=selected_pathway,
+            ),
+            persona_mode=persona_mode,
+            existing_documents=list(existing_documents),
+            confidence_class=confidence_class,
+            assessment_date=assessment_date,
+        )
 
     def _resolve_evidence_targets(
         self,
@@ -996,6 +1132,319 @@ class EligibilityService:
         required_items = getattr(result, "required_items", None)
         verification_questions = getattr(result, "verification_questions", None)
         return bool(required_items or verification_questions)
+
+    async def _attach_provenance_snapshots(
+        self,
+        audit_checks: list[dict[str, Any]],
+    ) -> None:
+        """Attach immutable provenance snapshots to persisted summary checks.
+
+        Audit replay should remain stable even if backing source text is updated
+        later. We snapshot the source version metadata plus the provision text
+        used at decision time into the persisted JSON payload.
+        """
+
+        if self.sources_repository is None:
+            return
+
+        snapshot_cache: dict[str, dict[str, Any] | None] = {}
+        summary_targets = (
+            ("rule", "PSR_RESOLUTION", "psr_rule", "source_id"),
+            ("tariff", "TARIFF_RESOLUTION", "tariff_resolution", "schedule_source_id"),
+        )
+        for check_type, check_code, payload_key, source_id_key in summary_targets:
+            summary_check = next(
+                (
+                    check
+                    for check in audit_checks
+                    if check.get("check_type") == check_type and check.get("check_code") == check_code
+                ),
+                None,
+            )
+            if summary_check is None:
+                continue
+
+            details = summary_check.get("details_json")
+            if not isinstance(details, dict) or "provenance_snapshot" in details:
+                continue
+
+            payload = details.get(payload_key)
+            if not isinstance(payload, dict):
+                continue
+
+            source_id = payload.get(source_id_key)
+            if source_id is None:
+                continue
+
+            source_id_str = str(source_id)
+            if source_id_str not in snapshot_cache:
+                snapshot_cache[source_id_str] = await self._build_provenance_snapshot(
+                    source_id_str
+                )
+
+            snapshot = snapshot_cache[source_id_str]
+            if snapshot is not None:
+                details["provenance_snapshot"] = snapshot
+
+    async def _build_provenance_snapshot(self, source_id: str) -> dict[str, Any] | None:
+        """Return one request-stamped provenance snapshot, caching the static payload."""
+
+        settings = get_settings()
+        cache_key = ("persisted-provenance-snapshot", source_id)
+        static_snapshot: dict[str, Any] | None = None
+        if settings.CACHE_STATIC_LOOKUPS:
+            hit, cached = cache.get(cache.provenance_store, cache_key)
+            if hit:
+                static_snapshot = cached
+
+        if static_snapshot is None:
+            try:
+                raw_snapshot = await self.sources_repository.get_source_snapshot(source_id)
+            except Exception:
+                raw_snapshot = None
+            if raw_snapshot is None:
+                return None
+            static_snapshot = self._normalize_provenance_snapshot(raw_snapshot)
+            if settings.CACHE_STATIC_LOOKUPS:
+                cache.put(
+                    cache.provenance_store,
+                    cache_key,
+                    static_snapshot,
+                    settings.CACHE_TTL_SECONDS,
+                )
+
+        return {
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            **static_snapshot,
+        }
+
+    @staticmethod
+    def _normalize_provenance_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize the static portion of one repository provenance snapshot."""
+
+        source = snapshot.get("source")
+        provisions = snapshot.get("supporting_provisions")
+        source_payload = dict(source) if isinstance(source, Mapping) else {}
+        provision_payloads = (
+            [
+                jsonable_encoder(dict(provision))
+                for provision in provisions
+                if isinstance(provision, Mapping)
+            ]
+            if isinstance(provisions, Sequence)
+            else []
+        )
+        return {
+            "source": jsonable_encoder(
+                {
+                    "source_id": source_payload.get("source_id"),
+                    "short_title": source_payload.get("short_title"),
+                    "version_label": source_payload.get("version_label"),
+                    "publication_date": source_payload.get("publication_date"),
+                    "effective_date": source_payload.get("effective_date"),
+                }
+            ),
+            "supporting_provisions": provision_payloads,
+        }
+
+    def _build_decision_snapshot(
+        self,
+        audit_checks: Sequence[Mapping[str, Any]],
+        *,
+        selected_pathway_code: str | None,
+    ) -> dict[str, Any]:
+        """Collapse the replay-critical audit trace into one compact persisted payload."""
+
+        snapshot: dict[str, Any] = {
+            "snapshot_version": 1,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+        summary_targets = {
+            "classification_check": ("classification", "HS6_RESOLUTION"),
+            "rule_check": ("rule", "PSR_RESOLUTION"),
+            "general_rules_check": ("general_rule", "GENERAL_RULES_SUMMARY"),
+            "status_check": ("status", "STATUS_OVERLAY"),
+            "tariff_check": ("tariff", "TARIFF_RESOLUTION"),
+            "evidence_check": ("evidence", "EVIDENCE_READINESS"),
+            "final_decision_check": ("decision", "FINAL_DECISION"),
+        }
+        for snapshot_key, (check_type, check_code) in summary_targets.items():
+            check = self._select_snapshot_check(
+                audit_checks,
+                check_type=check_type,
+                check_code=check_code,
+            )
+            if check is not None:
+                snapshot[snapshot_key] = self._snapshot_check_payload(check)
+
+        selected_pathway_check = self._select_selected_pathway_check(
+            audit_checks,
+            selected_pathway_code=selected_pathway_code,
+        )
+        if selected_pathway_check is not None:
+            snapshot["selected_pathway_check"] = self._snapshot_check_payload(
+                selected_pathway_check
+            )
+
+        blocker_checks = [
+            self._snapshot_check_payload(check)
+            for check in audit_checks
+            if check.get("check_type") == "blocker" and check.get("passed") is False
+        ]
+        if blocker_checks:
+            snapshot["blocker_checks"] = blocker_checks
+
+        return jsonable_encoder(snapshot)
+
+    @staticmethod
+    def _select_snapshot_check(
+        audit_checks: Sequence[Mapping[str, Any]],
+        *,
+        check_type: str,
+        check_code: str,
+    ) -> Mapping[str, Any] | None:
+        """Return the first summary check matching the given type/code pair."""
+
+        return next(
+            (
+                check
+                for check in audit_checks
+                if check.get("check_type") == check_type and check.get("check_code") == check_code
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _snapshot_check_payload(check: Mapping[str, Any]) -> dict[str, Any]:
+        """Trim one in-memory audit check down to its persisted replay fields."""
+
+        return jsonable_encoder(
+            {
+                "check_type": check.get("check_type"),
+                "check_code": check.get("check_code"),
+                "passed": check.get("passed"),
+                "severity": check.get("severity"),
+                "expected_value": check.get("expected_value"),
+                "observed_value": check.get("observed_value"),
+                "explanation": check.get("explanation"),
+                "details_json": EligibilityService._compact_snapshot_details(
+                    check_type=check.get("check_type"),
+                    check_code=check.get("check_code"),
+                    details=check.get("details_json"),
+                ),
+                "linked_component_id": check.get("linked_component_id"),
+            }
+        )
+
+    @staticmethod
+    def _compact_snapshot_details(
+        *,
+        check_type: Any,
+        check_code: Any,
+        details: Any,
+    ) -> dict[str, Any] | None:
+        """Persist only the replay-critical subset of each summary payload."""
+
+        if not isinstance(details, Mapping):
+            return None
+
+        if check_type == "classification" and check_code == "HS6_RESOLUTION":
+            product = details.get("product")
+            if isinstance(product, Mapping):
+                return {
+                    "product": {
+                        "hs6_id": product.get("hs6_id"),
+                        "hs_version": product.get("hs_version"),
+                        "hs6_code": product.get("hs6_code"),
+                        "hs6_display": product.get("hs6_display"),
+                        "chapter": product.get("chapter"),
+                        "heading": product.get("heading"),
+                        "description": product.get("description"),
+                        "section": product.get("section"),
+                        "section_name": product.get("section_name"),
+                    }
+                }
+            return None
+
+        if check_type == "pathway" and check_code == "PATHWAY_EVALUATION":
+            pathway = details.get("pathway")
+            return {
+                "pathway": (
+                    {
+                        "pathway_id": pathway.get("pathway_id"),
+                        "pathway_code": pathway.get("pathway_code"),
+                        "pathway_label": pathway.get("pathway_label"),
+                        "priority_rank": pathway.get("priority_rank"),
+                    }
+                    if isinstance(pathway, Mapping)
+                    else None
+                ),
+                "result": details.get("result"),
+                "evaluated_expression": details.get("evaluated_expression"),
+                "missing_variables": details.get("missing_variables", []),
+                **(
+                    {"indeterminate": True}
+                    if details.get("indeterminate") is True
+                    else {}
+                ),
+            }
+
+        if check_type == "tariff" and check_code == "TARIFF_RESOLUTION":
+            tariff_resolution = details.get("tariff_resolution")
+            if isinstance(tariff_resolution, Mapping):
+                return {
+                    "tariff_resolution": {
+                        "preferential_rate": tariff_resolution.get("preferential_rate"),
+                        "base_rate": tariff_resolution.get("base_rate"),
+                        "schedule_status": tariff_resolution.get("schedule_status"),
+                        "tariff_status": tariff_resolution.get("tariff_status"),
+                        "provenance_ids": tariff_resolution.get("provenance_ids", []),
+                        "schedule_source_id": tariff_resolution.get("schedule_source_id"),
+                        "rate_source_id": tariff_resolution.get("rate_source_id"),
+                        "line_page_ref": tariff_resolution.get("line_page_ref"),
+                        "rate_page_ref": tariff_resolution.get("rate_page_ref"),
+                        "table_ref": tariff_resolution.get("table_ref"),
+                        "row_ref": tariff_resolution.get("row_ref"),
+                        "resolved_rate_year": tariff_resolution.get("resolved_rate_year"),
+                        "used_fallback_rate": tariff_resolution.get("used_fallback_rate", False),
+                    }
+                }
+            tariff_outcome = details.get("tariff_outcome")
+            if isinstance(tariff_outcome, Mapping):
+                return {"tariff_outcome": dict(tariff_outcome)}
+            return None
+
+        return dict(details)
+
+    def _select_selected_pathway_check(
+        self,
+        audit_checks: Sequence[Mapping[str, Any]],
+        *,
+        selected_pathway_code: str | None,
+    ) -> Mapping[str, Any] | None:
+        """Return the summary row for the chosen pathway when one exists."""
+
+        pathway_checks = [
+            check
+            for check in audit_checks
+            if check.get("check_type") == "pathway"
+            and check.get("check_code") == "PATHWAY_EVALUATION"
+        ]
+        if not pathway_checks:
+            return None
+        if selected_pathway_code is None:
+            return next((check for check in pathway_checks if check.get("passed") is True), None)
+
+        for check in pathway_checks:
+            details = check.get("details_json")
+            if not isinstance(details, Mapping):
+                continue
+            pathway = details.get("pathway")
+            if not isinstance(pathway, Mapping):
+                continue
+            if pathway.get("pathway_code") == selected_pathway_code:
+                return check
+        return None
 
     async def _persist_evaluation_if_possible(
         self,
@@ -1032,10 +1481,18 @@ class EligibilityService:
             ),
         }
         try:
+            mutable_checks = [dict(check) for check in audit_checks]
+            # Provenance snapshots are hydrated lazily by AuditService so the assessment
+            # path does not block on extra source/provision reads before persisting.
+            evaluation_data["decision_snapshot_json"] = self._build_decision_snapshot(
+                mutable_checks,
+                selected_pathway_code=response.pathway_used,
+            )
             persisted = await self.evaluations_repository.persist_evaluation(
                 evaluation_data,
-                list(audit_checks),
+                mutable_checks,
                 lock_case=False,
+                persist_check_results=False,
                 return_inserted_checks=False,
             )
             evaluation_row = (
@@ -1063,7 +1520,41 @@ class EligibilityService:
             )
             return False
 
-    async def _emit_alerts_if_possible(
+    async def _persist_or_prepare_evaluation(
+        self,
+        *,
+        request: EligibilityRequest,
+        assessment_date: date,
+        rule_bundle: RuleResolutionResult,
+        response: EligibilityAssessmentResponse,
+        pathway_used: str | None,
+        audit_checks: Sequence[Mapping[str, Any]],
+        persist_evaluation: bool,
+    ) -> bool:
+        """Persist immediately or capture a compact replay payload for detached writes."""
+
+        if persist_evaluation:
+            self._last_prepared_persistence = None
+            return await self._persist_evaluation_if_possible(
+                request=request,
+                assessment_date=assessment_date,
+                rule_bundle=rule_bundle,
+                response=response,
+                pathway_used=pathway_used,
+                audit_checks=audit_checks,
+            )
+
+        self._last_persisted_evaluation_id = None
+        self._last_prepared_persistence = PreparedEvaluationPersistence(
+            request=request.model_copy(deep=True),
+            assessment_date=assessment_date,
+            rule_bundle=rule_bundle,
+            pathway_used=pathway_used,
+            audit_checks=tuple(dict(check) for check in audit_checks),
+        )
+        return False
+
+    def _build_pending_alert_specs_if_possible(
         self,
         *,
         request: EligibilityRequest,
@@ -1071,20 +1562,20 @@ class EligibilityService:
         tariff_result: TariffResolutionResult | None,
         corridor_overlay: StatusOverlay,
         response: EligibilityAssessmentResponse,
-        assessment_date: date,
-    ) -> None:
-        """Persist advisory intelligence alerts without altering the assessment result."""
+    ) -> tuple[dict[str, Any], ...]:
+        """Build advisory alert specs without blocking the synchronous response path."""
 
         if self.intelligence_service is None:
-            return
+            return ()
 
-        await self.intelligence_service.emit_assessment_alerts(
-            request=request,
-            rule_bundle=rule_bundle,
-            tariff_result=tariff_result,
-            corridor_overlay=corridor_overlay,
-            response=response,
-            assessment_date=assessment_date,
+        return tuple(
+            self.intelligence_service.build_assessment_alert_specs(
+                request=request,
+                rule_bundle=rule_bundle,
+                tariff_result=tariff_result,
+                corridor_overlay=corridor_overlay,
+                response=response,
+            )
         )
 
     @staticmethod

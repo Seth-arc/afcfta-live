@@ -9,7 +9,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -71,10 +71,44 @@ def run_migrations_offline() -> None:
 def do_run_migrations(connection: Connection) -> None:
     """Run migrations with a live connection."""
 
+    _ensure_alembic_version_table_width(connection)
     context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
 
     with context.begin_transaction():
         context.run_migrations()
+
+
+def _ensure_alembic_version_table_width(connection: Connection) -> None:
+    """Keep Alembic's version table compatible with the project's revision ids.
+
+    Alembic's default `version_num` width is `VARCHAR(32)`, but this repository
+    uses human-readable revision identifiers longer than 32 characters. Fresh
+    databases otherwise fail when the version row is updated to a long revision
+    id during `upgrade head`.
+    """
+
+    if connection.dialect.name != "postgresql":
+        return
+
+    connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS alembic_version (
+                version_num VARCHAR(255) NOT NULL PRIMARY KEY
+            )
+            """
+        )
+    )
+    connection.execute(
+        text(
+            """
+            ALTER TABLE alembic_version
+            ALTER COLUMN version_num TYPE VARCHAR(255)
+            """
+        )
+    )
+    if connection.in_transaction():
+        connection.commit()
 
 
 async def run_async_migrations() -> None:

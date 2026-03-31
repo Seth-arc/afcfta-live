@@ -95,6 +95,13 @@ def main() -> int:
         dest="min_success_rate",
         help="Minimum required success-rate %% (default: 95.0)",
     )
+    parser.add_argument(
+        "--max-p95-latency-s",
+        type=float,
+        default=None,
+        dest="max_p95_latency_s",
+        help="Optional absolute p95 latency ceiling in seconds",
+    )
     args = parser.parse_args()
 
     baseline = _load(args.baseline)
@@ -112,7 +119,10 @@ def main() -> int:
 
     p95_ok = report_p95 <= p95_ceiling
     sr_ok = report_sr >= args.min_success_rate
-    passed = p95_ok and sr_ok
+    absolute_p95_ok = (
+        True if args.max_p95_latency_s is None else report_p95 <= args.max_p95_latency_s
+    )
+    passed = p95_ok and sr_ok and absolute_p95_ok
 
     print()
     print("Load Baseline Comparison")
@@ -132,6 +142,13 @@ def main() -> int:
         f"   {'PASS' if p95_ok else 'FAIL'}  ({p95_note})"
     )
 
+    if args.max_p95_latency_s is not None:
+        absolute_note = f"max {args.max_p95_latency_s:.4f}s"
+        print(
+            f"  {'absolute p95 cap (s)':<22} {'n/a':>10} {report_p95:>10.4f}"
+            f"   {'PASS' if absolute_p95_ok else 'FAIL'}  ({absolute_note})"
+        )
+
     sr_note = f"min {args.min_success_rate:.1f}%"
     print(
         f"  {'success rate (%)':<22} {baseline_sr:>10.2f} {report_sr:>10.2f}"
@@ -148,8 +165,7 @@ def main() -> int:
     print("  To update the baseline after a deliberate performance change:", file=sys.stderr)
     print(f"    cp <new-report.json> {args.baseline}", file=sys.stderr)
     print(
-        "    git add tests/load/baseline.json && "
-        "git commit -m 'chore: update load baseline'",
+        f"    git add {args.baseline} && git commit -m 'chore: update load baseline'",
         file=sys.stderr,
     )
     return 1

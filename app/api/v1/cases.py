@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 
 from app.api.deps import (
-    assessment_eligibility_service_context,
-    get_assessment_eligibility_service,
     get_audit_service,
     get_cases_repository,
     require_assessment_rate_limit,
+    run_replayable_case_assessment,
+    schedule_advisory_alert_dispatch,
 )
 from app.config import Settings, get_settings
 from app.core.exceptions import CaseNotFoundError, InsufficientFactsError
@@ -25,7 +25,6 @@ from app.schemas.cases import (
     CaseSummaryResponse,
 )
 from app.services.audit_service import AuditService
-from app.services.eligibility_service import EligibilityService
 
 router = APIRouter()
 assessment_router = APIRouter(dependencies=[Depends(require_assessment_rate_limit)])
@@ -62,6 +61,7 @@ async def create_case(
     payload: CaseCreateRequest,
     request: Request,
     response: Response,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     cases_repository: CasesRepository = Depends(get_cases_repository),
 ) -> CaseCreateResponse:
@@ -91,11 +91,11 @@ async def create_case(
         # Persist case rows before running the REPEATABLE READ assessment on a new session.
         await cases_repository.session.commit()
 
-        async with assessment_eligibility_service_context() as eligibility_service:
-            assessment = await eligibility_service.assess_interface_case(
-                case_id,
-                assess_payload,
-            )
+        assessment = await run_replayable_case_assessment(case_id, assess_payload)
+        schedule_advisory_alert_dispatch(
+            background_tasks,
+            getattr(assessment, "pending_alert_specs", None),
+        )
         evaluation_id = assessment.evaluation_id
         audit_url = f"/api/v1/audit/evaluations/{evaluation_id}"
         audit_persisted = assessment.response.audit_persisted
@@ -143,11 +143,15 @@ async def assess_stored_case(
     case_id: str,
     payload: CaseAssessmentRequest,
     response: Response,
-    eligibility_service: EligibilityService = Depends(get_assessment_eligibility_service),
+    background_tasks: BackgroundTasks,
 ) -> EligibilityAssessmentResponse:
     """Run the deterministic engine for one persisted case via the case resource."""
 
-    assessment = await eligibility_service.assess_interface_case(case_id, payload)
+    assessment = await run_replayable_case_assessment(case_id, payload)
+    schedule_advisory_alert_dispatch(
+        background_tasks,
+        getattr(assessment, "pending_alert_specs", None),
+    )
     _set_replay_headers(
         response,
         case_id=assessment.case_id,

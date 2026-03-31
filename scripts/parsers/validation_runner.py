@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import csv
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import UUID
 
@@ -14,12 +14,20 @@ from app.core.enums import HsLevelEnum, RuleComponentTypeEnum, RuleStatusEnum
 from app.db.base import get_async_session_factory
 try:
     from scripts.parsers.applicability_builder import validate_output_rows as validate_applicability_output_rows
-    from scripts.parsers.artifact_contracts import ArtifactValidationResult, ParserArtifactValidationError
+    from scripts.parsers.artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        ParserArtifactValidationError,
+    )
     from scripts.parsers.pathway_builder import validate_output_rows as validate_pathway_output_rows
     from scripts.parsers.rule_decomposer import validate_output_rows as validate_decomposed_output_rows
 except ModuleNotFoundError:
     from applicability_builder import validate_output_rows as validate_applicability_output_rows
-    from artifact_contracts import ArtifactValidationResult, ParserArtifactValidationError
+    from artifact_contracts import (
+        ArtifactValidationIssue,
+        ArtifactValidationResult,
+        ParserArtifactValidationError,
+    )
     from pathway_builder import validate_output_rows as validate_pathway_output_rows
     from rule_decomposer import validate_output_rows as validate_decomposed_output_rows
 
@@ -27,6 +35,15 @@ except ModuleNotFoundError:
 VALID_RULE_STATUSES = tuple(member.value for member in RuleStatusEnum)
 VALID_COMPONENT_TYPES = tuple(member.value for member in RuleComponentTypeEnum)
 VALID_HS_LEVELS = tuple(member.value for member in HsLevelEnum)
+MANUAL_REVIEW_COMPONENT_TYPES = (
+    RuleComponentTypeEnum.PROCESS.value,
+    RuleComponentTypeEnum.NOTE.value,
+)
+MANUAL_REVIEW_CONFIDENCE = {
+    RuleComponentTypeEnum.PROCESS.value: Decimal("0.500"),
+    RuleComponentTypeEnum.NOTE.value: Decimal("0.000"),
+}
+EXECUTABLE_COMPONENT_CONFIDENCE = Decimal("1.000")
 SOURCE_ID = UUID("a0000000-0000-0000-0000-000000000001")
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DECOMPOSED_INPUT_PATH = ROOT_DIR / "data" / "staged" / "raw_csv" / "appendix_iv_decomposed.csv"
@@ -73,6 +90,74 @@ def read_rows(input_path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(csv_file))
 
 
+def validate_parser_confidence_rows(
+    decomposed_rows: list[dict[str, str]],
+) -> ArtifactValidationResult:
+    """Fail promotion when low-confidence parser output leaks beyond manual-review rows."""
+
+    issues: list[ArtifactValidationIssue] = []
+
+    for row_number, row in enumerate(decomposed_rows, start=1):
+        component_type = str(row.get("component_type") or "").strip()
+        confidence_raw = str(row.get("confidence_score") or "").strip()
+        if not component_type or not confidence_raw:
+            continue
+
+        try:
+            confidence_score = Decimal(confidence_raw)
+        except InvalidOperation:
+            # The decomposed contract validator reports malformed confidence values.
+            continue
+
+        row_key = "|".join(
+            [
+                str(row.get("hs_code") or "").strip(),
+                str(row.get("component_type") or "").strip(),
+                str(row.get("raw_rule_text") or "").strip(),
+            ]
+        )
+
+        expected_manual_confidence = MANUAL_REVIEW_CONFIDENCE.get(component_type)
+        if expected_manual_confidence is not None:
+            if confidence_score != expected_manual_confidence:
+                issues.append(
+                    ArtifactValidationIssue(
+                        artifact_type="parser confidence gate",
+                        row_number=row_number,
+                        field="confidence_score",
+                        message=(
+                            f"{component_type} rows must keep confidence_score "
+                            f"{expected_manual_confidence:.3f} so manual-review inventory "
+                            "stays isolated and auditable"
+                        ),
+                        row_key=row_key,
+                        value=confidence_raw,
+                    )
+                )
+            continue
+
+        if confidence_score != EXECUTABLE_COMPONENT_CONFIDENCE:
+            issues.append(
+                ArtifactValidationIssue(
+                    artifact_type="parser confidence gate",
+                    row_number=row_number,
+                    field="confidence_score",
+                    message=(
+                        "Executable parser rows must promote at confidence_score 1.000; "
+                        "sub-1.0 confidence is only allowed for PROCESS/NOTE manual-review rows"
+                    ),
+                    row_key=row_key,
+                    value=confidence_raw,
+                )
+            )
+
+    return ArtifactValidationResult(
+        artifact_type="parser confidence gate",
+        total_rows=len(decomposed_rows),
+        issues=tuple(issues),
+    )
+
+
 def run_parser_artifact_checks(
     decomposed_rows: list[dict[str, str]] | None = None,
     pathway_rows: list[dict[str, str]] | None = None,
@@ -93,6 +178,7 @@ def run_parser_artifact_checks(
 
     return [
         validate_decomposed_output_rows(decomposed_rows),
+        validate_parser_confidence_rows(decomposed_rows),
         validate_pathway_output_rows(pathway_rows),
         validate_applicability_output_rows(applicability_rows),
     ]
@@ -393,6 +479,94 @@ async def run_checks(*, include_all_sources: bool = False) -> list[CheckResult]:
                     f"0.01-0.49={int(bucket_001_049 or 0)}, "
                     f"0.0={int(bucket_000 or 0)}"
                 ),
+            )
+        )
+        low_confidence_executable_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(*)
+                FROM psr_rule_component component
+                JOIN psr_rule rule ON rule.psr_id = component.psr_id{component_rule_scope}
+                WHERE component.component_type::text NOT IN {sql_literal_list(MANUAL_REVIEW_COMPONENT_TYPES)}
+                  AND component.confidence_score < {EXECUTABLE_COMPONENT_CONFIDENCE}
+                """,
+                scope_params,
+            )
+            or 0
+        )
+        invalid_process_confidence_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(*)
+                FROM psr_rule_component component
+                JOIN psr_rule rule ON rule.psr_id = component.psr_id{component_rule_scope}
+                WHERE component.component_type::text = '{RuleComponentTypeEnum.PROCESS.value}'
+                  AND component.confidence_score <> {MANUAL_REVIEW_CONFIDENCE[RuleComponentTypeEnum.PROCESS.value]}
+                """,
+                scope_params,
+            )
+            or 0
+        )
+        invalid_note_confidence_count = int(
+            await scalar(
+                session,
+                f"""
+                SELECT COUNT(*)
+                FROM psr_rule_component component
+                JOIN psr_rule rule ON rule.psr_id = component.psr_id{component_rule_scope}
+                WHERE component.component_type::text = '{RuleComponentTypeEnum.NOTE.value}'
+                  AND component.confidence_score <> {MANUAL_REVIEW_CONFIDENCE[RuleComponentTypeEnum.NOTE.value]}
+                """,
+                scope_params,
+            )
+            or 0
+        )
+        review_queue_rows = await fetch_all(
+            session,
+            f"""
+            SELECT
+                component.component_type::text AS component_type,
+                COUNT(*) AS row_count
+            FROM psr_rule_component component
+            JOIN psr_rule rule ON rule.psr_id = component.psr_id{component_rule_scope}
+            WHERE component.component_type::text IN {sql_literal_list(MANUAL_REVIEW_COMPONENT_TYPES)}
+              AND component.confidence_score < {EXECUTABLE_COMPONENT_CONFIDENCE}
+            GROUP BY component.component_type::text
+            ORDER BY component.component_type::text ASC
+            """,
+            scope_params,
+        )
+        review_queue_detail = ", ".join(
+            f"{component_type}={int(row_count)}" for component_type, row_count in review_queue_rows
+        ) or "none"
+        results.append(
+            CheckResult(
+                "Executable parser components are fully confident",
+                low_confidence_executable_count == 0,
+                f"invalid={low_confidence_executable_count}",
+            )
+        )
+        results.append(
+            CheckResult(
+                "PROCESS manual-review rows stay pinned at 0.500 confidence",
+                invalid_process_confidence_count == 0,
+                f"invalid={invalid_process_confidence_count}",
+            )
+        )
+        results.append(
+            CheckResult(
+                "NOTE manual-review rows stay pinned at 0.000 confidence",
+                invalid_note_confidence_count == 0,
+                f"invalid={invalid_note_confidence_count}",
+            )
+        )
+        results.append(
+            CheckResult(
+                "Manual-review parser inventory isolated to PROCESS/NOTE rows",
+                True,
+                review_queue_detail,
             )
         )
 

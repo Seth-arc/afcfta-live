@@ -652,7 +652,6 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
     assert {
         "classification",
         "rule",
-        "psr",
         "pathway",
         "general_rule",
         "status",
@@ -926,8 +925,13 @@ async def test_special_cth_facts_round_trip_through_assessment_and_audit_replay(
     assert facts_by_key["output_hs6_code"]["fact_value_type"] == "text"
     assert facts_by_key["output_hs6_code"]["fact_value_text"] == facts["output_hs6_code"]
     assert any(
-        check["check_code"] in {"HEADING_NE_OUTPUT", "SUBHEADING_NE_OUTPUT"}
+        check["check_code"] == "PATHWAY_EVALUATION"
         for check in trail_body["atomic_checks"]
+    )
+    assert trail_body["pathway_evaluations"]
+    assert (
+        trail_body["pathway_evaluations"][0]["pathway_code"]
+        == trail_body["final_decision"]["pathway_used"]
     )
 
 

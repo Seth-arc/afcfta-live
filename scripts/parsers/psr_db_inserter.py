@@ -163,7 +163,7 @@ def decomposed_rule_key(row: dict[str, str]) -> tuple[str, str, str, str, str, s
 
 
 def build_row_ref(rule_key: tuple[str, str, str, str, str, str]) -> str:
-    digest = hashlib.sha1("|".join(rule_key).encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256("|".join(rule_key).encode("utf-8")).hexdigest()[:16]
     return f"parser-{digest}"
 
 

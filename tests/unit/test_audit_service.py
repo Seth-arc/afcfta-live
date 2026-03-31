@@ -23,7 +23,13 @@ def _uuid(value: int) -> UUID:
     return UUID(f"00000000-0000-0000-0000-{value:012d}")
 
 
-def _evaluation_row(*, evaluation_id: UUID, case_id: UUID, outcome: LegalOutcome) -> dict:
+def _evaluation_row(
+    *,
+    evaluation_id: UUID,
+    case_id: UUID,
+    outcome: LegalOutcome,
+    decision_snapshot_json: dict | None = None,
+) -> dict:
     """Return one persisted eligibility_evaluation row."""
 
     return {
@@ -35,6 +41,7 @@ def _evaluation_row(*, evaluation_id: UUID, case_id: UUID, outcome: LegalOutcome
         "confidence_class": "complete",
         "rule_status_at_evaluation": "agreed",
         "tariff_status_at_evaluation": "in_force",
+        "decision_snapshot_json": decision_snapshot_json,
         "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
     }
 
@@ -712,3 +719,406 @@ def test_log_assessment_emits_structured_audit_event_with_correlation_fields(
     assert payload["case_id"] == "case-123"
     assert payload["hs6_code"] == "110311"
     assert payload["duration_ms"] == 87
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_prefers_persisted_provenance_snapshot() -> None:
+    """Replay should use the persisted provenance snapshot instead of live source lookups."""
+
+    evaluation_id = _uuid(120)
+    case_id = _uuid(121)
+    source_id = str(_uuid(122))
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    sources_repository = AsyncMock()
+    service = AuditService(
+        evaluations_repository,
+        cases_repository,
+        sources_repository=sources_repository,
+    )
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(123),
+                evaluation_id=evaluation_id,
+                check_type="rule",
+                check_code="PSR_RESOLUTION",
+                passed=True,
+                details_json={
+                    "psr_rule": {
+                        "psr_id": str(_uuid(124)),
+                        "source_id": source_id,
+                        "appendix_version": "v0.1",
+                        "hs_version": "HS2017",
+                        "hs6_code": "110311",
+                        "hs_level": "subheading",
+                        "rule_scope": "subheading",
+                        "product_description": "Groats and meal of wheat",
+                        "legal_rule_text_verbatim": "CTH",
+                        "legal_rule_text_normalized": "CTH",
+                        "rule_status": "agreed",
+                        "effective_date": "2024-01-01",
+                        "page_ref": 1,
+                        "table_ref": "Appendix IV",
+                        "row_ref": "110311",
+                    },
+                    "provenance_snapshot": {
+                        "captured_at": "2025-01-01T00:00:00+00:00",
+                        "source": {
+                            "source_id": source_id,
+                            "short_title": "Appendix IV",
+                            "version_label": "2025.01",
+                            "publication_date": "2025-01-01",
+                            "effective_date": "2025-01-01",
+                        },
+                        "supporting_provisions": [
+                            {
+                                "provision_id": str(_uuid(125)),
+                                "source_id": source_id,
+                                "instrument_name": "Appendix IV",
+                                "article_ref": "Art. 6",
+                                "annex_ref": "Annex 2",
+                                "topic_primary": "origin_rules",
+                                "page_start": 14,
+                                "page_end": 14,
+                                "provision_text_verbatim": "Change in tariff heading required.",
+                                "provision_text_normalized": "cth",
+                            }
+                        ],
+                    },
+                },
+            ),
+            _check_row(
+                check_result_id=_uuid(126),
+                evaluation_id=evaluation_id,
+                check_type="decision",
+                check_code="FINAL_DECISION",
+                passed=True,
+                details_json={
+                    "final_decision": {
+                        "eligible": True,
+                        "failure_codes": [],
+                        "missing_facts": [],
+                    }
+                },
+            ),
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = None
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.final_decision.provenance is not None
+    assert result.final_decision.provenance.rule is not None
+    assert result.final_decision.provenance.rule.source_id == _uuid(122)
+    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"
+    assert result.final_decision.provenance.rule.source_version_label == "2025.01"
+    assert result.final_decision.provenance.rule.snapshot_captured_at == datetime(
+        2025,
+        1,
+        1,
+        tzinfo=timezone.utc,
+    )
+    assert (
+        result.final_decision.provenance.rule.supporting_provisions[0].provision_text_verbatim
+        == "Change in tariff heading required."
+    )
+    sources_repository.get_provisions_for_source.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_fetches_live_provenance_when_snapshot_missing() -> None:
+    """Replay should hydrate provenance from the sources repository when no snapshot was persisted."""
+
+    evaluation_id = _uuid(127)
+    case_id = _uuid(128)
+    source_id = str(_uuid(129))
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    sources_repository = AsyncMock()
+    service = AuditService(
+        evaluations_repository,
+        cases_repository,
+        sources_repository=sources_repository,
+    )
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+        ),
+        "checks": [
+            _check_row(
+                check_result_id=_uuid(130),
+                evaluation_id=evaluation_id,
+                check_type="rule",
+                check_code="PSR_RESOLUTION",
+                passed=True,
+                details_json={
+                    "psr_rule": {
+                        "psr_id": str(_uuid(131)),
+                        "source_id": source_id,
+                        "appendix_version": "v0.1",
+                        "hs_version": "HS2017",
+                        "hs6_code": "110311",
+                        "hs_level": "subheading",
+                        "rule_scope": "subheading",
+                        "product_description": "Groats and meal of wheat",
+                        "legal_rule_text_verbatim": "CTH",
+                        "legal_rule_text_normalized": "CTH",
+                        "rule_status": "agreed",
+                        "effective_date": "2024-01-01",
+                        "page_ref": 1,
+                        "table_ref": "Appendix IV",
+                        "row_ref": "110311",
+                    },
+                },
+            ),
+            _check_row(
+                check_result_id=_uuid(132),
+                evaluation_id=evaluation_id,
+                check_type="decision",
+                check_code="FINAL_DECISION",
+                passed=True,
+                details_json={
+                    "final_decision": {
+                        "eligible": True,
+                        "failure_codes": [],
+                        "missing_facts": [],
+                    }
+                },
+            ),
+        ],
+    }
+    cases_repository.get_case_with_facts.return_value = None
+    sources_repository.get_source.return_value = {
+        "source_id": source_id,
+        "short_title": "Appendix IV",
+        "version_label": "2025.01",
+        "publication_date": "2025-01-01",
+        "effective_date": "2025-01-01",
+    }
+    sources_repository.get_provisions_for_source.return_value = [
+        {
+            "provision_id": str(_uuid(133)),
+            "source_id": source_id,
+            "instrument_name": "Appendix IV",
+            "article_ref": "Art. 6",
+            "annex_ref": "Annex 2",
+            "topic_primary": "origin_rules",
+            "page_start": 14,
+            "page_end": 14,
+            "provision_text_verbatim": "Change in tariff heading required.",
+            "provision_text_normalized": "cth",
+        }
+    ]
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert result.final_decision.provenance is not None
+    assert result.final_decision.provenance.rule is not None
+    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"
+    assert (
+        result.final_decision.provenance.rule.supporting_provisions[0].provision_text_verbatim
+        == "Change in tariff heading required."
+    )
+    sources_repository.get_source.assert_awaited_once_with(source_id)
+    assert sources_repository.get_provisions_for_source.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_decision_trace_rehydrates_summary_checks_from_decision_snapshot() -> None:
+    """Snapshot-only evaluations should replay without persisted eligibility_check_result rows."""
+
+    evaluation_id = _uuid(130)
+    case_id = _uuid(131)
+    source_id = str(_uuid(132))
+    evaluations_repository = AsyncMock()
+    cases_repository = AsyncMock()
+    service = AuditService(evaluations_repository, cases_repository)
+    evaluations_repository.get_evaluation_with_checks.return_value = {
+        "evaluation": _evaluation_row(
+            evaluation_id=evaluation_id,
+            case_id=case_id,
+            outcome=LegalOutcome.ELIGIBLE,
+            decision_snapshot_json={
+                "snapshot_version": 1,
+                "captured_at": "2025-01-01T00:00:00+00:00",
+                "classification_check": {
+                    "check_type": "classification",
+                    "check_code": "HS6_RESOLUTION",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "product": {
+                            "hs6_id": str(_uuid(133)),
+                            "hs_version": "HS2017",
+                            "hs6_code": "110311",
+                            "description": "Groats and meal of wheat",
+                        }
+                    },
+                },
+                "rule_check": {
+                    "check_type": "rule",
+                    "check_code": "PSR_RESOLUTION",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "psr_rule": {
+                            "psr_id": str(_uuid(134)),
+                            "source_id": source_id,
+                            "appendix_version": "v0.1",
+                            "hs_version": "HS2017",
+                            "hs6_code": "110311",
+                            "hs_level": "subheading",
+                            "rule_scope": "subheading",
+                            "product_description": "Groats and meal of wheat",
+                            "legal_rule_text_verbatim": "CTH",
+                            "legal_rule_text_normalized": "CTH",
+                            "rule_status": "agreed",
+                            "effective_date": "2024-01-01",
+                            "page_ref": 1,
+                            "table_ref": "Appendix IV",
+                            "row_ref": "110311",
+                        },
+                        "provenance_snapshot": {
+                            "captured_at": "2025-01-01T00:00:00+00:00",
+                            "source": {
+                                "source_id": source_id,
+                                "short_title": "Appendix IV",
+                                "version_label": "2025.01",
+                                "publication_date": "2025-01-01",
+                                "effective_date": "2025-01-01",
+                            },
+                            "supporting_provisions": [],
+                        },
+                    },
+                },
+                "selected_pathway_check": {
+                    "check_type": "pathway",
+                    "check_code": "PATHWAY_EVALUATION",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "pathway": {
+                            "pathway_id": str(_uuid(135)),
+                            "pathway_code": "CTH",
+                            "pathway_label": "CTH",
+                            "priority_rank": 1,
+                        },
+                        "result": True,
+                        "evaluated_expression": "1001 != 1103",
+                        "missing_variables": [],
+                    },
+                },
+                "general_rules_check": {
+                    "check_type": "general_rule",
+                    "check_code": "GENERAL_RULES_SUMMARY",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "general_rules_result": {
+                            "insufficient_operations_check": "pass",
+                            "cumulation_check": "not_applicable",
+                            "direct_transport_check": "pass",
+                            "general_rules_passed": True,
+                            "failure_codes": [],
+                        }
+                    },
+                },
+                "status_check": {
+                    "check_type": "status",
+                    "check_code": "STATUS_OVERLAY",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "overlay": {
+                            "status_type": "agreed",
+                            "effective_from": "2024-01-01",
+                            "effective_to": None,
+                            "confidence_class": "complete",
+                            "active_transitions": [],
+                            "constraints": [],
+                            "source_text_verbatim": "Rule is agreed.",
+                        }
+                    },
+                },
+                "tariff_check": {
+                    "check_type": "tariff",
+                    "check_code": "TARIFF_RESOLUTION",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "tariff_resolution": {
+                            "preferential_rate": "0.0000",
+                            "base_rate": "15.0000",
+                            "schedule_status": "in_force",
+                            "schedule_source_id": source_id,
+                        }
+                    },
+                },
+                "evidence_check": {
+                    "check_type": "evidence",
+                    "check_code": "EVIDENCE_READINESS",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "evidence_readiness": {
+                            "required_items": ["certificate_of_origin"],
+                            "missing_items": [],
+                            "verification_questions": [],
+                            "readiness_score": 1.0,
+                            "completeness_ratio": 1.0,
+                        }
+                    },
+                },
+                "final_decision_check": {
+                    "check_type": "decision",
+                    "check_code": "FINAL_DECISION",
+                    "passed": True,
+                    "severity": "info",
+                    "details_json": {
+                        "final_decision": {
+                            "eligible": True,
+                            "pathway_used": "CTH",
+                            "rule_status": "agreed",
+                            "tariff_status": "in_force",
+                            "confidence_class": "complete",
+                            "failure_codes": [],
+                            "missing_facts": [],
+                            "missing_evidence": [],
+                            "readiness_score": 1.0,
+                            "completeness_ratio": 1.0,
+                        }
+                    },
+                },
+            },
+        ),
+        "checks": [],
+    }
+    cases_repository.get_case_with_facts.return_value = _case_bundle(case_id)
+
+    result = await service.get_decision_trace(evaluation_id=str(evaluation_id))
+
+    assert [check.check_code for check in result.atomic_checks] == [
+        "HS6_RESOLUTION",
+        "PSR_RESOLUTION",
+        "TARIFF_RESOLUTION",
+        "PATHWAY_EVALUATION",
+        "GENERAL_RULES_SUMMARY",
+        "STATUS_OVERLAY",
+        "EVIDENCE_READINESS",
+        "FINAL_DECISION",
+    ]
+    assert result.hs6_resolved is not None
+    assert result.hs6_resolved.hs6_code == "110311"
+    assert result.pathway_evaluations[0].pathway_code == "CTH"
+    assert result.pathway_evaluations[0].checks == []
+    assert result.final_decision.provenance is not None
+    assert result.final_decision.provenance.rule is not None
+    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"

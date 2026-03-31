@@ -209,8 +209,12 @@ class IntakeService:
         hints (if supplied) are merged into the draft after validation, filling
         only the fields the model left as None.
 
-        When NIM is disabled, the model call fails, or the raw user input
-        exceeds the AGENTS.md length boundary, returns an empty
+        Public HTTP callers hit the AssistantRequest schema first, so
+        `user_input > 2000` is rejected with HTTP 422 before this method runs.
+        The length guard below remains as defense in depth for non-HTTP callers.
+
+        When NIM is disabled, the model call fails, or a non-HTTP caller passes
+        input above the AGENTS.md length boundary, returns an empty
         NimAssessmentDraft so the caller can proceed to clarification.
 
         Returns:

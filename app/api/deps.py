@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
 from secrets import compare_digest
 from threading import Lock
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.services.nim.client import NimClient
@@ -16,12 +17,12 @@ if TYPE_CHECKING:
     from app.services.nim.explanation_service import ExplanationService
     from app.services.nim.intake_service import IntakeService
 
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.core.logging import update_request_log_context
-from app.db.session import get_assessment_db, get_db
+from app.db.session import get_assessment_db, get_db, session_context
 from app.core.exceptions import AuthenticationError, RateLimitExceededError
 from app.repositories.cases_repository import CasesRepository
 from app.repositories.evidence_repository import EvidenceRepository
@@ -43,6 +44,9 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.rule_resolution_service import RuleResolutionService
 from app.services.status_service import StatusService
 from app.services.tariff_resolution_service import TariffResolutionService
+from app.schemas.assessments import CaseAssessmentRequest, EligibilityRequest
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -265,25 +269,36 @@ require_assessment_rate_limit = require_rate_limit("assessments")
 def _build_eligibility_service(session: AsyncSession) -> EligibilityService:
     """Create the assessment orchestrator bound to one database session."""
 
+    hs_repository = HSRepository(session)
+    rules_repository = RulesRepository(session)
+    tariffs_repository = TariffsRepository(session)
+    status_repository = StatusRepository(session)
+    evidence_repository = EvidenceRepository(session)
+    cases_repository = CasesRepository(session)
+    evaluations_repository = EvaluationsRepository(session)
+    sources_repository = SourcesRepository(session)
+    intelligence_repository = IntelligenceRepository(session)
+
     return EligibilityService(
-        classification_service=ClassificationService(HSRepository(session)),
+        classification_service=ClassificationService(hs_repository),
         rule_resolution_service=RuleResolutionService(
-            hs_repository=HSRepository(session),
-            rules_repository=RulesRepository(session),
+            hs_repository=hs_repository,
+            rules_repository=rules_repository,
         ),
-        tariff_resolution_service=TariffResolutionService(TariffsRepository(session)),
-        status_service=StatusService(StatusRepository(session)),
-        evidence_service=EvidenceService(EvidenceRepository(session)),
+        tariff_resolution_service=TariffResolutionService(tariffs_repository),
+        status_service=StatusService(status_repository),
+        evidence_service=EvidenceService(evidence_repository),
         fact_normalization_service=FactNormalizationService(),
         expression_evaluator=ExpressionEvaluator(),
         general_origin_rules_service=GeneralOriginRulesService(),
-        cases_repository=CasesRepository(session),
-        evaluations_repository=EvaluationsRepository(session),
-        intelligence_service=IntelligenceService(IntelligenceRepository(session)),
+        cases_repository=cases_repository,
+        evaluations_repository=evaluations_repository,
+        sources_repository=sources_repository,
+        intelligence_service=IntelligenceService(intelligence_repository),
         audit_service=AuditService(
-            evaluations_repository=EvaluationsRepository(session),
-            cases_repository=CasesRepository(session),
-            sources_repository=SourcesRepository(session),
+            evaluations_repository=evaluations_repository,
+            cases_repository=cases_repository,
+            sources_repository=sources_repository,
         ),
     )
 
@@ -432,6 +447,74 @@ def assessment_eligibility_service_context():
             yield _build_eligibility_service(session)
 
     return _ctx()
+
+
+async def _persist_prepared_interface_assessment(prepared_assessment):
+    """Persist one prepared assessment after the repeatable-read snapshot has closed."""
+
+    async with session_context() as session:
+        service = _build_eligibility_service(session)
+        return await service.finalize_prepared_interface_assessment(prepared_assessment)
+
+
+async def run_replayable_interface_assessment(
+    payload: EligibilityRequest,
+):
+    """Run the engine inside REPEATABLE READ, then persist replay state on a short write session."""
+
+    async with assessment_eligibility_service_context() as eligibility_service:
+        prepared = await eligibility_service.prepare_interface_request_assessment(payload)
+    return await _persist_prepared_interface_assessment(prepared)
+
+
+async def run_replayable_case_assessment(
+    case_id: str,
+    payload: CaseAssessmentRequest,
+):
+    """Run one case-backed engine pass, then persist replay state after the snapshot closes."""
+
+    async with assessment_eligibility_service_context() as eligibility_service:
+        prepared = await eligibility_service.prepare_interface_case_assessment(case_id, payload)
+    return await _persist_prepared_interface_assessment(prepared)
+
+
+async def dispatch_advisory_alert_specs(specs: list[dict[str, Any]]) -> None:
+    """Persist advisory alert specs on a detached session without delaying the response path."""
+
+    if not specs:
+        return
+
+    try:
+        async with session_context() as session:
+            async with session.begin():
+                service = IntelligenceService(IntelligenceRepository(session))
+                await service.persist_alert_specs(specs)
+    except Exception:
+        logger.error(
+            "advisory_alert_dispatch_failed",
+            exc_info=True,
+            extra={
+                "structured_data": {
+                    "event": "advisory_alert_dispatch_failed",
+                    "alert_spec_count": len(specs),
+                }
+            },
+        )
+
+
+def schedule_advisory_alert_dispatch(
+    background_tasks: BackgroundTasks,
+    specs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
+) -> None:
+    """Queue advisory alert persistence after the response body is ready."""
+
+    if not specs:
+        return
+
+    background_tasks.add_task(
+        dispatch_advisory_alert_specs,
+        [dict(spec) for spec in specs],
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -7,12 +7,14 @@ from contextlib import asynccontextmanager
 import importlib
 import logging
 from datetime import datetime, timezone
+from secrets import compare_digest
 from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.router import api_router
 from app.api.deps import InMemoryRateLimiter, RedisRateLimiter
@@ -170,6 +172,33 @@ def _request_log_level(status_code: int) -> int:
     return logging.INFO
 
 
+def _metrics_auth_failure(request: Request, settings) -> JSONResponse:
+    """Return a structured authentication error for protected metrics access."""
+
+    return _error_response(
+        request,
+        status_code=401,
+        code="METRICS_AUTH_REQUIRED",
+        message="Authentication is required for the metrics route",
+        details={
+            "header_name": settings.METRICS_AUTH_HEADER_NAME,
+            "fallback_header_name": settings.API_AUTH_HEADER_NAME,
+        },
+    )
+
+
+def _is_authorized_metrics_request(request: Request, settings) -> bool:
+    """Return True when the caller supplied a valid metrics credential."""
+
+    provided_key = request.headers.get(settings.METRICS_AUTH_HEADER_NAME) or request.headers.get(
+        settings.API_AUTH_HEADER_NAME
+    )
+    expected_key = settings.METRICS_AUTH_KEY or settings.API_AUTH_KEY
+    if not provided_key:
+        return False
+    return compare_digest(provided_key, expected_key)
+
+
 def _log_http_request(request: Request, *, status_code: int, started_at: float) -> None:
     """Emit one structured request log with latency and caller context."""
 
@@ -264,10 +293,14 @@ def create_app() -> FastAPI:
 
     settings = get_settings()
     configure_logging(settings)
+    docs_enabled = settings.ENV in {"development", "test", "ci"}
     app = FastAPI(
         title=settings.APP_TITLE,
         version=settings.APP_VERSION,
         lifespan=_lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
     app.state.settings = settings
     app.state.rate_limiter = InMemoryRateLimiter()
@@ -275,6 +308,14 @@ def create_app() -> FastAPI:
     # Register root-level operational endpoints before versioned routers so they
     # remain outside the API-key protected router dependencies.
     _configure_metrics(app, settings)
+
+    if settings.ALLOWED_HOSTS:
+        app.add_middleware(
+            TrustedHostMiddleware,
+            allowed_hosts=[
+                host.strip() for host in settings.ALLOWED_HOSTS.split(",") if host.strip()
+            ],
+        )
 
     if settings.CORS_ALLOW_ORIGINS:
         origins = [o.strip() for o in settings.CORS_ALLOW_ORIGINS.split(",") if o.strip()]
@@ -293,6 +334,23 @@ def create_app() -> FastAPI:
         context_tokens = bind_request_log_context(request_id=request.state.request_id)
 
         try:
+            if (
+                request.url.path == "/metrics"
+                and settings.METRICS_ENABLED
+                and settings.METRICS_AUTH_REQUIRED
+                and not _is_authorized_metrics_request(request, settings)
+            ):
+                response = _metrics_auth_failure(request, settings)
+                response.headers.setdefault("X-Request-ID", request.state.request_id)
+                if settings.LOG_REQUESTS_ENABLED:
+                    _log_http_request(
+                        request,
+                        status_code=response.status_code,
+                        started_at=started_at,
+                    )
+                reset_request_log_context(context_tokens)
+                return response
+
             response = await call_next(request)
         except Exception:
             if settings.LOG_REQUESTS_ENABLED:

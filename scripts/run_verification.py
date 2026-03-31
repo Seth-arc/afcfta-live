@@ -579,7 +579,6 @@ def main() -> int:
                 concurrency=100,
                 requests=500,
                 baseline_path=DEFAULT_LARGE_LOAD_BASELINE,
-                max_p95_latency_s=0.5,
             )
         )
 

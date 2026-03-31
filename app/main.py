@@ -194,7 +194,9 @@ def _is_authorized_metrics_request(request: Request, settings) -> bool:
         settings.API_AUTH_HEADER_NAME
     )
     expected_key = settings.METRICS_AUTH_KEY or settings.API_AUTH_KEY
-    return bool(provided_key and compare_digest(provided_key, expected_key))
+    if not provided_key:
+        return False
+    return compare_digest(provided_key, expected_key)
 
 
 def _log_http_request(request: Request, *, status_code: int, started_at: float) -> None:

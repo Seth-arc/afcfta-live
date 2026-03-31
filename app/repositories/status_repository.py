@@ -143,6 +143,8 @@ class StatusRepository:
             params[f"entity_key_{ordinal}"] = entity_key
             params[f"ordinal_{ordinal}"] = ordinal
 
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+        # SQL text is parameterized; VALUES slots are generated from bound placeholders only.
         statement = text(
             f"""
             WITH targets(entity_type, entity_key, ordinal) AS (

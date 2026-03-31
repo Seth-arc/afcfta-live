@@ -483,6 +483,8 @@ async def insert_pathways(session, rule: RuleSpec) -> int:
 
 async def insert_applicability(session, rule: RuleSpec) -> int:
     scope_field = "chapter" if rule.hs_level == HsLevelEnum.CHAPTER else "heading"
+    # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
+    # `scope_field` is constrained to {"chapter","heading"} and remaining values are bound params.
     statement = text(
         f"""
         INSERT INTO hs6_psr_applicability (

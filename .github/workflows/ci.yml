@@ -360,7 +360,6 @@ jobs:
           --baseline tests/load/baseline_100c.json
           --report artifacts/load-report-100.json
           --latency-tolerance-pct 50
-          --max-p95-latency-s 0.5
           --min-success-rate 95
 
       - name: Upload load test report

@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Response
 from pydantic import ValidationError
 
 from app.api.deps import (
@@ -35,6 +35,7 @@ from app.api.deps import (
     get_explanation_service,
     get_intake_service,
     require_assessment_rate_limit,
+    schedule_advisory_alert_dispatch,
 )
 from app.config import Settings, get_settings
 from app.schemas.nim.assistant import (
@@ -65,6 +66,7 @@ _MIN_NIM_CONFIDENCE: float = 0.7
 async def assistant_assess(
     payload: AssistantRequest,
     response: Response,
+    background_tasks: BackgroundTasks,
     intake_service: IntakeService = Depends(get_intake_service),
     clarification_service: ClarificationService = Depends(get_clarification_service),
     explanation_service: ExplanationService = Depends(get_explanation_service),
@@ -199,6 +201,10 @@ async def assistant_assess(
     async with assessment_eligibility_service_context() as eligibility_service:
         result = await eligibility_service.assess_interface_request(eligibility_request)
     engine_latency_ms = int((time.monotonic() - t_engine) * 1000)
+    schedule_advisory_alert_dispatch(
+        background_tasks,
+        getattr(result, "pending_alert_specs", None),
+    )
 
     audit_url = f"/api/v1/audit/evaluations/{result.evaluation_id}"
     response.headers["X-AIS-Case-Id"] = result.case_id

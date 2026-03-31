@@ -310,6 +310,9 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
     status_service.get_status_overlays.side_effect = _get_status_overlays
     evidence_service.build_readiness_for_targets.side_effect = _build_readiness_for_targets
 
+    intelligence_service = Mock()
+    intelligence_service.build_assessment_alert_specs.return_value = []
+
     deps = {
         "classification_service": AsyncMock(),
         "rule_resolution_service": rule_resolution_service,
@@ -321,7 +324,7 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
         "general_origin_rules_service": Mock(),
         "cases_repository": AsyncMock(),
         "evaluations_repository": AsyncMock(),
-        "intelligence_service": AsyncMock(),
+        "intelligence_service": intelligence_service,
     }
     return EligibilityService(**deps), deps
 
@@ -494,7 +497,7 @@ async def test_architecture_blocker_rule_status_pending_skips_pathway_evaluation
     assert result.failures == ["RULE_STATUS_PENDING"]
     assert result.missing_facts == []
     assert result.confidence_class == "provisional"
-    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    deps["intelligence_service"].build_assessment_alert_specs.assert_called_once()
     assert deps["status_service"].get_status_overlay.await_args_list == [
         call("corridor", "CORRIDOR:GHA:NGA:030389", date(2025, 1, 1)),
         call("psr_rule", f"PSR:{_uuid(10)}", date(2025, 1, 1)),
@@ -798,7 +801,7 @@ async def test_architecture_blocker_missing_tariff_schedule_skips_pathway_evalua
     deps["expression_evaluator"].evaluate.assert_not_called()
     deps["general_origin_rules_service"].evaluate.assert_not_called()
     deps["evidence_service"].build_readiness.assert_not_called()
-    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    deps["intelligence_service"].build_assessment_alert_specs.assert_called_once()
     persisted_checks = _assert_persisted_blocker_audit(
         deps,
         case_id=str(_uuid(250)),
@@ -849,7 +852,7 @@ async def test_architecture_blocker_corridor_not_yet_operational_skips_pathway_e
     deps["expression_evaluator"].evaluate.assert_not_called()
     deps["general_origin_rules_service"].evaluate.assert_not_called()
     deps["evidence_service"].build_readiness.assert_not_called()
-    deps["intelligence_service"].emit_assessment_alerts.assert_awaited_once()
+    deps["intelligence_service"].build_assessment_alert_specs.assert_called_once()
     _assert_persisted_blocker_audit(
         deps,
         case_id=str(_uuid(260)),
@@ -1085,11 +1088,17 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
     )
     auto_case_id = str(_uuid(400))
     evaluation_id = str(_uuid(401))
+    pending_alert_spec = {
+        "alert_type": "data_quality_issue",
+        "entity_type": "corridor",
+        "entity_key": "corridor:GHA:NGA:110311",
+    }
     deps["cases_repository"].create_case.return_value = auto_case_id
     deps["evaluations_repository"].persist_evaluation.return_value = {
         "evaluation": {"evaluation_id": evaluation_id},
         "checks": [],
     }
+    deps["intelligence_service"].build_assessment_alert_specs.return_value = [pending_alert_spec]
     deps["classification_service"].resolve_hs6.return_value = _product("110311")
     deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
     deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
@@ -1114,6 +1123,7 @@ async def test_assess_interface_request_auto_creates_case_and_returns_replay_ide
     assert result.case_id == auto_case_id
     assert result.evaluation_id == evaluation_id
     assert result.response.eligible is True
+    assert result.pending_alert_specs == (pending_alert_spec,)
 
     deps["cases_repository"].create_case.assert_awaited_once()
     created_case = deps["cases_repository"].create_case.await_args.args[0]

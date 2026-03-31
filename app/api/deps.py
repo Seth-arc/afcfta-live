@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from dataclasses import dataclass
 from secrets import compare_digest
 from threading import Lock
 from time import monotonic
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.services.nim.client import NimClient
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
     from app.services.nim.explanation_service import ExplanationService
     from app.services.nim.intake_service import IntakeService
 
-from fastapi import Depends, Request
+from fastapi import BackgroundTasks, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -43,6 +44,8 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.rule_resolution_service import RuleResolutionService
 from app.services.status_service import StatusService
 from app.services.tariff_resolution_service import TariffResolutionService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -443,6 +446,47 @@ def assessment_eligibility_service_context():
             yield _build_eligibility_service(session)
 
     return _ctx()
+
+
+async def dispatch_advisory_alert_specs(specs: list[dict[str, Any]]) -> None:
+    """Persist advisory alert specs on a detached session without delaying the response path."""
+
+    if not specs:
+        return
+
+    from app.db.session import session_context
+
+    try:
+        async with session_context() as session:
+            async with session.begin():
+                service = IntelligenceService(IntelligenceRepository(session))
+                await service.persist_alert_specs(specs)
+    except Exception:
+        logger.error(
+            "advisory_alert_dispatch_failed",
+            exc_info=True,
+            extra={
+                "structured_data": {
+                    "event": "advisory_alert_dispatch_failed",
+                    "alert_spec_count": len(specs),
+                }
+            },
+        )
+
+
+def schedule_advisory_alert_dispatch(
+    background_tasks: BackgroundTasks,
+    specs: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None,
+) -> None:
+    """Queue advisory alert persistence after the response body is ready."""
+
+    if not specs:
+        return
+
+    background_tasks.add_task(
+        dispatch_advisory_alert_specs,
+        [dict(spec) for spec in specs],
+    )
 
 
 # ---------------------------------------------------------------------------

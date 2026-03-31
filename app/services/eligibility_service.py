@@ -56,6 +56,7 @@ class InterfaceAssessmentResult:
     response: EligibilityAssessmentResponse
     case_id: str
     evaluation_id: str
+    pending_alert_specs: tuple[dict[str, Any], ...] = ()
 
 
 class EligibilityService:
@@ -91,6 +92,7 @@ class EligibilityService:
         self.intelligence_service = intelligence_service
         self.audit_service = audit_service
         self._last_persisted_evaluation_id: str | None = None
+        self._last_pending_alert_specs: tuple[dict[str, Any], ...] = ()
 
     async def assess_case(
         self,
@@ -117,6 +119,7 @@ class EligibilityService:
         """Guarantee a replayable persisted evaluation for interface-triggered direct runs."""
 
         self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
         replayable_request = await self._ensure_replayable_request(request)
         response = await self.assess(replayable_request)
         evaluation_id = self._require_persisted_evaluation_id(replayable_request.case_id)
@@ -124,6 +127,7 @@ class EligibilityService:
             response=response,
             case_id=str(replayable_request.case_id),
             evaluation_id=evaluation_id,
+            pending_alert_specs=self._consume_pending_alert_specs(),
         )
 
     async def assess_interface_case(
@@ -134,18 +138,21 @@ class EligibilityService:
         """Return a case-backed assessment together with explicit replay identifiers."""
 
         self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
         response = await self.assess_case(case_id, request)
         evaluation_id = self._require_persisted_evaluation_id(case_id)
         return InterfaceAssessmentResult(
             response=response,
             case_id=case_id,
             evaluation_id=evaluation_id,
+            pending_alert_specs=self._consume_pending_alert_specs(),
         )
 
     async def assess(self, request: EligibilityRequest) -> EligibilityAssessmentResponse:
         """Execute one full assessment inside the caller's request-scoped DB snapshot."""
 
         self._last_persisted_evaluation_id = None
+        self._last_pending_alert_specs = ()
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
 
@@ -285,13 +292,12 @@ class EligibilityService:
                 pathway_used=None,
                 audit_checks=audit_checks,
             )
-            await self._emit_alerts_if_possible(
+            self._last_pending_alert_specs = self._build_pending_alert_specs_if_possible(
                 request=request,
                 rule_bundle=rule_bundle,
                 tariff_result=tariff_result,
                 corridor_overlay=corridor_overlay,
                 response=response,
-                assessment_date=assessment_date,
             )
             self._log_assessment(
                 request=request,
@@ -382,13 +388,12 @@ class EligibilityService:
             pathway_used=response.pathway_used,
             audit_checks=audit_checks,
         )
-        await self._emit_alerts_if_possible(
+        self._last_pending_alert_specs = self._build_pending_alert_specs_if_possible(
             request=request,
             rule_bundle=rule_bundle,
             tariff_result=tariff_result,
             corridor_overlay=corridor_overlay,
             response=response,
-            assessment_date=assessment_date,
         )
         self._log_assessment(
             request=request,
@@ -397,6 +402,13 @@ class EligibilityService:
             started_at=started_at,
         )
         return response
+
+    def _consume_pending_alert_specs(self) -> tuple[dict[str, Any], ...]:
+        """Return and clear any advisory alert specs prepared during the last assessment."""
+
+        pending = self._last_pending_alert_specs
+        self._last_pending_alert_specs = ()
+        return pending
 
     async def _build_request_from_case(
         self,
@@ -1300,7 +1312,7 @@ class EligibilityService:
             )
             return False
 
-    async def _emit_alerts_if_possible(
+    def _build_pending_alert_specs_if_possible(
         self,
         *,
         request: EligibilityRequest,
@@ -1308,20 +1320,20 @@ class EligibilityService:
         tariff_result: TariffResolutionResult | None,
         corridor_overlay: StatusOverlay,
         response: EligibilityAssessmentResponse,
-        assessment_date: date,
-    ) -> None:
-        """Persist advisory intelligence alerts without altering the assessment result."""
+    ) -> tuple[dict[str, Any], ...]:
+        """Build advisory alert specs without blocking the synchronous response path."""
 
         if self.intelligence_service is None:
-            return
+            return ()
 
-        await self.intelligence_service.emit_assessment_alerts(
-            request=request,
-            rule_bundle=rule_bundle,
-            tariff_result=tariff_result,
-            corridor_overlay=corridor_overlay,
-            response=response,
-            assessment_date=assessment_date,
+        return tuple(
+            self.intelligence_service.build_assessment_alert_specs(
+                request=request,
+                rule_bundle=rule_bundle,
+                tariff_result=tariff_result,
+                corridor_overlay=corridor_overlay,
+                response=response,
+            )
         )
 
     @staticmethod

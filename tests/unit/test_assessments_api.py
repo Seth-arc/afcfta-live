@@ -72,6 +72,14 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
     evaluation_id = str(uuid4())
     captured_payloads: list[object] = []
     lifecycle: list[str] = []
+    scheduled_alert_specs: list[object] = []
+    pending_alert_specs = (
+        {
+            "alert_type": "data_quality_issue",
+            "entity_type": "corridor",
+            "entity_key": "corridor:GHA:NGA:110311",
+        },
+    )
 
     class FakeEligibilityService:
         async def assess_interface_request(self, payload) -> object:
@@ -81,6 +89,7 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
                 case_id=case_id,
                 evaluation_id=evaluation_id,
                 response=_assessment_response(),
+                pending_alert_specs=pending_alert_specs,
             )
 
     @asynccontextmanager
@@ -92,6 +101,10 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
             lifecycle.append("context_exit")
 
     monkeypatch.setattr("app.api.v1.assessments.assessment_eligibility_service_context", fake_context)
+    monkeypatch.setattr(
+        "app.api.v1.assessments.schedule_advisory_alert_dispatch",
+        lambda background_tasks, specs: scheduled_alert_specs.append(specs),
+    )
 
     response = await async_client.post(
         "/api/v1/assessments",
@@ -101,6 +114,7 @@ async def test_assessments_route_calls_interface_request_and_sets_replay_headers
     assert response.status_code == 200, response.text
     assert captured_payloads[0].hs6_code == "110311"
     assert lifecycle == ["context_enter", "service_called", "context_exit"]
+    assert scheduled_alert_specs == [pending_alert_specs]
     assert response.headers["X-AIS-Case-Id"] == case_id
     assert response.headers["X-AIS-Evaluation-Id"] == evaluation_id
     assert response.headers["X-AIS-Audit-URL"] == f"/api/v1/audit/evaluations/{evaluation_id}"
@@ -164,6 +178,14 @@ async def test_assessments_case_alias_calls_interface_case_and_sets_headers(
     case_id = str(uuid4())
     evaluation_id = str(uuid4())
     lifecycle: list[str] = []
+    scheduled_alert_specs: list[object] = []
+    pending_alert_specs = (
+        {
+            "alert_type": "rule_status_changed",
+            "entity_type": "psr_rule",
+            "entity_key": "PSR:fixture",
+        },
+    )
 
     class FakeEligibilityService:
         async def assess_interface_case(self, requested_case_id: str, payload) -> object:
@@ -175,6 +197,7 @@ async def test_assessments_case_alias_calls_interface_case_and_sets_headers(
                 case_id=case_id,
                 evaluation_id=evaluation_id,
                 response=_assessment_response(),
+                pending_alert_specs=pending_alert_specs,
             )
 
     @asynccontextmanager
@@ -186,6 +209,10 @@ async def test_assessments_case_alias_calls_interface_case_and_sets_headers(
             lifecycle.append("context_exit")
 
     monkeypatch.setattr("app.api.v1.assessments.assessment_eligibility_service_context", fake_context)
+    monkeypatch.setattr(
+        "app.api.v1.assessments.schedule_advisory_alert_dispatch",
+        lambda background_tasks, specs: scheduled_alert_specs.append(specs),
+    )
 
     response = await async_client.post(
         f"/api/v1/assessments/cases/{case_id}",
@@ -194,6 +221,7 @@ async def test_assessments_case_alias_calls_interface_case_and_sets_headers(
 
     assert response.status_code == 200, response.text
     assert lifecycle == ["context_enter", "service_called", "context_exit"]
+    assert scheduled_alert_specs == [pending_alert_specs]
     assert response.headers["X-AIS-Case-Id"] == case_id
     assert response.headers["X-AIS-Evaluation-Id"] == evaluation_id
     assert response.json()["pathway_used"] == "CTH"

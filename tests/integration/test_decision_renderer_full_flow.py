@@ -47,12 +47,9 @@ import pytest
 
 from app.schemas.nim.assistant import AssistantRendering
 from app.services.nim.client import NimClient, NimClientError
-from app.services.nim.decision_renderer import DecisionRenderer, RenderedDecision
+from app.services.nim.decision_renderer import RenderedDecision
 from app.services.nim.rendering_service import RenderingService
-from tests.contract_constants import (
-    ASSISTANT_RENDERING_FIELDS,
-    ENGINE_DECISION_FIELDS,
-)
+from tests.contract_constants import ASSISTANT_RENDERING_FIELDS
 
 pytestmark = pytest.mark.integration
 

@@ -241,6 +241,91 @@ def test_process_failure_emits_process_fix() -> None:
     assert "manufacturing process" in r.message.lower()
 
 
+# --- VA pathway counterfactual coverage ---
+
+
+def test_va_failure_delta_formatted_as_normalized_string() -> None:
+    """VA failure with a decimal actual value produces a cleanly normalized delta.
+
+    The engine formats via Decimal.normalize() → '7' not '7.0000'.
+    """
+    results = _engine().generate(
+        normalized_facts={"va_percent": "27.50"},
+        pathway_analysis=[_va_pathway(passed=False, threshold_percent="35.00")],
+    )
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.kind == "value_add_increase"
+    assert r.delta == "7.5"
+    assert r.pathway_code == "VA"
+    assert "7.5 percentage points" in r.message
+    assert "35%" in r.message
+
+
+def test_va_passed_pathway_not_included_in_results() -> None:
+    """A VA pathway that passed must not appear in counterfactual results."""
+    results = _engine().generate(
+        normalized_facts={"va_percent": "42"},
+        pathway_analysis=[_va_pathway(passed=True, threshold_percent="35")],
+    )
+
+    assert results == []
+
+
+def test_va_counterfactual_renders_gap_analysis_referencing_va_not_vnm() -> None:
+    """When a VA counterfactual is fed into DecisionRenderer.render(),
+    gap_analysis must reference the VA threshold, not the VNM threshold.
+
+    This guards against copy-paste errors in the renderer that would
+    conflate the two value-based pathways.
+    """
+    from app.services.nim.decision_renderer import DecisionRenderer
+
+    va_results = _engine().generate(
+        normalized_facts={"va_percent": "28"},
+        pathway_analysis=[_va_pathway(passed=False, threshold_percent="35")],
+    )
+    counterfactuals = [r.to_dict() for r in va_results]
+
+    renderer = DecisionRenderer()
+    rendered = renderer.render(
+        engine_payload={
+            "decision": {
+                "eligible": False,
+                "pathway_used": None,
+                "rule_status": "agreed",
+                "confidence_class": "complete",
+            },
+            "product": {"hs6_code": "110311"},
+            "pathway_analysis": [
+                {
+                    "pathway_code": "VA",
+                    "priority_rank": 1,
+                    "passed": False,
+                    "reasons": ["Value added is below threshold."],
+                }
+            ],
+            "missing_facts": [],
+            "failures": ["FAIL_VA_INSUFFICIENT"],
+            "evidence_required": ["certificate_of_origin"],
+            "tariff_outcome": {"preferential_rate": "0%", "base_rate": "20%", "status": "in_force"},
+        },
+        counterfactuals=counterfactuals,
+    )
+
+    assert rendered.gap_analysis is not None
+    gap_lower = rendered.gap_analysis.lower()
+    # Must reference VA pathway
+    assert "va" in gap_lower or "value added" in gap_lower or "value add" in gap_lower, (
+        f"gap_analysis must reference VA pathway, got: {rendered.gap_analysis!r}"
+    )
+    # Must not reference VNM threshold
+    assert "vnm" not in gap_lower, (
+        f"gap_analysis must not reference VNM when only VA failed, got: {rendered.gap_analysis!r}"
+    )
+
+
 def test_to_dict_returns_all_fields() -> None:
     r = CounterfactualResult(
         kind="value_reduction",

@@ -363,6 +363,77 @@ python -m pytest tests/integration/test_assistant_api.py -v
 # Completed 31 March
 ---
 
+## Prompt 6 — Close DB-dependent rendering gaps and VA counterfactual coverage
+
+```
+Read tests/integration/test_decision_renderer_full_flow.py.
+Read tests/integration/test_nim_full_flow.py.
+Read tests/unit/test_counterfactual_engine.py.
+Read app/services/nim/counterfactual_engine.py.
+Read app/api/v1/assistant.py.
+
+Close the three remaining rendering coverage gaps before trader UI work begins.
+
+Work in these files:
+- tests/integration/test_nim_full_flow.py (add Section 8)
+- tests/unit/test_counterfactual_engine.py (extend)
+
+Gap 1 — DB-dependent rendering integration:
+Add tests to test_nim_full_flow.py Section 8 that verify assistant_rendering
+is populated in the AssistantResponseEnvelope when the full flow runs over HTTP.
+
+Cover:
+1. assistant_rendering is non-null when response_type is "assessment".
+2. assistant_rendering contains exactly the fields in ASSISTANT_RENDERING_FIELDS (no extra, no missing).
+3. assistant_rendering.headline is a non-empty string.
+4. assistant_rendering.next_steps is a list with at least 2 items.
+5. assistant_rendering.warnings is a list (may be empty).
+6. assistant_rendering fields do not contain any engine decision field name (eligible, pathway_used, rule_status, tariff_outcome) as a top-level key.
+
+Gap 2 — Rendering round-trip through audit replay:
+Add tests to test_nim_full_flow.py Section 8 that verify a replayed evaluation
+produces a rendering consistent with the original assessment.
+
+Cover:
+1. Submit an assessment and capture the response including assistant_rendering and evaluation_id.
+2. Fetch the audit trail via GET /api/v1/audit/evaluations/{evaluation_id}.
+3. Build the engine payload from the audit trail's final_decision and pathway data.
+4. Pass the engine payload through DecisionRenderer.render() locally.
+5. Assert that the locally-rendered headline is consistent with the original assistant_rendering.headline (both should reflect the same eligibility outcome).
+6. Assert that the locally-rendered gap_analysis is consistent (both null, or both non-null referencing the same pathway).
+
+Gap 3 — VA pathway counterfactual:
+Add tests to test_counterfactual_engine.py that exercise the VA pathway.
+
+Cover:
+1. VA failure with known actual (va_percent below threshold) → correct delta and message with "value_add_increase" kind.
+2. VA failure with quantified delta → delta formatted as normalized string.
+3. VA counterfactual fed into DecisionRenderer.render() → gap_analysis says "below the VA threshold" (not "above the VNM threshold").
+4. VA passed pathway → not included in counterfactual results.
+
+Requirements:
+1. DB-dependent tests must use the same draft override pattern as existing Section 3–6 tests.
+2. Use ASSISTANT_RENDERING_FIELDS from contract_constants.py for hallucination guards.
+3. Do not change any existing passing tests.
+4. The VA counterfactual tests are unit tests — no DB required.
+5. The rendering round-trip test must not assert exact text equality — assert outcome consistency (both say "qualifies" or both say "does not qualify").
+
+When done, summarize:
+- the DB-dependent rendering assertions now in place
+- the audit replay round-trip guarantee
+- the VA counterfactual coverage added
+- any remaining gaps
+```
+
+**You run:**
+```bash
+python -m pytest tests/unit/test_counterfactual_engine.py -v
+python -m pytest tests/integration/test_nim_full_flow.py -v
+python -m pytest tests/integration/test_decision_renderer_full_flow.py -v
+```
+
+---
+
 ## Recommended Execution Groups
 
 ### Group 1 — Deterministic rendering foundation
@@ -377,15 +448,21 @@ Prompt 3
 
 Prompts 4–5
 
+### Group 4 — Coverage closure
+
+Prompt 6
+
 ---
 
 ## Exit Criteria
 
 - `decision_renderer.py` is implemented and its output is contract-pinned by unit tests
-- `counterfactual_engine.py` produces quantified, deterministic gap results from real pathway failures
+- `counterfactual_engine.py` produces quantified, deterministic gap results from real pathway failures, including VA
 - `rendering_service.py` validates NIM structured output and rejects contradictions before use
 - fallback to `DecisionRenderer` is tested for every NIM failure mode
 - the assistant response envelope keeps `assessment` and `assistant_rendering` separate
+- `assistant_rendering` is verified as populated in the HTTP response via DB-dependent integration tests
+- a replayed evaluation produces a rendering consistent with the original assessment
 - all seven test scenarios from the reference document pass
 - no deterministic engine field is altered by the rendering layer
 

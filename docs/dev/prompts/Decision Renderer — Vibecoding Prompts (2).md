@@ -317,7 +317,7 @@ When done, summarize:
 ```bash
 python -m pytest tests/integration/test_assistant_api.py -v
 ```
-
+# Completed 31 March
 ---
 
 ## Prompt 5 — Add end-to-end rendering validation
@@ -360,7 +360,7 @@ python -m pytest tests/integration/test_decision_renderer_full_flow.py -v
 python -m pytest tests/unit/test_decision_renderer.py tests/unit/test_counterfactual_engine.py tests/unit/test_rendering_service.py -v
 python -m pytest tests/integration/test_assistant_api.py -v
 ```
-
+# Completed 31 March
 ---
 
 ## Recommended Execution Groups

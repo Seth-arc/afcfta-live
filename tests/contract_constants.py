@@ -136,3 +136,12 @@ VALID_CONFIDENCE_CLASSES = frozenset({
     "provisional",
     "incomplete",
 })
+
+ASSISTANT_RENDERING_FIELDS = frozenset({
+    "headline",
+    "summary",
+    "gap_analysis",
+    "fix_strategy",
+    "next_steps",
+    "warnings",
+})

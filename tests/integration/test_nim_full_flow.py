@@ -61,9 +61,11 @@ from httpx import AsyncClient
 from tests.contract_constants import (
     ALL_REQUIRED_DRAFT_FACTS,
     ASSISTANT_ERROR_FIELDS,
+    ASSISTANT_RENDERING_FIELDS,
     ASSISTANT_RESPONSE_ENVELOPE_FIELDS,
     CLARIFICATION_FIELDS,
     ELIGIBILITY_ASSESSMENT_RESPONSE_FIELDS,
+    ENGINE_DECISION_FIELDS,
     TARIFF_OUTCOME_FIELDS,
     VALID_CONFIDENCE_CLASSES,
 )
@@ -750,6 +752,9 @@ async def test_nim_disabled_produces_explanation_fallback_used_true(
         _remove_complete_draft_override(app)
 
 
+KNOWN_RENDERING_FIELDS = ASSISTANT_RENDERING_FIELDS
+
+
 @pytest.mark.asyncio
 async def test_fallback_explanation_text_reflects_engine_eligible_outcome(
     app: FastAPI,
@@ -829,6 +834,294 @@ async def test_fallback_explanation_never_contains_raw_user_input(
         assert user_input not in explanation, (
             "Raw user_input must never appear in explanation. "
             "Explanation is built from engine output fields only."
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Section 8 — Rendering integration and audit replay (requires DB)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_assessment_response_has_non_null_assistant_rendering(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """assistant_rendering must be non-null when response_type is 'assessment'.
+
+    The orchestration always produces a rendering — either from NIM or the
+    deterministic DecisionRenderer fallback. A null rendering means the
+    rendering step was skipped or silently swallowed an error.
+    """
+    _install_complete_draft_override(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_full_context_request())
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        assert body["assistant_rendering"] is not None, (
+            "assistant_rendering must be non-null for assessment responses"
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+@pytest.mark.asyncio
+async def test_assistant_rendering_contains_exactly_declared_fields(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """assistant_rendering must contain exactly the fields in
+    ASSISTANT_RENDERING_FIELDS — no extra, no missing.
+
+    Any deviation is a schema regression or hallucination from the rendering layer.
+    """
+    _install_complete_draft_override(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_full_context_request())
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        rendering = body["assistant_rendering"]
+        assert rendering is not None
+        rendering_keys = set(rendering.keys())
+        missing = KNOWN_RENDERING_FIELDS - rendering_keys
+        extra = rendering_keys - KNOWN_RENDERING_FIELDS
+        assert missing == set(), (
+            f"assistant_rendering missing declared fields: {missing}"
+        )
+        assert extra == set(), (
+            f"assistant_rendering has undeclared fields (hallucination guard): {extra}"
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+@pytest.mark.asyncio
+async def test_assistant_rendering_headline_is_non_empty_string(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """assistant_rendering.headline must be a non-empty string.
+
+    An empty or missing headline means the trader UI has nothing to display
+    as the primary decision summary.
+    """
+    _install_complete_draft_override(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_full_context_request())
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        rendering = body["assistant_rendering"]
+        assert rendering is not None
+        assert isinstance(rendering["headline"], str), (
+            f"headline must be a string, got {type(rendering['headline']).__name__}"
+        )
+        assert len(rendering["headline"].strip()) > 0, (
+            "headline must be a non-empty string"
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+@pytest.mark.asyncio
+async def test_assistant_rendering_next_steps_has_at_least_two_items(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """assistant_rendering.next_steps must be a list with at least 2 items.
+
+    The trader UI always needs actionable guidance. A single step or empty
+    list is insufficient for a meaningful user experience.
+    """
+    _install_complete_draft_override(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_full_context_request())
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        rendering = body["assistant_rendering"]
+        assert rendering is not None
+        assert isinstance(rendering["next_steps"], list), (
+            f"next_steps must be a list, got {type(rendering['next_steps']).__name__}"
+        )
+        assert len(rendering["next_steps"]) >= 2, (
+            f"next_steps must have at least 2 items, got {len(rendering['next_steps'])}"
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+@pytest.mark.asyncio
+async def test_assistant_rendering_warnings_is_a_list(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """assistant_rendering.warnings must be a list (may be empty).
+
+    The trader UI renders warnings as an optional alert block. The field
+    must always be a list so the frontend can iterate without type-checking.
+    """
+    _install_complete_draft_override(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_full_context_request())
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        rendering = body["assistant_rendering"]
+        assert rendering is not None
+        assert isinstance(rendering["warnings"], list), (
+            f"warnings must be a list, got {type(rendering['warnings']).__name__}"
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+@pytest.mark.asyncio
+async def test_assistant_rendering_does_not_contain_engine_decision_field_names(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """assistant_rendering must not contain any engine decision field name as
+    a top-level key.
+
+    The rendering is a narrative layer. If engine decision keys (eligible,
+    pathway_used, rule_status, tariff_outcome, confidence_class) leak into
+    the rendering, the contract boundary between engine and narrative is broken.
+    """
+    _install_complete_draft_override(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_full_context_request())
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        rendering = body["assistant_rendering"]
+        assert rendering is not None
+        leaked = ENGINE_DECISION_FIELDS & set(rendering.keys())
+        assert leaked == set(), (
+            f"Engine decision fields leaked into assistant_rendering: {leaked}. "
+            "Rendering must not duplicate or override engine decision fields."
+        )
+    finally:
+        _remove_complete_draft_override(app)
+
+
+# ─── Rendering round-trip through audit replay ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rendering_round_trip_headline_consistent_with_audit_replay(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """A replayed evaluation must produce a rendering whose headline reflects
+    the same eligibility outcome as the original assistant_rendering.
+
+    Steps:
+    1. Submit an assessment and capture assistant_rendering + evaluation_id.
+    2. Fetch the audit trail via GET /api/v1/audit/evaluations/{evaluation_id}.
+    3. Build the engine payload from the audit trail's final_decision and
+       pathway data.
+    4. Pass the engine payload through DecisionRenderer.render() locally.
+    5. Assert headline consistency: both reflect the same eligibility outcome.
+    6. Assert gap_analysis consistency: both null, or both non-null.
+    """
+    from app.services.nim.decision_renderer import DecisionRenderer
+
+    _install_complete_draft_override(app)
+    try:
+        # Step 1: Submit assessment
+        assess_resp = await async_client.post(
+            ASSISTANT_URL, json=_full_context_request()
+        )
+        body = assess_resp.json()
+        assert body["response_type"] == "assessment"
+        original_rendering = body["assistant_rendering"]
+        assert original_rendering is not None
+        evaluation_id = body["evaluation_id"]
+        original_eligible = body["assessment"]["eligible"]
+
+        # Step 2: Fetch audit trail
+        audit_resp = await async_client.get(
+            AUDIT_URL.format(evaluation_id=evaluation_id)
+        )
+        assert audit_resp.status_code == 200, (
+            f"Audit trail not found for evaluation_id '{evaluation_id}'"
+        )
+        trail = audit_resp.json()
+
+        # Step 3: Build engine payload from audit trail
+        final_decision = trail["final_decision"]
+        pathway_evaluations = trail.get("pathway_evaluations", [])
+        pathway_analysis = [
+            {
+                "pathway_code": pe.get("pathway_code"),
+                "priority_rank": pe.get("priority_rank"),
+                "passed": pe.get("result"),
+                "reasons": [],
+            }
+            for pe in pathway_evaluations
+            if pe.get("pathway_code") is not None
+        ]
+        tariff_outcome = {}
+        if trail.get("tariff_outcome") is not None:
+            to = trail["tariff_outcome"]
+            tariff_outcome = {
+                "preferential_rate": to.get("preferential_rate"),
+                "base_rate": to.get("base_rate"),
+                "status": to.get("status", ""),
+            }
+        evidence_items = []
+        if trail.get("evidence_readiness") is not None:
+            evidence_items = trail["evidence_readiness"].get("required_items", [])
+
+        engine_payload = {
+            "decision": {
+                "eligible": final_decision["eligible"],
+                "pathway_used": final_decision.get("pathway_used"),
+                "rule_status": final_decision.get("rule_status", "agreed"),
+                "confidence_class": final_decision.get("confidence_class", "complete"),
+            },
+            "product": {"hs6_code": "110311"},
+            "pathway_analysis": pathway_analysis,
+            "missing_facts": final_decision.get("missing_facts", []),
+            "failures": final_decision.get("failure_codes", []),
+            "evidence_required": evidence_items,
+            "tariff_outcome": tariff_outcome,
+        }
+
+        # Step 4: Pass through DecisionRenderer.render() locally
+        renderer = DecisionRenderer()
+        replayed = renderer.render(engine_payload=engine_payload)
+
+        # Step 5: Headline consistency — both must reflect the same eligibility
+        # outcome. We do NOT assert exact text equality.
+        if original_eligible:
+            assert "does not qualify" not in replayed.headline.lower(), (
+                "Replayed headline claims ineligibility but original was eligible. "
+                f"Original headline: {original_rendering['headline']!r}, "
+                f"Replayed headline: {replayed.headline!r}"
+            )
+        else:
+            # Both should reflect non-qualification
+            assert "qualifies" not in replayed.headline.lower() or "does not" in replayed.headline.lower(), (
+                "Replayed headline claims qualification but original was ineligible. "
+                f"Original headline: {original_rendering['headline']!r}, "
+                f"Replayed headline: {replayed.headline!r}"
+            )
+
+        # Step 6: gap_analysis consistency — both null or both non-null
+        original_gap = original_rendering.get("gap_analysis")
+        replayed_gap = replayed.gap_analysis
+        both_null = original_gap is None and replayed_gap is None
+        both_present = original_gap is not None and replayed_gap is not None
+        assert both_null or both_present, (
+            f"gap_analysis inconsistency: original={original_gap!r}, "
+            f"replayed={replayed_gap!r}. "
+            "Both must be null or both must be non-null for the same pathway."
         )
     finally:
         _remove_complete_draft_override(app)

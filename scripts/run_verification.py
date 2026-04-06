@@ -380,6 +380,7 @@ def _load_results(
     requests: int,
     baseline_path: Path,
     max_p95_latency_s: float | None = None,
+    max_network_errors: int | None = None,
 ) -> list[CommandResult]:
     report_path = artifact_dir / f"{name}.json"
     load_result = _run_command(
@@ -421,6 +422,11 @@ def _load_results(
             *(
                 ["--max-p95-latency-s", str(max_p95_latency_s)]
                 if max_p95_latency_s is not None
+                else []
+            ),
+            *(
+                ["--max-network-errors", str(max_network_errors)]
+                if max_network_errors is not None
                 else []
             ),
         ],
@@ -517,6 +523,7 @@ def main() -> int:
                 junit_name="unit-tests.xml",
                 coverage_name="unit-coverage.xml",
                 coverage_data_name=".coverage.unit",
+                cov_fail_under=90,
             )
         )
 
@@ -529,6 +536,7 @@ def main() -> int:
                 junit_name="integration-tests.xml",
                 coverage_name="integration-coverage.xml",
                 coverage_data_name=".coverage.integration",
+                cov_fail_under=90,
             )
         )
 
@@ -541,7 +549,7 @@ def main() -> int:
                 junit_name="assistant-nim-tests.xml",
                 coverage_name="assistant-nim-coverage.xml",
                 coverage_data_name=".coverage.assistant",
-                cov_fail_under=0,
+                cov_fail_under=80,
             )
         )
 
@@ -568,6 +576,8 @@ def main() -> int:
                 concurrency=10,
                 requests=50,
                 baseline_path=DEFAULT_SMALL_LOAD_BASELINE,
+                max_p95_latency_s=0.5,
+                max_network_errors=0,
             )
         )
         results.extend(
@@ -579,6 +589,8 @@ def main() -> int:
                 concurrency=100,
                 requests=500,
                 baseline_path=DEFAULT_LARGE_LOAD_BASELINE,
+                max_p95_latency_s=2.5,
+                max_network_errors=0,
             )
         )
 

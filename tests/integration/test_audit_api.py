@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from httpx import AsyncClient
 
+from app.core.entity_keys import make_entity_key
 from app.core.enums import AuthorityTierEnum, InstrumentTypeEnum, SourceTypeEnum
 from app.db.base import get_async_session_factory
 from app.repositories.cases_repository import CasesRepository
@@ -1463,6 +1464,131 @@ async def test_corridor_snapshot_date_matches_assessment_evaluation_date(
     # A 404 here means no corridor profile exists for that date, which is a data gap —
     # not a code error. A 200 confirms the endpoint correctly accepts as_of_date.
     assert corridor_response.status_code in {200, 404}, corridor_response.text
+
+
+@pytest.mark.asyncio
+async def test_rules_lookup_as_of_date_matches_historical_audit_replay(
+    async_client: AsyncClient,
+) -> None:
+    """GET /rules must accept as_of_date and replay the same rule snapshot as the audit trail."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported candidate available for rules replay parity test.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+    year = 2025
+    assessment_date = f"{year}-01-01"
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code=candidate["hs6_code"],
+            exporter=candidate["exporter"],
+            importer=candidate["importer"],
+            facts=facts,
+            year=year,
+        ),
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    _, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    trail_body = trail_response.json()
+    assert trail_body["psr_rule"] is not None
+
+    rules_response = await async_client.get(
+        f"/api/v1/rules/{candidate['hs6_code']}",
+        params={"hs_version": "HS2017", "as_of_date": assessment_date},
+    )
+    assert rules_response.status_code == 200, rules_response.text
+    rules_body = rules_response.json()
+
+    assert rules_body["psr_id"] == trail_body["psr_rule"]["psr_id"]
+    assert rules_body["rule_status"] == trail_body["psr_rule"]["rule_status"]
+    assert rules_body["source_id"] == trail_body["psr_rule"]["source_id"]
+    assert rules_body["source_id"] in rules_body["provenance_ids"]
+
+
+@pytest.mark.asyncio
+async def test_evidence_readiness_assessment_date_matches_historical_audit_replay(
+    async_client: AsyncClient,
+) -> None:
+    """Standalone evidence readiness must match the persisted audit replay for the same snapshot date."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported candidate available for evidence replay parity test.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+    year = 2025
+    assessment_date = f"{year}-01-01"
+    existing_documents: list[str] = []
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json={
+            **_assessment_payload(
+                hs6_code=candidate["hs6_code"],
+                exporter=candidate["exporter"],
+                importer=candidate["importer"],
+                facts=facts,
+                year=year,
+            ),
+            "existing_documents": existing_documents,
+        },
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    _, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    trail_body = trail_response.json()
+    assert trail_body["evidence_readiness"] is not None
+    assert trail_body["psr_rule"] is not None
+
+    selected_pathway = next(
+        (
+            pathway
+            for pathway in trail_body["pathway_evaluations"]
+            if pathway.get("result") is True and pathway.get("pathway_id") is not None
+        ),
+        None,
+    )
+    if selected_pathway is not None:
+        entity_type = "pathway"
+        entity_key = make_entity_key(
+            "pathway",
+            pathway_id=selected_pathway["pathway_id"],
+        )
+    else:
+        entity_type = "hs6_rule"
+        entity_key = make_entity_key(
+            "hs6_rule",
+            psr_id=trail_body["psr_rule"]["psr_id"],
+        )
+
+    evidence_response = await async_client.post(
+        "/api/v1/evidence/readiness",
+        json={
+            "entity_type": entity_type,
+            "entity_key": entity_key,
+            "persona_mode": "exporter",
+            "assessment_date": assessment_date,
+            "existing_documents": existing_documents,
+        },
+    )
+    assert evidence_response.status_code == 200, evidence_response.text
+    assert evidence_response.json() == trail_body["evidence_readiness"]
 
 
 @pytest.mark.asyncio

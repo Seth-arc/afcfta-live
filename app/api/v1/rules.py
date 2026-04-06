@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_classification_service, get_rule_resolution_service
@@ -16,13 +18,21 @@ router = APIRouter()
 async def get_rules_for_hs6(
     hs6: str,
     hs_version: str = Query("HS2017"),
+    as_of_date: date | None = Query(
+        default=None,
+        description="Snapshot date (YYYY-MM-DD). Defaults to today.",
+    ),
     classification_service: ClassificationService = Depends(get_classification_service),
     rule_resolution_service: RuleResolutionService = Depends(get_rule_resolution_service),
 ) -> RuleLookupResponse:
     """Resolve the canonical HS6 product and return its governing PSR bundle."""
 
     product = await classification_service.resolve_hs6(hs6, hs_version)
-    rule_bundle = await rule_resolution_service.resolve_rule_bundle(hs_version, product.hs6_code)
+    rule_bundle = await rule_resolution_service.resolve_rule_bundle(
+        hs_version,
+        product.hs6_code,
+        assessment_date=as_of_date,
+    )
     return RuleLookupResponse(
         hs6_id=product.hs6_id,
         hs_version=product.hs_version,

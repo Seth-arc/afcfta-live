@@ -23,4 +23,5 @@ async def get_evidence_readiness(
         entity_key=payload.entity_key,
         persona_mode=payload.persona_mode,
         existing_documents=payload.existing_documents,
+        assessment_date=payload.assessment_date,
     )

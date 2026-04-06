@@ -17,6 +17,8 @@ export type ResponseType = "clarification" | "assessment" | "error";
 
 export type ConfidenceClass = "complete" | "provisional" | "incomplete";
 
+export type PersonaMode = "exporter" | "officer" | "analyst" | "system";
+
 // ---------------------------------------------------------------------------
 // Nested types
 // ---------------------------------------------------------------------------
@@ -94,7 +96,7 @@ export interface AssistantResponseEnvelope {
 // ---------------------------------------------------------------------------
 
 export interface AssistantContext {
-  persona_mode?: "exporter" | "verifier";
+  persona_mode?: PersonaMode;
   exporter?: string;
   importer?: string;
   year?: number;
@@ -120,7 +122,7 @@ export interface AssessmentRequest {
   exporter: string;
   importer: string;
   year: number;
-  persona_mode: "exporter" | "verifier";
+  persona_mode: PersonaMode;
   production_facts: ProductionFact[];
   existing_documents?: string[];
   case_id?: string;

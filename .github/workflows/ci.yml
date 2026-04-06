@@ -150,14 +150,10 @@ jobs:
         run: python scripts/seed_data.py
 
       - name: Run integration tests
-        # Gate temporarily at 75 while decision_renderer, counterfactual_engine,
-        # and rendering_service are pre-wiring (Prompts 3-5 will add integration
-        # coverage). Restore to 80 once rendering_service is wired into
-        # assistant orchestration.
         run: >
           python -m pytest tests/integration -v
           --junitxml=artifacts/integration-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml --cov-fail-under=75
+          --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml --cov-fail-under=90
 
       - name: Upload integration test report
         if: always()
@@ -219,9 +215,6 @@ jobs:
         run: python scripts/seed_data.py
 
       - name: Run assistant and NIM suites
-        # Include NIM unit tests so pre-wiring modules (decision_renderer,
-        # counterfactual_engine, rendering_service) contribute to coverage
-        # before Prompt 3-5 wire them into integration tests.
         run: >
           python -m pytest
           tests/integration/test_assistant_api.py
@@ -236,6 +229,7 @@ jobs:
           --cov=app.schemas.nim
           --cov-report=term-missing
           --cov-report=xml:artifacts/assistant-nim-coverage.xml
+          --cov-fail-under=80
 
       - name: Upload assistant/NIM test report
         if: always()
@@ -290,9 +284,10 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       UVICORN_WORKERS: "4"
       # Pool must accommodate 100 concurrent REPEATABLE READ sessions.
-      # Default (5+10=15) exhausts under 100c and causes p95 to balloon ~5×.
-      DB_POOL_SIZE: "8"
-      DB_POOL_MAX_OVERFLOW: "8"
+      # Four workers x (12 + 12) = 96 potential connections, which stays below
+      # the default Postgres service limit while giving each worker headroom.
+      DB_POOL_SIZE: "12"
+      DB_POOL_MAX_OVERFLOW: "12"
       CACHE_STATUS_LOOKUPS: "true"
     steps:
       - name: Check out repository
@@ -354,6 +349,8 @@ jobs:
           --report artifacts/load-report-ci.json
           --latency-tolerance-pct 25
           --min-success-rate 95
+          --max-p95-latency-s 0.5
+          --max-network-errors 0
 
       - name: Run 100-concurrency load test
         run: >
@@ -371,6 +368,15 @@ jobs:
           --report artifacts/load-report-100.json
           --latency-tolerance-pct 50
           --min-success-rate 95
+          --max-p95-latency-s 2.5
+          --max-network-errors 0
+
+      - name: Verify tracked files stayed clean
+        run: |
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            git status --short
+            exit 1
+          fi
 
       - name: Upload load test report
         if: always()

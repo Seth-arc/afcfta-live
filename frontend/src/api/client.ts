@@ -108,7 +108,7 @@ export async function postAssessment(
 }
 
 /**
- * POST /api/v1/assistant
+ * POST /api/v1/assistant/assess
  * Submits a natural-language query to the NIM assistant.
  */
 export async function postAssistantQuery(
@@ -138,9 +138,11 @@ export async function getAuditTrail(
 export async function getRules(
   hs6Code: string,
   hsVersion?: string,
+  asOfDate?: string,
 ): Promise<ApiResponse<unknown>> {
   const params = new URLSearchParams();
   if (hsVersion) params.set("hs_version", hsVersion);
+  if (asOfDate) params.set("as_of_date", asOfDate);
   const qs = params.toString();
   return request<unknown>("GET", `/api/v1/rules/${encodeURIComponent(hs6Code)}${qs ? `?${qs}` : ""}`);
 }

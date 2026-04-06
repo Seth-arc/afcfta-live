@@ -5,9 +5,6 @@ import path from "path";
 export default defineConfig({
   plugins: [react()],
   envDir: path.resolve(__dirname),
-  define: {
-    "import.meta.env.VITE_API_KEY": JSON.stringify("dev-local-key"),
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

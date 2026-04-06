@@ -739,6 +739,19 @@ def test_evidence_readiness_request_uses_existing_documents_vocabulary() -> None
     assert request.existing_documents == ["certificate_of_origin"]
 
 
+def test_evidence_readiness_request_accepts_as_of_date_alias() -> None:
+    """Evidence request schema should accept as_of_date as an input alias."""
+
+    request = EvidenceReadinessRequest(
+        entity_type="pathway",
+        entity_key="PATHWAY:pathway-123",
+        persona_mode="exporter",
+        as_of_date="2025-01-01",
+    )
+
+    assert request.assessment_date == date(2025, 1, 1)
+
+
 # ---------------------------------------------------------------------------
 # Property-based tests — readiness score invariants
 # ---------------------------------------------------------------------------

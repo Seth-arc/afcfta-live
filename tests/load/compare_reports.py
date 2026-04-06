@@ -62,6 +62,17 @@ def _success_rate(report: dict, label: str) -> float:
         sys.exit(2)
 
 
+def _network_errors(report: dict, label: str) -> int:
+    try:
+        return int(report["metrics"]["network_errors"])
+    except (KeyError, TypeError, ValueError) as exc:
+        print(
+            f"Error: metrics.network_errors missing in {label}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def _hr(char: str = "-", width: int = 52) -> str:
     return char * width
 
@@ -102,6 +113,13 @@ def main() -> int:
         dest="max_p95_latency_s",
         help="Optional absolute p95 latency ceiling in seconds",
     )
+    parser.add_argument(
+        "--max-network-errors",
+        type=int,
+        default=None,
+        dest="max_network_errors",
+        help="Optional absolute cap on network errors",
+    )
     args = parser.parse_args()
 
     baseline = _load(args.baseline)
@@ -111,6 +129,7 @@ def main() -> int:
     report_p95 = _p95(report, args.report)
     baseline_sr = _success_rate(baseline, args.baseline)
     report_sr = _success_rate(report, args.report)
+    report_network_errors = _network_errors(report, args.report)
 
     p95_ceiling = baseline_p95 * (1.0 + args.latency_tolerance_pct / 100.0)
     p95_delta_pct = (
@@ -122,7 +141,12 @@ def main() -> int:
     absolute_p95_ok = (
         True if args.max_p95_latency_s is None else report_p95 <= args.max_p95_latency_s
     )
-    passed = p95_ok and sr_ok and absolute_p95_ok
+    network_errors_ok = (
+        True
+        if args.max_network_errors is None
+        else report_network_errors <= args.max_network_errors
+    )
+    passed = p95_ok and sr_ok and absolute_p95_ok and network_errors_ok
 
     print()
     print("Load Baseline Comparison")
@@ -154,6 +178,13 @@ def main() -> int:
         f"  {'success rate (%)':<22} {baseline_sr:>10.2f} {report_sr:>10.2f}"
         f"   {'PASS' if sr_ok else 'FAIL'}  ({sr_note})"
     )
+
+    if args.max_network_errors is not None:
+        network_note = f"max {args.max_network_errors}"
+        print(
+            f"  {'network errors':<22} {'n/a':>10} {report_network_errors:>10}"
+            f"   {'PASS' if network_errors_ok else 'FAIL'}  ({network_note})"
+        )
 
     print()
     if passed:

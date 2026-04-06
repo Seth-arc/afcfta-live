@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -73,6 +74,10 @@ class EvidenceReadinessRequest(BaseModel):
     entity_type: str
     entity_key: str
     persona_mode: PersonaModeEnum
+    assessment_date: date | None = Field(
+        default=None,
+        validation_alias=AliasChoices("assessment_date", "as_of_date"),
+    )
     existing_documents: list[str] = Field(
         default_factory=list,
         validation_alias=DOCUMENT_INVENTORY_ALIAS,
@@ -87,6 +92,7 @@ class EvidenceReadinessRequest(BaseModel):
                     "entity_type": "hs6_rule",
                     "entity_key": "HS6_RULE:8c6a4b89-4d4e-4d5b-9eb4-4d1775edb3b0",
                     "persona_mode": "exporter",
+                    "assessment_date": "2025-01-01",
                     "existing_documents": ["certificate_of_origin"],
                 }
             ]

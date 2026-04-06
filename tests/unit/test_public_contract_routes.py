@@ -148,9 +148,16 @@ async def test_rules_route_resolves_product_and_returns_flat_rule_payload(
             return SimpleNamespace(hs6_id=uuid4(), hs_version="HS2017", hs6_code="110311")
 
     class FakeRuleResolutionService:
-        async def resolve_rule_bundle(self, hs_version: str, hs6_code: str) -> RuleResolutionResult:
+        async def resolve_rule_bundle(
+            self,
+            hs_version: str,
+            hs6_code: str,
+            *,
+            assessment_date: date | None = None,
+        ) -> RuleResolutionResult:
             assert hs_version == "HS2017"
             assert hs6_code == "110311"
+            assert assessment_date == date(2025, 1, 1)
             return bundle
 
     async def override_classification() -> FakeClassificationService:
@@ -163,7 +170,10 @@ async def test_rules_route_resolves_product_and_returns_flat_rule_payload(
     app.dependency_overrides[get_rule_resolution_service] = override_rules
 
     try:
-        response = await async_client.get("/api/v1/rules/11031100")
+        response = await async_client.get(
+            "/api/v1/rules/11031100",
+            params={"as_of_date": "2025-01-01"},
+        )
     finally:
         app.dependency_overrides.pop(get_classification_service, None)
         app.dependency_overrides.pop(get_rule_resolution_service, None)
@@ -200,6 +210,7 @@ async def test_tariff_and_evidence_routes_delegate_to_services(
             assert kwargs["entity_type"] == "hs6_rule"
             assert kwargs["entity_key"] == "HS6_RULE:test"
             assert kwargs["persona_mode"] == PersonaModeEnum.EXPORTER
+            assert kwargs["assessment_date"] == date(2025, 1, 1)
             return {
                 "required_items": ["certificate_of_origin"],
                 "missing_items": [],
@@ -228,6 +239,7 @@ async def test_tariff_and_evidence_routes_delegate_to_services(
                 "entity_type": "hs6_rule",
                 "entity_key": "HS6_RULE:test",
                 "persona_mode": "exporter",
+                "assessment_date": "2025-01-01",
                 "existing_documents": ["certificate_of_origin"],
             },
         )

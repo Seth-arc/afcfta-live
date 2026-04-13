@@ -275,6 +275,10 @@ What each stage protects:
 - `load-baseline` protects against performance regressions by running a small burst load test and comparing results against a committed baseline
 - `docker-build` protects the production container artifact by validating `docker build -t afcfta-intelligence:ci .`
 
+The `load-baseline` job installs the package non-editably with `python -m pip install ".[dev]"`.
+That job finishes by asserting the tracked worktree stayed clean, so it must not use an editable
+install that rewrites local `*.egg-info` metadata inside the repository checkout.
+
 CI artifact and report locations:
 
 - `artifacts/unit-tests.xml`

@@ -1,375 +1,239 @@
-# AfCFTA Intelligence System (AIS)
+# AGENTS.md — AfCFTA Live
 
-Deterministic RegTech decision-support engine for AfCFTA trade compliance.
-Version: v0.1 (Prototype)
-
-Read this file completely before writing any code. Then read the specific
-architecture doc referenced by the task you've been given.
+Custom instructions for Codex (and any coding agent) working in this repo.
+Read this file before touching code. It overrides general defaults.
 
 ---
 
-## What This System Is
+## 1. What This Repo Is
 
-A deterministic trade-compliance engine that answers five questions for any
-HS6 product across supported AfCFTA corridors:
+AfCFTA Live is a deterministic trade-eligibility engine with an additive NIM
+assistant overlay and a trader UI. Decisions are legal artifacts. They must
+replay identically months later, regardless of what changes in the underlying
+data.
 
-1. Qualification — can this product qualify under AfCFTA preferential treatment?
-2. Pathway — under which legal rule (WO, CTH, VNM, VA, PROCESS)?
-3. Tariff — what preferential and base rates apply?
-4. Evidence — what documentation is required to prove origin?
-5. Constraints — what legal or status limitations exist?
+Current build state (as of 2026-04-10):
 
-Every output is structured, auditable, and reproducible.
+- deterministic backend + NIM foundation: ~86%
+- deployment-ready: ~62%
+- world-class public trader product: ~48%
 
-## What This System Is NOT
-
-- Not probabilistic. No ML scoring. No confidence estimation.
-- Not RAG-only. The engine executes boolean expressions, not retrieval.
-- Not a search engine. Outputs are pass/fail with explicit failure codes.
-- Not inferential. Missing data produces explicit flags, never silent defaults.
+Every change must move one of those numbers up honestly, or explicitly mark a
+blocker. Do not invent closure.
 
 ---
 
-## Architecture Invariants
+## 2. Shell And Execution Boundary
 
-These rules are non-negotiable. If your code violates any of them, it is wrong
-regardless of whether it "works."
-
-### 1. HS6 is the canonical spine
-
-Every table in the system joins through `hs_version + hs6_id`. There is no
-join on raw HS text, product descriptions, or display names. The HS6 layer is
-the single stable spine for the entire system.
-
-### 2. Status is mandatory on every output
-
-Every API response that touches eligibility, rules, or tariffs must include
-`rule_status`, `tariff_status`, and `confidence_class`. The system never
-presents a provisional rule as settled law.
-
-### 3. PSR rules and general origin rules are separate engine layers
-
-Product-specific rules (Appendix IV: WO, CTH, VNM, VA, PROCESS) and general
-origin rules (cumulation, direct transport, insufficient operations) are
-evaluated independently and then combined. Never merge them into a single
-evaluation step. A product can pass PSR but fail general rules.
-
-### 4. Verbatim legal text is always preserved
-
-The parser layer normalizes rules into executable components but always retains
-the original legal text with full provenance. Nothing is paraphrased or inferred.
-
-### 5. No silent inference
-
-If a required fact is missing, flag it explicitly in missing_facts. Never
-assume a default value. Never infer a missing input. If ex_works is not
-provided, do not set vnom_percent to 0 — leave it absent and report it missing.
-
-### 6. No eval() or exec()
-
-The expression evaluator must use a safe parser with a whitelist of allowed
-operations. Never use Python's eval(), exec(), or compile() to execute
-boolean expressions from the database.
+- **You create and edit files. The human runs commands.**
+- Do not execute `pytest`, `docker`, `npm`, migrations, load harnesses, or any
+  deployment action unless the prompt explicitly says to.
+- When a change needs verification, emit the exact commands the human should
+  run and what "pass" looks like. Do not claim a test passed if you did not run
+  it.
+- Never fabricate artifact paths, gate results, SHAs, or dataset manifests.
 
 ---
 
-## Tech Stack
+## 3. Non-Negotiable Invariants
 
-- Python 3.11+
-- FastAPI
-- PostgreSQL 15+ with uuid-ossp and pg_trgm extensions
-- SQLAlchemy 2.0 (async, using asyncpg)
-- Pydantic v2
-- Alembic for migrations. Alembic revision IDs must be under 32 characters. Use short names like 0009_eval_audit, not 0009_create_evaluation_audit_layer.
-- pytest + pytest-asyncio for testing
+These are failure-closed rules. A change that violates any of them must be
+rejected or converted into an explicit, documented blocker.
+
+1. **Deterministic ownership stays in the engine.** NIM and UI may explain,
+   clarify, render, or proxy. They never decide. No probabilistic eligibility.
+   No confidence guessing. No silent inference.
+2. **Replay safety at write time, not replay time.** New evaluations must
+   persist immutable rule/tariff/provision snapshots in the same atomic write
+   as the decision snapshot. If you cannot freeze the snapshot, do not persist
+   the evaluation.
+3. **No browser-visible backend secrets.** `API_AUTH_KEY`, `NIM_API_KEY`, and
+   any equivalent reusable credential must never appear in the Vite bundle,
+   browser devtools, or browser network traffic. `VITE_API_KEY` is being
+   removed; do not reintroduce it.
+4. **Two API families, kept distinct:**
+   - `/api/v1/` — machine and operator clients. API-key protected.
+   - `/web/api/` — browser clients. Session / BFF boundary. No shared secret.
+   Never collapse, cross-wire, or re-expose these.
+5. **Blocker semantics are sacred.** Do not weaken blocker logic, audit
+   requirements, or replay guarantees to make a gate easier to pass.
+6. **No geography expansion.** v0.1 countries and corridors are locked. Do not
+   widen scope without an explicit prompt.
+7. **Fail-closed gates.** Missing artifact, stale artifact, unverifiable
+   runbook step → fail. Never pass a gate on historical evidence.
+8. **Legacy rows are labeled, not upgraded.** Pre-freeze evaluations replay via
+   documented live-fallback and must be clearly marked as such. Do not
+   retroactively mint `snapshot_frozen` for them.
 
 ---
 
-## Code Organization
-
-Follow docs/FastAPI_layout.md exactly. The layering is strict:
+## 4. Repo Layout You Should Know
 
 ```
 app/
-├── api/v1/           → Thin route handlers ONLY (validate → call service → return)
-├── services/         → ALL business logic lives here
-├── repositories/     → Data access ONLY (SQL queries, no business logic)
-├── db/models/        → SQLAlchemy ORM models (must match DDL exactly)
-├── schemas/          → Pydantic request/response models
-└── core/             → Enums, exceptions, reference data (mostly locked files)
+  api/v1/            # machine/operator routes (API-key)
+  api/web/           # browser routes (session/BFF)
+  services/          # eligibility_service, audit_service, nim orchestration
+  repositories/      # evaluations, sources, provisions, tariffs
+  schemas/           # pydantic contracts (audit.py, assessment.py, ...)
+  config.py          # all new config surfaces land here
+frontend/
+  src/api/client.ts  # browser API client — no shared secret
+tests/
+  unit/
+  integration/
+  load/              # 10c and 100c harnesses
+docs/
+  dev/
+    production_runbook.md
+    rollback_runbook.md
+    testing.md
+    parser_promotion_workflow.md
+    prompts/         # progress + gap-closure handbooks (source of truth)
+  api/
+  FastAPI_layout.md
+.github/workflows/ci.yml
+docker-compose.prod.yml
+.env.example
 ```
 
-Rules:
-- Route handlers must be thin. If a handler has more than ~10 lines of logic,
-  extract to a service.
-- Services call repositories, never the database session directly.
-- Repositories return ORM objects or row mappings. Services transform to Pydantic.
-- All enums must match docs/Concrete_Contract.md Section 1.2 exactly.
-- All table and column names must match docs/Concrete_Contract.md exactly.
-- Use UUID primary keys everywhere.
-- Use timestamptz for all timestamps.
+Read the relevant files before editing. Do not guess at shapes.
 
 ---
 
-## Deterministic Engine Execution Order
+## 5. Change Hygiene
 
-The eligibility service orchestrates this sequence. The order is strict and
-must not be rearranged.
+Every behavior-changing PR must land **code + tests + docs together**. A change
+is not done until all three are aligned.
 
-```
-1. Resolve HS6              → classification_service
-2. Fetch PSR(s)             → rule_resolution_service (via hs6_psr_applicability)
-3. Expand pathways (AND/OR) → rule_resolution_service
-4. Run blocker checks       → eligibility_service (BEFORE pathway evaluation)
-5. Evaluate expressions     → expression_evaluator
-6. Apply general rules      → general_origin_rules_service (SEPARATE layer)
-7. Apply status constraints → status_service
-8. Compute tariff           → tariff_resolution_service
-9. Generate evidence reqs   → evidence_service
-```
+- **Code:** minimal diff to the cited files. Do not drive-by refactor.
+- **Tests:** the narrowest test that would fail without the fix. Prefer pinning
+  the exact contract (schema field present, snapshot frozen, secret absent)
+  over broad behavioral tests.
+- **Docs:** if you change a config, route, header, artifact name, or operator
+  workflow, update `.env.example`, `app/config.py`, the relevant runbook, and
+  any doc that references the old shape. Stale docs are a gate failure.
 
-### Blocker Checks (Step 4 — run BEFORE pathway evaluation)
-
-Hard blockers halt the assessment immediately. Pathway evaluation is skipped.
-
-1. Is rule_status pending or partially_agreed? → BLOCKER
-2. Is tariff_schedule_line missing for this corridor? → BLOCKER
-3. Are core facts missing for ALL pathways? → BLOCKER
-4. Is the corridor status not_yet_operational? → BLOCKER
-
-Non-blocking issues (provisional schedule, provisional rule) reduce
-confidence_class but do not prevent evaluation.
-
-### Pathway Logic
-
-- `OR` at the pathway level = alternative eligibility routes (first pass wins)
-- `AND` within a pathway = all conditions must be met
-- Pathways are tried in priority_rank order
-
-### Derived Variables (computed at evaluation time, never stored)
-
-```
-vnom_percent = non_originating / ex_works * 100
-va_percent   = (ex_works - non_originating) / ex_works * 100
-```
-
-Both require ex_works > 0. Division by zero is an error, not a silent default.
+When adding a new config surface, update all four in the same change:
+`app/config.py`, `.env.example`, the runbook, and CI/verification docs.
 
 ---
 
-## Transaction Isolation
+## 6. Provenance And Audit Rules
 
-Assessment requests must use REPEATABLE READ isolation level so that PSR,
-tariff, status, and evidence are all resolved against the same database
-snapshot within a single assessment.
+When touching `eligibility_service`, `audit_service`, `evaluations_repository`,
+or `schemas/audit.py`:
 
-Persisted evaluations (writing eligibility_evaluation + eligibility_check_result
-rows) must be atomic — all rows committed together or none.
-
----
-
-## Data Layers
-
-| Layer | Key Tables | Purpose |
-|-------|------------|---------|
-| L1 Backbone | hs6_product, hs_code_alias, hs_version_crosswalk | Canonical product spine |
-| L2 Rules | psr_rule, psr_rule_component, eligibility_rule_pathway, hs6_psr_applicability | Appendix IV normalized rules |
-| L3 Tariffs | tariff_schedule_header, tariff_schedule_line, tariff_schedule_rate_by_year | Schedule rates by corridor and year |
-| L4 Status | status_assertion, transition_clause | Pending/provisional/agreed tracking |
-| L5 Evidence | evidence_requirement, verification_question, document_readiness_template | Documentation requirements |
-| L6 Decision | case_file, case_input_fact, case_failure_mode, case_counterfactual, eligibility_evaluation, eligibility_check_result | Case assessment and audit |
-| L7 Intelligence | corridor_profile, alert_event | Corridor risk and alerting |
-| Provenance | source_registry, legal_provision | Audit trail to source documents |
-
-All operational joins resolve through `hs_version + hs6_id`. PSR lookup goes
-through the hs6_psr_applicability materialized table, not live inheritance.
+- Persist provenance **inline with the evaluation write**, atomically.
+- Rule snapshots must include: `source_id`, `short_title`, `version_label`,
+  `publication_date`, `effective_date`, `page_ref`, `table_ref`, `row_ref`,
+  `captured_at`, `supporting_provisions`.
+- Tariff snapshots must include: `schedule_source_id`, `rate_source_id`,
+  `short_title`, `version_label`, `publication_date`, `effective_date`,
+  `line_page_ref`, `rate_page_ref`, `table_ref`, `row_ref`, `captured_at`,
+  `supporting_provisions`.
+- Supporting provisions: max 5 per source, deterministically ordered, thin
+  fields only (`provision_id`, `source_id`, `article_label`, `clause_label`,
+  `topic_primary`, `text_excerpt`). No full bodies. No unbounded lists. No
+  binaries.
+- Replay must read from the persisted snapshot for frozen evaluations and from
+  live sources only for explicitly labeled legacy rows.
 
 ---
 
-## v0.1 Scope (Locked)
+## 7. NIM Assistant Rules
 
-### Countries
-Nigeria (NGA), Ghana (GHA), Côte d'Ivoire (CIV), Senegal (SEN), Cameroon (CMR)
-
-No other countries. If a request uses a country not in this list, return
-CorridorNotSupportedError.
-
-### Product Resolution
-HS6 only. HS8/10 codes are stored but not used in computation. If an HS8/10
-code is provided, truncate to 6 digits for lookup.
-
-### Capabilities In Scope
-Rule lookup, tariff lookup, eligibility engine, evidence readiness,
-status-aware outputs.
-
-### Not In Scope
-HS8/10 computation, ML/probabilistic scoring, auto HS classification,
-full Africa coverage, real-time legal update feeds, any frontend/UI.
-
-### Success Criteria
-Evaluate 5+ HS6 products end-to-end across 2+ corridors (GHA→NGA, CMR→NGA),
-producing eligibility decisions, tariff outcomes, failure reasoning, and
-evidence checklists — including graceful handling of missing facts, ambiguous
-rules, and status variability.
+- Contracts are in `app/api/v1/assistant.py` and `app/schemas/`. Respect them.
+- `user_input` is capped at 2000 characters. Do not raise silently.
+- NIM is additive. It never writes deterministic decision fields.
+- Failures must route through the circuit breaker / degraded path. Log
+  breaker state, retry count, timeout, and fallback reason with safe
+  cardinality metrics.
+- Never let a NIM outage block or corrupt a deterministic assessment.
 
 ---
 
-## API Output Contract
+## 8. Frontend Rules
 
-Every assessment response must include ALL of these fields:
-
-```json
-{
-  "hs6_code": "110311",
-  "eligible": true,
-  "pathway_used": "CTH",
-  "rule_status": "agreed",
-  "tariff_outcome": {
-    "preferential_rate": 0,
-    "base_rate": 15,
-    "status": "provisional"
-  },
-  "failures": [],
-  "missing_facts": [],
-  "evidence_required": ["certificate_of_origin"],
-  "confidence_class": "complete"
-}
-```
-
-confidence_class values:
-- "complete" — status is agreed, all required data present
-- "provisional" — status is provisional or pending
-- "incomplete" — data gaps exist
+- Vanilla-preserving: follow the existing stack. Do not introduce new
+  frameworks, CSS preprocessors, or build tools.
+- All browser API calls go through `/web/api/` via the session-aware client.
+- No `import.meta.env.VITE_API_KEY`. No backend secrets in bundle.
+- Every new UI state needs explicit error, empty, retry, and degraded-mode
+  rendering. Trust cues (citations, provenance, replay linkage) must be
+  visible on any decision surface.
+- Accessibility and mobile are gate items, not polish.
 
 ---
 
-## Source Authority Tiers
+## 9. Performance And SLOs
 
-Higher tiers override lower tiers in all conflict resolution.
-
-| Tier | Source | Role |
-|------|--------|------|
-| 1 | Agreement + Appendix IV | Binding legal authority |
-| 2 | Tariff schedules, circulars | Operational reference |
-| 3 | Manuals, guides | Interpretive support |
-| 4 | Corridor data, trade baselines | Analytic enrichment |
+- 10c and 100c gates are the committed bars. Do not silently relax them.
+- Hot-path changes must be justified by a fresh measurement, not intuition.
+- Worker, Redis, and pool sizing live in `app/config.py` and the production
+  runbook. Keep them in sync.
 
 ---
 
-## Key Reference Files
+## 10. Observability
 
-Read these when the task requires them. Do not guess — look up the spec.
+New failure modes must be observable. When adding behavior that can fail,
+emit:
 
-| File | When to read it |
-|------|-----------------|
-| docs/Concrete_Contract.md | Creating any table, enum, column, or constraint |
-| docs/afcfta_corpus_parsing_agent_spec.md | Creating or verifying the canonical hs6_product backbone table and related corpus-derived schema details |
-| docs/Join_Strategy.md | Writing any SQL query or repository method |
-| docs/FastAPI_layout.md | Creating any route, schema, service, or repository |
-| docs/v1_scope.md | Checking what is in or out of scope |
-| docs/PRD.md | Understanding user personas or capability requirements |
-| docs/expression_grammar.md | Implementing the expression evaluator |
-| app/core/countries.py | Valid country codes and corridors for v0.1 |
-| app/core/fact_keys.py | Valid production fact types and which rules need them |
-| app/core/entity_keys.py | Entity key patterns for polymorphic lookups |
-| app/core/failure_codes.py | Canonical failure codes for the eligibility engine |
-| tests/fixtures/golden_cases.py | Expected inputs and outputs for acceptance tests |
+- a structured log with `request_id`
+- a Prometheus counter or histogram with bounded labels
+- a runbook entry describing what operators do when it fires
+
+Specifically track: replay freeze failures, legacy-fallback usage, NIM
+degraded mode, browser auth/session failures, persistence failures, pool
+pressure.
 
 ---
 
-## Locked Files — Do Not Modify
+## 11. How To Respond To A Prompt From The Handbook
 
-These files contain hand-written reference data. Do not rename, restructure,
-reformat, "improve," or add to them unless explicitly asked:
+The `docs/dev/prompts/` handbooks are the canonical task queue. When handed a
+numbered prompt:
 
-- app/core/countries.py
-- app/core/fact_keys.py
-- app/core/entity_keys.py
-- app/core/failure_codes.py
-- tests/fixtures/golden_cases.py
-- docs/expression_grammar.md
-- Everything in docs/ (read-only architecture specifications)
-
----
-
-## Testing
-
-- Unit tests in tests/unit/, integration tests in tests/integration/
-- Use golden test cases from tests/fixtures/golden_cases.py as acceptance criteria
-- For services: mock the repository layer, test business logic
-- For repositories: use test database (afcfta_test), test actual SQL
-- Every test for a failing case must assert specific failure_codes from
-  app/core/failure_codes.py — not just "eligible == false"
-- Mark integration tests requiring database with @pytest.mark.integration
+1. Read every file the prompt cites before editing anything.
+2. Work only in the files the prompt names first, unless a dependency forces a
+   wider change — in which case flag it.
+3. Produce code + tests + docs in the same change.
+4. Return a summary citing: exact files changed, exact tests added, exact
+   verification commands for the human to run, and any honest blocker you
+   hit.
+5. Do not mark the prompt done. The human marks status in the Prompt Status
+   table after running the gate.
 
 ---
 
-## Build Order
+## 12. What Not To Do
 
-Build in dependency order. Do not skip ahead.
-
-1. hs_repository + classification_service
-2. rules_repository + rule_resolution_service
-3. tariffs_repository + tariff_resolution_service
-4. cases_repository
-5. expression_evaluator
-6. general_origin_rules_service
-7. evidence_service
-8. eligibility_service (orchestrator — calls all of the above)
-9. Assessment endpoint
-10. Audit endpoint
-
----
-
-## NIM Security Constraints
-
-### Prompt-Injection Mitigation
-
-NIM receives raw user text.  Malicious input may attempt to override system
-instructions, exfiltrate engine internals, or inject fabricated eligibility
-outcomes into the model's completion.
-
-Mandatory mitigations:
-
-1. **Input length cap** — `AssistantRequest.user_input` is validated at
-   `max_length=2000` characters before the request reaches NIM.  Inputs
-   exceeding this limit are rejected with HTTP 422 before any model call.
-   Never raise this limit without a reviewed security justification.
-
-2. **Engine fields are immutable after the engine runs** — NIM output is
-   additive only.  The `explanation` field may provide plain-language context
-   but must never alter or contradict any of the following fields produced
-   by the deterministic engine:
-   `eligible`, `pathway_used`, `rule_status`, `tariff_outcome`,
-   `confidence_class`, `failures`, `missing_facts`.
-   These fields are written once by the engine and passed through to the
-   response envelope unchanged.
-
-3. **NIM never sets `audit_persisted`** — Only the persistence layer writes
-   `audit_persisted: true` after confirming the database commit.  NIM must
-   never claim audit compliance.
-
-4. **No raw NIM output in decision fields** — Any field that affects a
-   downstream eligibility decision (corridor, HS6 code, declared facts) must
-   come from structured Pydantic-validated input, not from free-form model
-   text.  Parse NIM completions through the intake service schema; never
-   `eval()` or `json.loads()` them directly into engine input.
-
-5. **Log input length, not content** — When `NIM_LOG_IO=true`, log only
-   `user_input_char_count` (integer).  Never log the raw `user_input` string
-   in production; it may contain PII or injected payloads.
+- Do not call a private-beta access pattern "public-user auth".
+- Do not hide stale artifacts under a new folder name and call them
+  current-head evidence.
+- Do not mint `snapshot_frozen = true` on legacy rows to pass a gate.
+- Do not introduce probabilistic scoring or confidence heuristics anywhere in
+  the decision path.
+- Do not expand geography, HS chapter coverage, or corridor set without an
+  explicit prompt.
+- Do not collapse `deployment_ready` and `public_launch_ready` into a single
+  verdict.
+- Do not edit the handbooks in `docs/dev/prompts/` as part of closure work —
+  they are the spec, not the output.
 
 ---
 
-## Shell Command Restrictions
+## 13. Definition Of Done
 
-Do NOT run these commands — I will run them myself in my local environment:
+A task is done only when all of these are true:
 
-- pip install (or any package installation)
-- alembic upgrade/revision (or any migration commands)
-- pytest (or any test execution)
-- uvicorn (or any server startup)
-- docker commands
-- createdb / psql / any database commands
+1. The named gap is closed in code, or converted into an explicit documented
+   blocker with verified gate state.
+2. The narrowest useful tests pin the behavior and would fail without the fix.
+3. Operator and public docs reflect the new runtime truth.
+4. The change summary cites exact files, exact tests, and exact verification
+   evidence the human can reproduce.
 
-Only create and edit files. I handle all execution.
+If any of those four are missing, the task is not done — regardless of how
+clean the diff looks.

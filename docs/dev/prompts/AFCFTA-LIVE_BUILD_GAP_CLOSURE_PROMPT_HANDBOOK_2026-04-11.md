@@ -1245,6 +1245,359 @@ Return summary:
 
 ---
 
+# Prompt 15 — Final Launch Audit: Dead Code, Security, Data, Deployment, Hygiene
+
+> Style and execution rules match `AGENTS.md` and the earlier prompt handbooks.
+> The agent edits files. The human runs commands. Nothing is marked passing
+> unless the evidence is real. Fail closed on missing or stale evidence.
+
+---
+
+## Prompt 15 — Final launch audit
+
+```text
+Read:
+- AGENTS.md
+- docs/dev/prompts/AFCFTA-LIVE_BUILD_PROGRESS_HANDBOOK_2026-04-10.md
+- docs/dev/prompts/AFCFTA-LIVE_BUILD_GAP_CLOSURE_PROMPT_HANDBOOK_2026-04-11.md
+- docs/dev/production_runbook.md
+- docs/dev/rollback_runbook.md
+- docs/dev/testing.md
+- app/config.py
+- app/api/v1/
+- app/api/web/
+- app/services/
+- app/repositories/
+- app/schemas/
+- app/middleware/
+- frontend/src/
+- frontend/package.json
+- frontend/vite.config.*
+- .env.example
+- docker-compose.prod.yml
+- Dockerfile
+- .github/workflows/ci.yml
+- alembic/ or migrations/
+
+Problem:
+Prompts 1 through 14 closed the functional launch gates. This prompt closes the
+hygiene and attack-surface gates the build-progress handbook does not
+explicitly enumerate. It targets the two classes of defect most likely to ship
+from an AI-assisted codebase:
+
+1. dead or hallucinated code — unused symbols, orphan modules, suggested
+   packages that do not exist ("slopsquatting"), commented-out blocks, stale
+   helpers left behind by earlier prompts.
+2. the AI-code anti-pattern top 10 — slopsquatting, XSS, hardcoded secrets,
+   SQL injection, auth failures, missing input validation, command injection,
+   missing rate limiting, excessive data exposure, unrestricted file upload.
+
+Treat this as an audit, not a rewrite. Produce a structured report first.
+Propose fixes second. Only land fixes the human approves, in the order the
+human approves them.
+
+Work in these files first (audit output):
+- docs/dev/launch_audit_{SHA}.md           (new — the audit report)
+- docs/dev/launch_audit_findings.json      (new — machine-readable findings)
+
+Fixes, when approved, land in the cited application files above. Do not make
+drive-by edits during the audit pass.
+
+---
+
+Scope of the audit:
+
+A. Dead code and dependency hygiene
+1. Run (or emit commands for the human to run):
+   - `ruff check --select F,E,W,I,UP,B,SIM,ARG,ERA --output-format=json .`
+   - `ruff check --select F401,F841 .`  (unused imports, unused locals)
+   - `vulture app/ tests/ --min-confidence 80`
+   - `pip-audit --strict`  (dependency CVEs)
+   - `pip install pip-check-reqs && pip-missing-reqs app/ && pip-extra-reqs app/`
+   - For the frontend: `npm audit --audit-level=high` and
+     `npx depcheck` inside `frontend/`.
+2. Verify every import in `requirements*.txt`, `pyproject.toml`, and
+   `frontend/package.json` actually resolves to a real package on PyPI / npm
+   with a non-suspicious maintainer history. Flag any package that:
+   - was added in the last 90 days by an unknown publisher
+   - has fewer than 100 weekly downloads and is not a first-party package
+   - has a name one edit-distance away from a well-known package
+   This is the slopsquatting check. Do not fix silently; list findings.
+3. Identify and list (do not delete yet):
+   - unused functions, classes, constants, and private helpers
+   - orphan modules with no importers
+   - commented-out code blocks older than two commits
+   - TODO/FIXME/XXX comments without an owner or ticket
+   - dead config keys in `app/config.py` / `.env.example`
+   - unused routes, unused pydantic schemas, unused repository methods
+
+B. Security audit (backend)
+For every route in `app/api/v1/` and `app/api/web/`, verify in writing:
+1. Authentication: the route is protected by the correct boundary.
+   - `/api/v1/*` → API-key dependency present.
+   - `/web/api/*` → session/BFF dependency present.
+   - An endpoint intentionally public must be listed explicitly in the report.
+2. Authorization: the route checks the actor has rights to the resource,
+   not just that they are authenticated. Flag every route that authenticates
+   but does not authorize. (Excessive Data Exposure — anti-pattern #9.)
+3. Input validation: every request body, query param, and path param is
+   typed through a pydantic model or explicit validator. No `dict`, no
+   `Any`, no raw `request.json()` bypass. (Anti-pattern #6.)
+4. Output shape: responses use explicit response models. No route returns
+   an ORM object directly. No route leaks fields the DTO does not declare.
+   (Anti-pattern #9.)
+5. SQL: every query goes through SQLAlchemy parameter binding or an
+   equivalent parameterized layer. Grep for `f"SELECT`, `f"INSERT`,
+   `.format(` near query builders, and raw `text(` usage without
+   `bindparams`. (Anti-pattern #4.)
+6. Command execution: grep for `subprocess`, `os.system`, `os.popen`,
+   `shell=True`, `eval`, `exec`, `pickle.loads`. Every hit must be
+   justified in the report. (Anti-pattern #7.)
+7. File upload: list every upload endpoint. For each, verify:
+   - content-type allow-list (not deny-list)
+   - size cap enforced before disk write
+   - filename sanitized, no path traversal possible
+   - files written outside any executable path
+   - server does not trust client-supplied content-type
+   (Anti-pattern #10.)
+8. Rate limiting: every authentication, assistant, assessment, upload, and
+   mutating endpoint has an explicit limiter. List endpoints that do not.
+   (Anti-pattern #8.)
+9. Secrets: grep the entire repo and the Vite build output for:
+   - `API_AUTH_KEY`, `NIM_API_KEY`, `SECRET_KEY`, `DATABASE_URL`
+   - Bearer tokens, AWS keys, private keys, `.pem` / `.key` contents
+   - `VITE_API_KEY` (must be zero hits post-Prompt 3)
+   Include a check against the built frontend bundle, not just source.
+   (Anti-pattern #3.)
+10. Auth hygiene:
+    - passwords (if any are stored) hashed with argon2 or bcrypt, never
+      MD5/SHA1/SHA256 alone, never plaintext.
+    - tokens have an explicit expiry and the expiry is enforced server-side.
+    - logout invalidates the session server-side; do not rely on the client
+      deleting a cookie.
+    - no route trusts a client-supplied identity claim without server
+      verification. (Anti-pattern #5.)
+
+C. Security audit (frontend)
+1. XSS: no `dangerouslySetInnerHTML`, `innerHTML =`, `outerHTML =`,
+   `document.write`, or untrusted string interpolation into DOM. If the
+   framework is vanilla JS, every text insertion uses `textContent` or an
+   escape helper. (Anti-pattern #2.)
+2. Source maps disabled in production builds, or scoped so they do not ship
+   to public browsers.
+3. No secrets in `import.meta.env.*` that are exposed to the client bundle.
+   Only values safe for public broadcast live under `VITE_*`.
+4. CSP header present and documented. Strict enough to block inline scripts
+   not emitted by the build.
+5. `npm audit --audit-level=high` is clean or every remaining finding has a
+   justification line.
+
+D. Transport and perimeter
+1. HTTPS is enforced. HTTP redirects to HTTPS at the proxy layer.
+2. HSTS header is set with a sane max-age. Documented in the runbook.
+3. CORS is locked to explicit origins. No `*`. No reflecting `Origin` back
+   into `Access-Control-Allow-Origin`. Browser routes and machine routes
+   have separate CORS policies if their audiences differ.
+4. Firewall posture: only 80/443 public. Everything else (DB, Redis,
+   metrics, admin) is private or behind a bastion. Record actual posture
+   in the report — do not assume.
+5. Reverse proxy headers are terminated correctly: `X-Forwarded-For`,
+   `X-Forwarded-Proto`, `Host` are trusted only from the known proxy.
+
+E. Database and data hygiene
+1. Backups: confirm a scheduled backup exists and confirm a test restore
+   has been performed. A backup that has never been restored is not a
+   backup. Record the last verified restore timestamp.
+2. Parameterized queries: see §B.5. Expand the grep across migrations and
+   one-off scripts.
+3. Environment separation: dev, staging, and production databases are
+   distinct hosts/instances. Production credentials are not reachable from
+   dev.
+4. Connection pool: size documented in `app/config.py` and the production
+   runbook, and the two agree.
+5. Migrations: every schema change is an Alembic (or equivalent) revision
+   in version control. No ad-hoc SQL applied by hand. Migration history
+   is linear or the branches are explained.
+6. DB user: the application connects as a non-superuser role with the
+   minimum grants it needs. Superuser is used only for migrations and is
+   not the runtime credential.
+7. PII and excessive exposure: list every table column that contains user
+   identifiers or sensitive fields, and confirm no route returns them
+   unless explicitly required. (Anti-pattern #9.)
+
+F. Deployment readiness
+1. Every environment variable in `.env.example` is set in the production
+   environment. No silent defaults carry over. List any variable where the
+   production value is unknown to the audit.
+2. SSL certificate is valid, auto-renewed, and has more than 30 days of
+   life remaining at gate time. Record expiry date.
+3. Process manager: the service runs under systemd (or equivalent) with
+   restart-on-failure and resource limits. For Python, gunicorn/uvicorn
+   worker count matches the runbook.
+4. Rollback plan: Prompt 13's rollback runbook exists and has been walked
+   through on the current SHA. Record the walkthrough result.
+5. Staging: the current SHA was deployed to staging and the smoke suite
+   passed before the production deploy. Record the staging result.
+
+G. Code hygiene
+1. No `console.log`, `console.debug`, or `console.error` survives in the
+   production frontend bundle except intentional telemetry.
+2. No `print(` debug statements in the backend hot path. Structured
+   logging only.
+3. Every `async` call has either an `await` and an error boundary or is
+   explicitly fire-and-forget with a documented reason.
+4. Every frontend view with network I/O has explicit loading, error,
+   empty, and retry states. (Re-verifies Prompt 12.)
+5. Every list endpoint supports pagination. No unbounded list response.
+   List every endpoint that violates this. (Anti-pattern #9 reinforcement.)
+6. Every external call has a timeout. No default-infinity HTTP client.
+7. All try/except blocks log with enough context to triage. No bare
+   `except:`. No silently swallowed exceptions.
+
+---
+
+Audit report format:
+
+Produce `docs/dev/launch_audit_{SHA}.md` with these sections in this order:
+
+1. Header
+   - git SHA
+   - audit timestamp
+   - commands the human actually ran (the agent records, the human runs)
+2. Dead code and dependency hygiene — findings table
+3. Backend security — per-route table (method, path, auth, authz, input
+   model, response model, rate limit, notes)
+4. Frontend security — findings
+5. Transport and perimeter — findings
+6. Database and data hygiene — findings, including last verified restore
+7. Deployment readiness — findings, including cert expiry
+8. Code hygiene — findings
+9. Slopsquatting check — suspicious packages, with verdict per package
+10. Summary verdict
+    - total findings by severity (critical, high, medium, low, info)
+    - deployment_ready_audit: pass | fail
+    - public_launch_ready_audit: pass | fail
+    - top 10 fixes in order of priority
+
+Severity rules:
+- critical: a secret is exposed, a route is unauthenticated, a query is
+  string-concatenated, a package is hallucinated, an upload endpoint is
+  unrestricted, or rollback does not work. Any critical finding blocks the
+  launch gate.
+- high: missing rate limiting on sensitive endpoints, missing authorization,
+  excessive data exposure, no restore test, CORS wildcard.
+- medium: dead code, missing pagination, missing loading states, weak logging.
+- low / info: style, minor ruff findings, documentation drift.
+
+---
+
+Fix policy:
+
+1. Do not batch fixes with the audit. Land the audit report first.
+2. After the human reviews, open one focused change per critical/high
+   finding. Medium findings may be grouped by theme (e.g., "remove dead
+   code in app/services/").
+3. Every fix lands with a test that would have caught the finding.
+4. Every fix updates the audit report to strike the finding and link the
+   commit that closed it.
+5. No fix silently rewrites unrelated code.
+
+---
+
+Tests / validation to add during fix passes:
+
+1. A contract test that enumerates every route and asserts it has an auth
+   dependency (or is on the explicit public allow-list).
+2. A contract test that asserts no route returns a raw ORM model.
+3. A grep-based test in CI that fails the build if any of these appear
+   outside an allow-listed file:
+   - `shell=True`
+   - `eval(`, `exec(`, `pickle.loads(`
+   - f-string SQL near `execute(`
+   - `dangerouslySetInnerHTML`, `innerHTML =`
+   - `VITE_API_KEY`
+4. A CI step that runs `ruff`, `vulture --min-confidence 80`, `pip-audit`,
+   and `npm audit --audit-level=high` and fails on regressions.
+5. A CI step that builds the frontend and greps the built bundle for any
+   backend secret name. Fail on hit.
+
+---
+
+User-run verification:
+
+1. `ruff check .` — no new findings.
+2. `vulture app/ tests/ --min-confidence 80` — no new findings.
+3. `pip-audit --strict` — clean or justified.
+4. `cd frontend && npm audit --audit-level=high` — clean or justified.
+5. `cd frontend && npm run build && grep -RniE "API_AUTH_KEY|NIM_API_KEY|VITE_API_KEY|SECRET_KEY" dist/` — zero hits.
+6. Route inventory test passes.
+7. Rollback drill on the audited SHA succeeds.
+8. Restore-from-backup drill on a non-production copy succeeds and the
+   timestamp is recorded in the report.
+
+---
+
+Stop conditions (fail closed):
+
+- Any `critical` finding unresolved.
+- Any hallucinated or slopsquat-suspect package unresolved.
+- Any route missing auth that is not on the explicit public allow-list.
+- Any backend secret present in the built frontend bundle.
+- Any list endpoint without pagination that returns user-scoped or
+  assessment-scoped data.
+- Missing or stale restore test.
+- Missing or stale rollback drill.
+
+If any stop condition is true, set `deployment_ready_audit = false` and
+explain in one explicit blocker field. Do not soften the language.
+
+---
+
+Non-goals:
+
+- Do not reformat the codebase to pass style checks. Style fixes are out of
+  scope unless they hide a real finding.
+- Do not introduce new dependencies during the audit.
+- Do not rewrite the engine, NIM orchestration, or provenance persistence.
+  Those are governed by Prompts 1–6.
+- Do not edit the prompt handbooks in `docs/dev/prompts/`.
+
+---
+
+Return summary:
+
+- audit report path and SHA
+- total findings by severity
+- top 10 fixes in priority order
+- deployment_ready_audit verdict
+- public_launch_ready_audit verdict
+- exact remaining blockers, if any
+```
+
+---
+
+## Why this prompt is shaped this way
+
+- **Audit first, fix second.** AI agents tend to "helpfully" refactor during
+  audits, which hides the real findings. The prompt forces a report artifact
+  before any edit.
+- **Route inventory is a table, not prose.** The most common auth mistake is
+  a route that looks fine in isolation but is missing a dependency. Listing
+  every route with its auth/authz/input/output/rate-limit in one table makes
+  the gaps visible.
+- **Slopsquatting is a first-class check.** The 5–21% hallucinated-package
+  rate in the image you shared is why `pip-audit` and the maintainer/age
+  heuristic are explicit, not implied.
+- **The frontend bundle grep is the real secret test.** Source-code greps
+  miss build-time interpolation. Grepping `dist/` after `npm run build`
+  catches what source grep misses.
+- **Fail-closed stop conditions** match the AGENTS.md rule that missing or
+  stale evidence fails the gate. No soft language.
+- **Stack-adapted.** Your checklist had PM2 and bcrypt; I mapped those to
+  systemd/gunicorn and argon2/bcrypt for the FastAPI path, and kept npm audit
+  for the Vite frontend.
+---
+
 ## Recommended Execution Order
 
 ### Group 1 - Replay-safe legal core

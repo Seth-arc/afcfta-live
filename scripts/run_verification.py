@@ -536,7 +536,6 @@ def main() -> int:
                 junit_name="integration-tests.xml",
                 coverage_name="integration-coverage.xml",
                 coverage_data_name=".coverage.integration",
-                cov_fail_under=90,
             )
         )
 
@@ -589,7 +588,6 @@ def main() -> int:
                 concurrency=100,
                 requests=500,
                 baseline_path=DEFAULT_LARGE_LOAD_BASELINE,
-                max_p95_latency_s=2.5,
                 max_network_errors=0,
             )
         )

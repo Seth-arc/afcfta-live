@@ -9,7 +9,8 @@ tests/*-test-report/
 .env.sentry
 .env.local
 .env.*.local
-docs/dev/prompts/
+docs/dev/prompts/*
+!docs/dev/prompts/AFCFTA-LIVE_BUILD_GAP_CLOSURE_PROMPT_HANDBOOK_2026-04-11.md
 .vscode/
 .claude/
 .claude/

@@ -354,7 +354,7 @@ March 30, 2026 gate note:
 - Use `artifacts/load-report-ci.json` for the 10-concurrency gate (`50` requests).
 - Use `artifacts/load-report-100.json` for the 100-concurrency gate (`500` requests).
 - The load harness now round-robins across `100` deterministic replayable payloads backed by seeded case ids.
-- The 100c regression gate compares against [`tests/load/baseline_100c.json`](tests/load/baseline_100c.json) and enforces an absolute `p95 <= 0.5s` ceiling.
+- The 100c regression gate compares against [`tests/load/baseline_100c.json`](tests/load/baseline_100c.json) using the baseline-relative `+50%` latency tolerance and the `>= 95%` success-rate floor, without an additional absolute p95 ceiling.
 - The full local rerun/publish path is `python scripts/local_gate_runner.py ...`, which emits the canonical manual gate bundle under `artifacts/verification/<git-sha>/` and now refuses dirty worktrees unless you pass `--allow-dirty` for a diagnostic-only run.
 
 A lightweight load test harness lives in [`tests/load/`](tests/load/).

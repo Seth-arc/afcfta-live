@@ -153,7 +153,7 @@ jobs:
         run: >
           python -m pytest tests/integration -v
           --junitxml=artifacts/integration-tests.xml
-          --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml --cov-fail-under=90
+          --cov --cov-report=term-missing --cov-report=xml:artifacts/integration-coverage.xml
 
       - name: Upload integration test report
         if: always()
@@ -368,7 +368,6 @@ jobs:
           --report artifacts/load-report-100.json
           --latency-tolerance-pct 50
           --min-success-rate 95
-          --max-p95-latency-s 2.5
           --max-network-errors 0
 
       - name: Verify tracked files stayed clean

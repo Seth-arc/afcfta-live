@@ -915,6 +915,7 @@ async def test_get_decision_trace_fetches_live_provenance_when_snapshot_missing(
 
     assert result.final_decision.provenance is not None
     assert result.final_decision.provenance.rule is not None
+    assert result.replay_mode == "legacy_live_fallback"
     assert result.final_decision.provenance.rule.short_title == "Appendix IV"
     assert result.final_decision.provenance.rule.supporting_provisions[0].article_label == "Art. 6"
     assert result.final_decision.provenance.rule.supporting_provisions[0].clause_label == "Annex 2"
@@ -1054,7 +1055,22 @@ async def test_get_decision_trace_rehydrates_summary_checks_from_decision_snapsh
                             "base_rate": "15.0000",
                             "schedule_status": "in_force",
                             "schedule_source_id": source_id,
-                        }
+                            "rate_source_id": source_id,
+                        },
+                        "provenance_snapshot": {
+                            "schedule_source_id": source_id,
+                            "rate_source_id": source_id,
+                            "short_title": "Nigeria Schedule",
+                            "version_label": "2025.01",
+                            "publication_date": "2025-01-01",
+                            "effective_date": "2025-01-01",
+                            "line_page_ref": 1,
+                            "rate_page_ref": 1,
+                            "table_ref": "T1",
+                            "row_ref": "110311",
+                            "captured_at": "2025-01-01T00:00:00+00:00",
+                            "supporting_provisions": [],
+                        },
                     },
                 },
                 "evidence_check": {
@@ -1114,6 +1130,7 @@ async def test_get_decision_trace_rehydrates_summary_checks_from_decision_snapsh
     assert result.hs6_resolved.hs6_code == "110311"
     assert result.pathway_evaluations[0].pathway_code == "CTH"
     assert result.pathway_evaluations[0].checks == []
+    assert result.replay_mode == "snapshot_frozen"
     assert result.final_decision.provenance is not None
     assert result.final_decision.provenance.rule is not None
     assert result.final_decision.provenance.rule.short_title == "Appendix IV"

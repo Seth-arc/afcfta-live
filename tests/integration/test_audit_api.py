@@ -93,6 +93,7 @@ def _assert_audit_trail_contract(body: dict[str, object]) -> None:
     """Assert the replay payload matches the current audit contract exactly."""
 
     assert set(body) == {
+        "replay_mode",
         "evaluation",
         "case",
         "original_input_facts",
@@ -106,6 +107,7 @@ def _assert_audit_trail_contract(body: dict[str, object]) -> None:
         "atomic_checks",
         "final_decision",
     }
+    assert body["replay_mode"] in {"snapshot_frozen", "legacy_live_fallback"}
     evaluation = body["evaluation"]
     assert isinstance(evaluation, dict)
     assert set(evaluation) == {
@@ -426,6 +428,7 @@ async def test_create_case_with_assess_true_auto_persists_and_returns_replay_ids
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
     _assert_audit_trail_contract(latest_body)
+    assert latest_body["replay_mode"] == "snapshot_frozen"
     assert latest_body["evaluation"]["evaluation_id"] == body["evaluation_id"]
 
 
@@ -598,6 +601,7 @@ async def test_get_evaluation_audit_trail_returns_full_persisted_trace(
     assert trail_response.status_code == 200, trail_response.text
     trail_body = trail_response.json()
     _assert_audit_trail_contract(trail_body)
+    assert trail_body["replay_mode"] == "snapshot_frozen"
 
     assert trail_body["evaluation"]["evaluation_id"] == evaluation_id
     assert trail_body["evaluation"]["case_id"] == case_id
@@ -707,6 +711,7 @@ async def test_direct_assessment_without_case_id_auto_persists_and_returns_repla
     assert trail_response.status_code == 200, trail_response.text
     trail_body = trail_response.json()
     _assert_audit_trail_contract(trail_body)
+    assert trail_body["replay_mode"] == "snapshot_frozen"
 
     assert trail_body["evaluation"]["evaluation_id"] == evaluation_id
     assert trail_body["evaluation"]["case_id"] == case_id
@@ -748,6 +753,7 @@ async def test_failed_direct_assessment_without_case_id_auto_persists_and_return
     assert latest_response.status_code == 200, latest_response.text
     latest_body = latest_response.json()
     _assert_audit_trail_contract(latest_body)
+    assert latest_body["replay_mode"] == "snapshot_frozen"
 
     assert latest_body["evaluation"]["evaluation_id"] == evaluation_id
     assert latest_body["evaluation"]["case_id"] == case_id
@@ -862,6 +868,7 @@ async def test_get_latest_case_audit_trail_returns_newest_persisted_evaluation(
     assert response.status_code == 200, response.text
     body = response.json()
     _assert_audit_trail_contract(body)
+    assert body["replay_mode"] == "legacy_live_fallback"
 
     assert body["evaluation"]["evaluation_id"] == str(newer["evaluation"]["evaluation_id"])
     assert body["evaluation"]["evaluation_id"] != str(older["evaluation"]["evaluation_id"])
@@ -939,10 +946,10 @@ async def test_special_cth_facts_round_trip_through_assessment_and_audit_replay(
 
 
 @pytest.mark.asyncio
-async def test_case_assessment_endpoint_matches_direct_assessment_response(
+async def test_case_assessment_entry_points_share_snapshot_frozen_replay_contract(
     async_client: AsyncClient,
 ) -> None:
-    """Canonical and legacy case assessment routes must match the direct assessment body."""
+    """Direct and case-backed assessment routes must return the same replay contract semantics."""
 
     candidate = _require_candidate(
         await _select_supported_candidate(
@@ -1016,6 +1023,98 @@ async def test_case_assessment_endpoint_matches_direct_assessment_response(
     assert {direct_evaluation_id, case_evaluation_id, legacy_evaluation_id}.issubset(
         {item["evaluation_id"] for item in history_body}
     )
+
+    for evaluation_id in (
+        direct_evaluation_id,
+        case_evaluation_id,
+        legacy_evaluation_id,
+    ):
+        trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+        assert trail_response.status_code == 200, trail_response.text
+        trail_body = trail_response.json()
+        _assert_audit_trail_contract(trail_body)
+        assert trail_body["replay_mode"] == "snapshot_frozen"
+
+
+@pytest.mark.asyncio
+async def test_seeded_legacy_evaluation_without_snapshots_is_labeled_live_fallback(
+    async_client: AsyncClient,
+) -> None:
+    """Legacy rows without persisted provenance snapshots must stay explicitly non-frozen."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported candidate available for seeded legacy replay-mode coverage.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+    case_id = await _create_case_with_facts(
+        hs6_code=candidate["hs6_code"],
+        exporter=candidate["exporter"],
+        importer=candidate["importer"],
+        facts=facts,
+    )
+
+    seeded_response = await async_client.post(
+        "/api/v1/assessments",
+        json={
+            **_assessment_payload(
+                hs6_code=candidate["hs6_code"],
+                exporter=candidate["exporter"],
+                importer=candidate["importer"],
+                facts=facts,
+            ),
+            "case_id": case_id,
+        },
+    )
+    assert seeded_response.status_code == 200, seeded_response.text
+    _, seeded_evaluation_id = _assert_assessment_replay_headers(
+        seeded_response,
+        expected_case_id=case_id,
+    )
+
+    seeded_trail_response = await async_client.get(
+        f"/api/v1/audit/evaluations/{seeded_evaluation_id}"
+    )
+    assert seeded_trail_response.status_code == 200, seeded_trail_response.text
+    seeded_trail = seeded_trail_response.json()
+    assert seeded_trail["replay_mode"] == "snapshot_frozen"
+
+    legacy_checks = json.loads(json.dumps(seeded_trail["atomic_checks"]))
+    for check in legacy_checks:
+        details = check.get("details_json")
+        if isinstance(details, dict):
+            details.pop("provenance_snapshot", None)
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        evaluations_repository = EvaluationsRepository(session)
+        legacy = await evaluations_repository.persist_evaluation(
+            _evaluation_payload(
+                case_id=case_id,
+                evaluation_date=date(2025, 1, 1),
+                overall_outcome=seeded_trail["evaluation"]["overall_outcome"],
+                pathway_used=seeded_trail["evaluation"]["pathway_used"],
+                confidence_class=seeded_trail["evaluation"]["confidence_class"],
+                rule_status_at_evaluation=seeded_trail["evaluation"]["rule_status_at_evaluation"],
+                tariff_status_at_evaluation=seeded_trail["evaluation"]["tariff_status_at_evaluation"],
+            ),
+            legacy_checks,
+        )
+        await session.commit()
+
+    legacy_evaluation_id = str(legacy["evaluation"]["evaluation_id"])
+    legacy_response = await async_client.get(f"/api/v1/audit/evaluations/{legacy_evaluation_id}")
+    assert legacy_response.status_code == 200, legacy_response.text
+    legacy_body = legacy_response.json()
+    _assert_audit_trail_contract(legacy_body)
+
+    assert legacy_body["replay_mode"] == "legacy_live_fallback"
+    assert legacy_body["final_decision"]["provenance"] is not None
+    assert legacy_body["final_decision"]["provenance"]["rule"] is not None
 
 
 @pytest.mark.asyncio

@@ -408,6 +408,7 @@ async def test_latest_case_audit_route_delegates_to_audit_service(
     case_id = str(uuid4())
     evaluation_id = str(uuid4())
     audit_trail = {
+        "replay_mode": "snapshot_frozen",
         "evaluation": {
             "evaluation_id": evaluation_id,
             "case_id": case_id,

@@ -134,7 +134,7 @@ A prompt is complete only when all of the following are true:
 | Prompt | Status | Completed |
 |---|---|---|
 | 1 | [ ] Completed | - |
-| 2 | [ ] Pending | - |
+| 2 | [ ] Completed | - |
 | 3 | [ ] Pending | - |
 | 4 | [ ] Pending | - |
 | 5 | [ ] Pending | - |
@@ -324,7 +324,7 @@ Return summary:
 - interface paths proven to match
 - tests added
 ```
-
+Completed 14 April
 ---
 
 ## Prompt 3 - Introduce a browser-safe trader boundary and remove browser-visible backend secrets

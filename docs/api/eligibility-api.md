@@ -67,7 +67,7 @@ Both assessment endpoints return the same JSON response body, plus these respons
 - `X-AIS-Evaluation-Id`: newly persisted evaluation identifier.
 - `X-AIS-Audit-URL`: relative audit replay URL for the returned evaluation.
 
-Direct `POST /api/v1/assessments` calls never return an unreplayable legal decision. If the caller omits `case_id`, AIS auto-creates a submitted case, persists the evaluation and atomic checks against it, and returns the generated identifiers in these headers.
+Direct `POST /api/v1/assessments` calls never return an unreplayable legal decision. If the caller omits `case_id`, AIS auto-creates a submitted case, persists the evaluation and atomic checks against it, and returns the generated identifiers in these headers. The linked audit replay exposes `replay_mode` so callers can distinguish `snapshot_frozen` evaluations from legacy `legacy_live_fallback` rows.
 
 ### `production_facts[]` Fields
 

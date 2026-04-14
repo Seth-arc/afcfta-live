@@ -474,6 +474,7 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
 
 ```json
 {
+  "replay_mode": "snapshot_frozen",
   "evaluation": {
     "evaluation_id": "4c651cd2-8f0f-4c16-9f37-8dfceef41f26",
     "case_id": "29dc2946-6ef0-46a0-b3eb-0f6a64e40db7",
@@ -614,14 +615,15 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
 }
 ```
 
-For new evaluations, the rule and tariff provenance shown in `final_decision.provenance`
-is frozen at persistence time and replayed from the stored snapshot rather than
-reconstructed from mutable live source rows.
+`replay_mode` is the machine-readable replay guarantee:
+
+- `snapshot_frozen`: the evaluation was persisted with the replay-safe snapshot payload and replay is reconstructed from frozen provenance snapshots.
+- `legacy_live_fallback`: the evaluation does not meet the frozen snapshot contract. Replay may use live source or provision lookups and must not be treated as frozen provenance.
 
 This audit replay contract is frozen in integration coverage at:
 
-- [tests/integration/test_audit_api.py](tests/integration/test_audit_api.py#L27)
-- [tests/integration/test_audit_api.py](tests/integration/test_audit_api.py#L132)
+- [tests/integration/test_audit_api.py](../../tests/integration/test_audit_api.py)
+- [tests/integration/test_assistant_api.py](../../tests/integration/test_assistant_api.py)
 
 ## GET /api/v1/audit/cases/{case_id}/evaluations
 

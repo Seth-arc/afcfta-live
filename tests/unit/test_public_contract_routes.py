@@ -26,6 +26,7 @@ from app.schemas.tariffs import TariffResolutionResult
 
 def _audit_trail(case_id: str, evaluation_id: str) -> dict[str, object]:
     return {
+        "replay_mode": "snapshot_frozen",
         "evaluation": {
             "evaluation_id": evaluation_id,
             "case_id": case_id,

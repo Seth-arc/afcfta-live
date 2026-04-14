@@ -335,7 +335,11 @@ curl -H "X-API-Key: <your-api-key>" \
 ```
 
 Expected: HTTP 200. The response body must contain `final_decision.eligible`,
-`final_decision.provenance`, and `final_decision.provenance.rule.source_id`.
+`replay_mode = snapshot_frozen`, `final_decision.provenance`, and
+`final_decision.provenance.rule.source_id`.
+
+If you intentionally replay a legacy seeded row without frozen provenance snapshots,
+the response must instead show `replay_mode = legacy_live_fallback`.
 
 If this returns 404, evaluation persistence is not working.
 
@@ -367,7 +371,7 @@ Expected: the first 10 return 200 (or 422 for incomplete facts), the 11th return
 [ ] POST /assessments (CTH-pass facts)         → 200, eligible=true
 [ ] Response headers: X-AIS-Case-Id present    → yes
 [ ] Response headers: X-AIS-Evaluation-Id      → yes
-[ ] GET /audit/evaluations/{id}                → 200, final_decision.provenance present
+[ ] GET /audit/evaluations/{id}                → 200, replay_mode=snapshot_frozen
 [ ] 11th rapid assessment                      → 429
 ```
 

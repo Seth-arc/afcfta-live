@@ -554,6 +554,32 @@ async def test_assistant_happy_path_sets_replay_response_headers(
         _remove_intake_override(app)
 
 
+@pytest.mark.asyncio
+async def test_assistant_happy_path_replays_as_snapshot_frozen(
+    app: FastAPI,
+    async_client: AsyncClient,
+) -> None:
+    """Assistant-triggered assessments must replay under the same frozen contract as direct routes."""
+
+    _override_intake_with_complete_draft(app)
+    try:
+        response = await async_client.post(ASSISTANT_URL, json=_request_with_context())
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["response_type"] == "assessment"
+
+        audit_response = await async_client.get(body["audit_url"])
+        assert audit_response.status_code == 200, audit_response.text
+        trail = audit_response.json()
+
+        assert trail["evaluation"]["evaluation_id"] == body["evaluation_id"]
+        assert trail["evaluation"]["case_id"] == body["case_id"]
+        assert trail["replay_mode"] == "snapshot_frozen"
+    finally:
+        _remove_intake_override(app)
+
+
 # ---------------------------------------------------------------------------
 # Deterministic field invariant: explanation must not alter assessment
 # ---------------------------------------------------------------------------

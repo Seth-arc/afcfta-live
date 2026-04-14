@@ -290,9 +290,14 @@ Those files are uploaded as workflow artifacts so later coverage or image-valida
 CI assumptions:
 
 - jobs run on `ubuntu-latest`
-- integration tests can reach PostgreSQL on `localhost:5432`
+- integration tests derive their local PostgreSQL DSN from `LOCAL_DB_*` and default to `localhost:5432` with `afcfta / afcfta_dev`
 - the integration job installs `psycopg2-binary` because `scripts/seed_data.py` uses the sync SQLAlchemy engine path
 - no repository secrets are required for the current CI stages
+
+For local reruns, keep `LOCAL_DB_*` in `.env` aligned with your Docker volume.
+If you change `LOCAL_DB_PASSWORD` after Postgres has already initialized its
+data directory, recreate the local DB volume or rotate the password inside the
+database before rerunning migrations or integration tests.
 
 ## Load Baseline
 

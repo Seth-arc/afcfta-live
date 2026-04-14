@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 import app.db.models  # noqa: F401
 from app.db.base import Base
+from app.local_db import build_local_database_urls
 
 load_dotenv()
 
@@ -37,6 +38,11 @@ def _resolve_database_url() -> str:
 
     if async_url:
         return async_url
+
+    environment = os.getenv("ENV", "development")
+    if environment in {"development", "test", "ci"}:
+        derived_async_url, _ = build_local_database_urls(os.environ)
+        return derived_async_url
 
     msg = "DATABASE_URL or DATABASE_URL_SYNC must be set for Alembic."
     raise RuntimeError(msg)

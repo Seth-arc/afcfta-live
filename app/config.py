@@ -7,18 +7,33 @@ from functools import lru_cache
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.local_db import (
+    DEFAULT_LOCAL_DB_HOST,
+    DEFAULT_LOCAL_DB_NAME,
+    DEFAULT_LOCAL_DB_PASSWORD,
+    DEFAULT_LOCAL_DB_PORT,
+    DEFAULT_LOCAL_DB_USER,
+    build_local_database_urls,
+)
+
 
 class Settings(BaseSettings):
     """Runtime settings for the AfCFTA Intelligence API.
 
-    Required settings have no default and must be supplied through the process
-    environment or a local `.env` file. All other settings default to
-    development-safe values and can be overridden per environment.
+    Production-critical settings must be supplied through the process
+    environment or a local `.env` / `.env.prod` file. Local development and
+    test environments may derive DATABASE_URL and DATABASE_URL_SYNC from the
+    shared LOCAL_DB_* contract below.
     """
 
     # Database
-    DATABASE_URL: str
+    DATABASE_URL: str = ""
     DATABASE_URL_SYNC: str | None = None
+    LOCAL_DB_HOST: str = DEFAULT_LOCAL_DB_HOST
+    LOCAL_DB_PORT: int = DEFAULT_LOCAL_DB_PORT
+    LOCAL_DB_NAME: str = DEFAULT_LOCAL_DB_NAME
+    LOCAL_DB_USER: str = DEFAULT_LOCAL_DB_USER
+    LOCAL_DB_PASSWORD: str = DEFAULT_LOCAL_DB_PASSWORD
     DB_CONNECT_TIMEOUT_SECONDS: float = 10.0
     DB_COMMAND_TIMEOUT_SECONDS: float = 15.0
     DB_POOL_TIMEOUT_SECONDS: float = 30.0
@@ -105,9 +120,31 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_local_database_urls(cls, data: object) -> object:
+        """Allow local development/test environments to derive URLs from one contract."""
+
+        if not isinstance(data, dict):
+            return data
+
+        values = dict(data)
+        environment = str(values.get("ENV") or "development")
+        if values.get("DATABASE_URL") or environment not in {"development", "test", "ci"}:
+            return values
+
+        async_url, sync_url = build_local_database_urls(values)
+        values["DATABASE_URL"] = async_url
+        if not values.get("DATABASE_URL_SYNC"):
+            values["DATABASE_URL_SYNC"] = sync_url
+        return values
+
     @model_validator(mode="after")
     def _nim_enabled_requires_companions(self) -> "Settings":
         """When NIM_ENABLED=true, NIM_BASE_URL, NIM_API_KEY, and NIM_MODEL must be non-empty."""
+        if not self.DATABASE_URL:
+            raise ValueError("DATABASE_URL must be set.")
+
         if not self.NIM_ENABLED:
             pass
         else:

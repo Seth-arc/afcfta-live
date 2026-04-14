@@ -16,6 +16,9 @@ from app.db.models.sources import LegalProvision, SourceRegistry
 class SourcesRepository:
     """Repository for provenance-layer CRUD and topic lookup."""
 
+    MAX_AUDIT_PROVISIONS_PER_SOURCE = 5
+    MAX_PROVISION_TEXT_EXCERPT_CHARS = 280
+
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
@@ -197,11 +200,10 @@ class SourcesRepository:
     ) -> list[Mapping[str, Any]]:
         """Return thin provision summaries for one source, ordered by authority weight.
 
-        Projects the compact audit-trail fields plus ``source_id`` so callers can
-        verify that the returned provision still belongs to the requested source.
-        Full text is excluded to keep audit responses compact. Callers follow
-        ``provision_id`` to ``GET /api/v1/provisions/{provision_id}`` for the
-        verbatim text.
+        Projects only the bounded audit-trail fields plus ``source_id`` so callers
+        can verify that the returned provision still belongs to the requested
+        source. ``include_text`` is retained for compatibility but the method
+        always returns a thin ``text_excerpt`` instead of full provision bodies.
         """
 
         settings = get_settings()
@@ -215,34 +217,34 @@ class SourcesRepository:
         selected_columns = [
             provision_table.c.provision_id,
             provision_table.c.source_id,
-            provision_table.c.instrument_name,
             provision_table.c.article_ref,
             provision_table.c.annex_ref,
+            provision_table.c.appendix_ref,
+            provision_table.c.section_ref,
+            provision_table.c.subsection_ref,
             provision_table.c.topic_primary,
-            provision_table.c.page_start,
-            provision_table.c.page_end,
+            provision_table.c.provision_text_verbatim,
+            provision_table.c.authority_weight,
         ]
-        if include_text:
-            selected_columns.extend(
-                [
-                    provision_table.c.provision_text_verbatim,
-                    provision_table.c.provision_text_normalized,
-                    provision_table.c.effective_date,
-                    provision_table.c.expiry_date,
-                    provision_table.c.status,
-                ]
-            )
         statement = (
             select(*selected_columns)
             .where(provision_table.c.source_id == source_id)
             .order_by(
                 provision_table.c.authority_weight.desc(),
-                provision_table.c.created_at.asc(),
+                provision_table.c.article_ref.asc().nulls_last(),
+                provision_table.c.subsection_ref.asc().nulls_last(),
+                provision_table.c.section_ref.asc().nulls_last(),
+                provision_table.c.annex_ref.asc().nulls_last(),
+                provision_table.c.appendix_ref.asc().nulls_last(),
+                provision_table.c.provision_id.asc(),
             )
-            .limit(limit)
+            .limit(min(limit, self.MAX_AUDIT_PROVISIONS_PER_SOURCE))
         )
         result = await self.session.execute(statement)
-        rows = [dict(row) for row in result.mappings().all()]
+        rows = [
+            self._compact_provision_summary(dict(row))
+            for row in result.mappings().all()
+        ]
         if settings.CACHE_STATIC_LOOKUPS:
             cache.put(cache.provenance_store, cache_key, rows, settings.CACHE_TTL_SECONDS)
         return rows
@@ -253,7 +255,7 @@ class SourcesRepository:
         *,
         provision_limit: int = 5,
     ) -> Mapping[str, Any] | None:
-        """Return one source row plus provision snapshots suitable for audit persistence."""
+        """Return thin source metadata plus bounded provision snapshots for audit persistence."""
 
         settings = get_settings()
         cache_key = ("source_snapshot", source_id, provision_limit)
@@ -269,16 +271,52 @@ class SourcesRepository:
             return None
 
         snapshot = {
-            "source": dict(source),
+            "source": {
+                "source_id": source.get("source_id"),
+                "short_title": source.get("short_title"),
+                "version_label": source.get("version_label"),
+                "publication_date": source.get("publication_date"),
+                "effective_date": source.get("effective_date"),
+            },
             "supporting_provisions": await self.get_provisions_for_source(
                 source_id,
-                limit=provision_limit,
-                include_text=True,
+                limit=min(provision_limit, self.MAX_AUDIT_PROVISIONS_PER_SOURCE),
             ),
         }
         if settings.CACHE_STATIC_LOOKUPS:
             cache.put(cache.provenance_store, cache_key, snapshot, settings.CACHE_TTL_SECONDS)
         return snapshot
+
+    @classmethod
+    def _compact_provision_summary(cls, row: Mapping[str, Any]) -> dict[str, Any]:
+        """Normalize one legal provision row into the bounded audit snapshot shape."""
+
+        clause_label = (
+            row.get("subsection_ref")
+            or row.get("section_ref")
+            or row.get("annex_ref")
+            or row.get("appendix_ref")
+        )
+        text_excerpt = cls._truncate_text_excerpt(row.get("provision_text_verbatim"))
+        return {
+            "provision_id": row.get("provision_id"),
+            "source_id": row.get("source_id"),
+            "article_label": row.get("article_ref"),
+            "clause_label": clause_label,
+            "topic_primary": row.get("topic_primary"),
+            "text_excerpt": text_excerpt,
+        }
+
+    @classmethod
+    def _truncate_text_excerpt(cls, value: Any) -> str | None:
+        """Trim one provision text field to the deterministic audit excerpt budget."""
+
+        if value is None:
+            return None
+        text = str(value).strip()
+        if len(text) <= cls.MAX_PROVISION_TEXT_EXCERPT_CHARS:
+            return text
+        return text[: cls.MAX_PROVISION_TEXT_EXCERPT_CHARS - 3].rstrip() + "..."
 
     async def lookup_by_topic(self, topic: str, limit: int = 10) -> list[Mapping[str, Any]]:
         provision_table = LegalProvision.__table__

@@ -133,7 +133,7 @@ A prompt is complete only when all of the following are true:
 
 | Prompt | Status | Completed |
 |---|---|---|
-| 1 | [ ] Pending | - |
+| 1 | [ ] Completed | - |
 | 2 | [ ] Pending | - |
 | 3 | [ ] Pending | - |
 | 4 | [ ] Pending | - |
@@ -247,7 +247,7 @@ Return summary:
 - what fails closed when replay safety cannot be guaranteed
 - tests added
 ```
-
+Completed 13 April 2026
 ---
 
 ## Prompt 2 - Distinguish frozen replay from legacy fallback and lock replay parity
@@ -1574,28 +1574,6 @@ Return summary:
 - exact remaining blockers, if any
 ```
 
----
-
-## Why this prompt is shaped this way
-
-- **Audit first, fix second.** AI agents tend to "helpfully" refactor during
-  audits, which hides the real findings. The prompt forces a report artifact
-  before any edit.
-- **Route inventory is a table, not prose.** The most common auth mistake is
-  a route that looks fine in isolation but is missing a dependency. Listing
-  every route with its auth/authz/input/output/rate-limit in one table makes
-  the gaps visible.
-- **Slopsquatting is a first-class check.** The 5–21% hallucinated-package
-  rate in the image you shared is why `pip-audit` and the maintainer/age
-  heuristic are explicit, not implied.
-- **The frontend bundle grep is the real secret test.** Source-code greps
-  miss build-time interpolation. Grepping `dist/` after `npm run build`
-  catches what source grep misses.
-- **Fail-closed stop conditions** match the AGENTS.md rule that missing or
-  stale evidence fails the gate. No soft language.
-- **Stack-adapted.** Your checklist had PM2 and bcrypt; I mapped those to
-  systemd/gunicorn and argon2/bcrypt for the FastAPI path, and kept npm audit
-  for the Vite frontend.
 ---
 
 ## Recommended Execution Order

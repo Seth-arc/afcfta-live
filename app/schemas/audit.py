@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.enums import LegalOutcome
 from app.schemas.assessments import TariffOutcomeResponse
@@ -19,6 +20,25 @@ from app.schemas.rules import PSRRuleResolvedOut
 from app.schemas.status import StatusOverlay
 
 
+def _coerce_payload(value: object) -> object:
+    """Normalize Pydantic and row-mapping inputs into plain dict-like payloads."""
+
+    if value is None or isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="python")
+    if hasattr(value, "_mapping"):
+        return dict(value._mapping)
+    return value
+
+
+class ReplayMode(str, Enum):
+    """Explicit replay-guarantee classification for persisted evaluations."""
+
+    SNAPSHOT_FROZEN = "snapshot_frozen"
+    LEGACY_LIVE_FALLBACK = "legacy_live_fallback"
+
+
 class ProvisionSummary(BaseModel):
     """Thin provision reference enabling traversal from an audit trail to full provision text.
 
@@ -27,16 +47,41 @@ class ProvisionSummary(BaseModel):
     """
 
     provision_id: UUID
-    instrument_name: str
-    article_ref: str | None = None
-    annex_ref: str | None = None
+    source_id: UUID | None = None
+    article_label: str | None = None
+    clause_label: str | None = None
     topic_primary: str
-    page_start: int | None = None
-    page_end: int | None = None
-    provision_text_verbatim: str | None = None
-    provision_text_normalized: str | None = None
+    text_excerpt: str | None = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, value: object) -> object:
+        """Accept legacy provision payloads while serializing the bounded thin shape."""
+
+        payload = _coerce_payload(value)
+        if not isinstance(payload, dict):
+            return payload
+
+        normalized = dict(payload)
+        normalized.setdefault("source_id", payload.get("source_id"))
+        normalized.setdefault("article_label", payload.get("article_ref"))
+        normalized.setdefault(
+            "clause_label",
+            payload.get("clause_label")
+            or payload.get("subsection_ref")
+            or payload.get("section_ref")
+            or payload.get("annex_ref")
+            or payload.get("appendix_ref"),
+        )
+        normalized.setdefault(
+            "text_excerpt",
+            payload.get("text_excerpt")
+            or payload.get("provision_text_verbatim")
+            or payload.get("provision_text_normalized"),
+        )
+        return normalized
 
 
 class HS6ResolvedSnapshot(BaseModel):
@@ -92,17 +137,42 @@ class RuleProvenanceTrace(BaseModel):
     """
 
     source_id: UUID | None = None
-    source_short_title: str | None = None
-    source_version_label: str | None = None
-    source_publication_date: date | None = None
-    source_effective_date: date | None = None
-    snapshot_captured_at: datetime | None = None
+    short_title: str | None = None
+    version_label: str | None = None
+    publication_date: date | None = None
+    effective_date: date | None = None
+    captured_at: datetime | None = None
     page_ref: int | None = None
     table_ref: str | None = None
     row_ref: str | None = None
     supporting_provisions: list[ProvisionSummary] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, value: object) -> object:
+        """Accept both legacy nested snapshots and the flattened persisted snapshot shape."""
+
+        payload = _coerce_payload(value)
+        if not isinstance(payload, dict):
+            return payload
+
+        normalized = dict(payload)
+        source_payload = payload.get("source")
+        if isinstance(source_payload, dict):
+            normalized.setdefault("source_id", source_payload.get("source_id"))
+            normalized.setdefault("short_title", source_payload.get("short_title"))
+            normalized.setdefault("version_label", source_payload.get("version_label"))
+            normalized.setdefault("publication_date", source_payload.get("publication_date"))
+            normalized.setdefault("effective_date", source_payload.get("effective_date"))
+
+        normalized.setdefault("short_title", payload.get("source_short_title"))
+        normalized.setdefault("version_label", payload.get("source_version_label"))
+        normalized.setdefault("publication_date", payload.get("source_publication_date"))
+        normalized.setdefault("effective_date", payload.get("source_effective_date"))
+        normalized.setdefault("captured_at", payload.get("snapshot_captured_at"))
+        return normalized
 
 
 class TariffProvenanceTrace(BaseModel):
@@ -115,11 +185,11 @@ class TariffProvenanceTrace(BaseModel):
 
     schedule_source_id: UUID | None = None
     rate_source_id: UUID | None = None
-    source_short_title: str | None = None
-    source_version_label: str | None = None
-    source_publication_date: date | None = None
-    source_effective_date: date | None = None
-    snapshot_captured_at: datetime | None = None
+    short_title: str | None = None
+    version_label: str | None = None
+    publication_date: date | None = None
+    effective_date: date | None = None
+    captured_at: datetime | None = None
     line_page_ref: int | None = None
     rate_page_ref: int | None = None
     table_ref: str | None = None
@@ -127,6 +197,30 @@ class TariffProvenanceTrace(BaseModel):
     supporting_provisions: list[ProvisionSummary] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, value: object) -> object:
+        """Accept both legacy nested snapshots and the flattened persisted snapshot shape."""
+
+        payload = _coerce_payload(value)
+        if not isinstance(payload, dict):
+            return payload
+
+        normalized = dict(payload)
+        source_payload = payload.get("source")
+        if isinstance(source_payload, dict):
+            normalized.setdefault("short_title", source_payload.get("short_title"))
+            normalized.setdefault("version_label", source_payload.get("version_label"))
+            normalized.setdefault("publication_date", source_payload.get("publication_date"))
+            normalized.setdefault("effective_date", source_payload.get("effective_date"))
+
+        normalized.setdefault("short_title", payload.get("source_short_title"))
+        normalized.setdefault("version_label", payload.get("source_version_label"))
+        normalized.setdefault("publication_date", payload.get("source_publication_date"))
+        normalized.setdefault("effective_date", payload.get("source_effective_date"))
+        normalized.setdefault("captured_at", payload.get("snapshot_captured_at"))
+        return normalized
 
 
 class DecisionProvenanceTrace(BaseModel):
@@ -187,8 +281,16 @@ class FinalDecisionTrace(BaseModel):
                     "readiness_score": 1.0,
                     "completeness_ratio": 1.0,
                     "provenance": {
-                        "rule": {"source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"},
-                        "tariff": {"schedule_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"},
+                        "rule": {
+                            "source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+                            "short_title": "Appendix IV",
+                            "version_label": "2025.01",
+                        },
+                        "tariff": {
+                            "schedule_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+                            "rate_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+                            "short_title": "Nigeria Tariff Schedule",
+                        },
                     },
                 }
             ]
@@ -199,6 +301,7 @@ class FinalDecisionTrace(BaseModel):
 class AuditTrail(BaseModel):
     """Reconstructed decision trace for one persisted eligibility evaluation."""
 
+    replay_mode: ReplayMode
     evaluation: EligibilityEvaluationResponse
     case: CaseSummaryResponse | None = None
     original_input_facts: list[CaseFactResponse] = Field(default_factory=list)
@@ -218,6 +321,7 @@ class AuditTrail(BaseModel):
         json_schema_extra={
             "examples": [
                 {
+                    "replay_mode": "snapshot_frozen",
                     "evaluation": {
                         "evaluation_id": "4c651cd2-8f0f-4c16-9f37-8dfceef41f26",
                         "case_id": "29dc2946-6ef0-46a0-b3eb-0f6a64e40db7",

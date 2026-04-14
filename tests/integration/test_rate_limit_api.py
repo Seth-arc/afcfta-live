@@ -14,6 +14,14 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings, get_settings
+from app.local_db import (
+    DEFAULT_LOCAL_DB_HOST,
+    DEFAULT_LOCAL_DB_NAME,
+    DEFAULT_LOCAL_DB_PASSWORD,
+    DEFAULT_LOCAL_DB_PORT,
+    DEFAULT_LOCAL_DB_USER,
+    build_local_database_urls,
+)
 
 
 pytestmark = pytest.mark.integration
@@ -70,14 +78,18 @@ def _case_payload(*, assess: bool = False) -> dict[str, object]:
 def low_rate_limit_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     """Override settings for deterministic throttling assertions."""
 
-    monkeypatch.setenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://afcfta:afcfta_dev@localhost:5432/afcfta",
-    )
-    monkeypatch.setenv(
-        "DATABASE_URL_SYNC",
-        "postgresql://afcfta:afcfta_dev@localhost:5432/afcfta",
-    )
+    local_db_env = {
+        "LOCAL_DB_HOST": DEFAULT_LOCAL_DB_HOST,
+        "LOCAL_DB_PORT": str(DEFAULT_LOCAL_DB_PORT),
+        "LOCAL_DB_NAME": DEFAULT_LOCAL_DB_NAME,
+        "LOCAL_DB_USER": DEFAULT_LOCAL_DB_USER,
+        "LOCAL_DB_PASSWORD": DEFAULT_LOCAL_DB_PASSWORD,
+    }
+    for key, value in local_db_env.items():
+        monkeypatch.setenv(key, value)
+    async_url, sync_url = build_local_database_urls(local_db_env)
+    monkeypatch.setenv("DATABASE_URL", async_url)
+    monkeypatch.setenv("DATABASE_URL_SYNC", sync_url)
     monkeypatch.setenv("API_AUTH_KEY", "pytest-api-key")
     monkeypatch.setenv("API_AUTH_PRINCIPAL", "pytest-suite")
     monkeypatch.setenv("API_AUTH_HEADER_NAME", "X-API-Key")

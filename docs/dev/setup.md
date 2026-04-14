@@ -38,6 +38,11 @@ docker compose up -d
 
 This local compose file remains development-oriented and only starts PostgreSQL with a local named volume. Production uses [docker-compose.prod.yml](../../docker-compose.prod.yml), which builds the API image, removes development bind-mount assumptions, and adds service health checks.
 
+The local database container reads its credential contract from `LOCAL_DB_*` in
+your `.env`. Those same fields are also used by `app/config.py`, Alembic, and
+the pytest fixtures, so local compose, migrations, and tests all point at the
+same database settings.
+
 ## 3. Create `.env` From `.env.example`
 
 Copy the example file:
@@ -49,8 +54,13 @@ cp .env.example .env
 The application settings loaded by `app/config.py` are:
 
 - Database
-  - `DATABASE_URL` required
-  - `DATABASE_URL_SYNC` optional for the API process but recommended for local Alembic and sync tooling
+  - `LOCAL_DB_HOST` optional locally, defaults to `localhost`
+  - `LOCAL_DB_PORT` optional locally, defaults to `5432`
+  - `LOCAL_DB_NAME` optional locally, defaults to `afcfta`
+  - `LOCAL_DB_USER` optional locally, defaults to `afcfta`
+  - `LOCAL_DB_PASSWORD` optional locally, defaults to `afcfta_dev`
+  - `DATABASE_URL` required in production and optional locally when `LOCAL_DB_*` is used
+  - `DATABASE_URL_SYNC` optional for the API process but recommended for non-local sync tooling
   - `DB_CONNECT_TIMEOUT_SECONDS` optional
   - `DB_COMMAND_TIMEOUT_SECONDS` optional
   - `DB_POOL_TIMEOUT_SECONDS` optional
@@ -82,8 +92,11 @@ The application settings loaded by `app/config.py` are:
 A working local example looks like this:
 
 ```env
-DATABASE_URL=postgresql+asyncpg://afcfta:afcfta_dev@localhost:5432/afcfta
-DATABASE_URL_SYNC=postgresql://afcfta:afcfta_dev@localhost:5432/afcfta
+LOCAL_DB_HOST=localhost
+LOCAL_DB_PORT=5432
+LOCAL_DB_NAME=afcfta
+LOCAL_DB_USER=afcfta
+LOCAL_DB_PASSWORD=afcfta_dev
 API_AUTH_KEY=replace-with-a-local-dev-secret
 ENV=development
 LOG_LEVEL=INFO
@@ -91,11 +104,17 @@ APP_TITLE=AfCFTA Intelligence API
 APP_VERSION=0.1.0
 ```
 
-Local development keeps secrets out of the repository by using `.env`, which is ignored by git, while `.env.example` contains only safe placeholders.
+`app/config.py` and Alembic derive the local `DATABASE_URL` and
+`DATABASE_URL_SYNC` from those `LOCAL_DB_*` fields. If you later change
+`LOCAL_DB_PASSWORD`, recreate the local Docker volume or rotate the password
+inside PostgreSQL before rerunning migrations or integration tests.
+
+Local development keeps secrets out of the repository by using `.env`, which is ignored by git, while `.env.example` contains only safe placeholders and the canonical local defaults.
 
 Mandatory versus optional guidance:
 
-- Mandatory for local API startup: `DATABASE_URL`, `API_AUTH_KEY`
+- Mandatory for local API startup: `API_AUTH_KEY` plus either `LOCAL_DB_*` or an explicit `DATABASE_URL`
+- Mandatory for local compose / test parity: keep `LOCAL_DB_*` aligned in `.env`
 - Mandatory for production: `DATABASE_URL`, `API_AUTH_KEY`, and `ENV`
 - Optional local conveniences: `DATABASE_URL_SYNC`, logging controls, rate-limit overrides, and error-tracking settings
 - Optional production integrations: Sentry-related settings remain optional unless external error aggregation is part of the deployment

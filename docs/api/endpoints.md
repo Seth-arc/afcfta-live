@@ -566,15 +566,57 @@ curl http://localhost:8000/api/v1/audit/evaluations/4c651cd2-8f0f-4c16-9f37-8dfc
     "completeness_ratio": 1.0,
     "provenance": {
       "rule": {
-        "source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"
+        "source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+        "short_title": "Appendix IV",
+        "version_label": "2025.01",
+        "publication_date": "2025-01-01",
+        "effective_date": "2025-01-01",
+        "captured_at": "2025-01-01T00:00:00Z",
+        "page_ref": 1,
+        "table_ref": "Appendix IV",
+        "row_ref": "110311",
+        "supporting_provisions": [
+          {
+            "provision_id": "0f34f670-a35c-4ba0-b4c8-61de45f0e4db",
+            "source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+            "article_label": "Art. 6",
+            "clause_label": "Annex 2",
+            "topic_primary": "origin_rules",
+            "text_excerpt": "Change in tariff heading required."
+          }
+        ]
       },
       "tariff": {
-        "schedule_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f"
+        "schedule_source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+        "rate_source_id": "70c9453d-1d70-47a7-a9f6-4434d4267ec2",
+        "short_title": "Nigeria Tariff Schedule",
+        "version_label": "2025-gazette",
+        "publication_date": "2025-01-01",
+        "effective_date": "2025-01-01",
+        "captured_at": "2025-01-01T00:00:00Z",
+        "line_page_ref": 9,
+        "rate_page_ref": 10,
+        "table_ref": "Schedule A",
+        "row_ref": "110311",
+        "supporting_provisions": [
+          {
+            "provision_id": "6e0e1845-4d5a-4dd3-b913-26ad87cf4bda",
+            "source_id": "c3d3fd71-d1b2-412e-a708-1685f1f2299f",
+            "article_label": null,
+            "clause_label": "Schedule A",
+            "topic_primary": "tariff_schedule",
+            "text_excerpt": "Preferential rate is 0%."
+          }
+        ]
       }
     }
   }
 }
 ```
+
+For new evaluations, the rule and tariff provenance shown in `final_decision.provenance`
+is frozen at persistence time and replayed from the stored snapshot rather than
+reconstructed from mutable live source rows.
 
 This audit replay contract is frozen in integration coverage at:
 

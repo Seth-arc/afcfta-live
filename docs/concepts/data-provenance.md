@@ -136,6 +136,7 @@ That trail records:
 - the original input facts
 - the resolved HS6 product
 - the resolved PSR rule
+- the frozen rule and tariff provenance snapshot captured when the evaluation was persisted
 - pathway evaluation results
 - general-rules results
 - status overlay
@@ -149,6 +150,15 @@ Why this matters:
 - a reviewer is not forced to trust a summary result
 - the underlying checks can be inspected directly
 - the final answer can be traced back through the whole decision path
+- new evaluations do not drift when live source metadata or provision text changes later
+
+For new persisted evaluations, AfCFTA Live stores the replay-critical rule and
+tariff provenance inside the evaluation snapshot itself. That stored snapshot is
+thin and bounded: source metadata, page/table/row references, and up to five
+supporting provision excerpts per source.
+
+Older evaluations that predate snapshot freezing remain replayable through a
+legacy live-provenance fallback path when no stored snapshot exists.
 
 ## Immutability And Version Chains
 

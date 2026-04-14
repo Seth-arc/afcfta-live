@@ -133,7 +133,13 @@ def _tariff_result() -> TariffResolutionResult:
         schedule_id=_uuid(20),
         schedule_line_id=_uuid(21),
         year_rate_id=_uuid(22),
+        schedule_source_id=_uuid(23),
+        rate_source_id=_uuid(24),
         resolved_rate_year=2025,
+        line_page_ref=9,
+        rate_page_ref=10,
+        table_ref="seed_tariff",
+        row_ref="110311",
         used_fallback_rate=False,
     )
 
@@ -312,6 +318,31 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
 
     intelligence_service = Mock()
     intelligence_service.build_assessment_alert_specs.return_value = []
+    sources_repository = AsyncMock()
+
+    async def _get_source_snapshot(source_id: str) -> dict[str, object]:
+        source_uuid = UUID(str(source_id))
+        return {
+            "source": {
+                "source_id": source_uuid,
+                "short_title": f"Source {str(source_uuid)[-6:]}",
+                "version_label": "pytest-v1",
+                "publication_date": date(2025, 1, 1),
+                "effective_date": date(2025, 1, 1),
+            },
+            "supporting_provisions": [
+                {
+                    "provision_id": source_uuid,
+                    "source_id": source_uuid,
+                    "article_label": "Art. 1",
+                    "clause_label": "Clause 1",
+                    "topic_primary": "origin_rules",
+                    "text_excerpt": f"Seed excerpt {str(source_uuid)[-6:]}",
+                }
+            ],
+        }
+
+    sources_repository.get_source_snapshot.side_effect = _get_source_snapshot
 
     deps = {
         "classification_service": AsyncMock(),
@@ -324,6 +355,7 @@ def _service() -> tuple[EligibilityService, dict[str, object]]:
         "general_origin_rules_service": Mock(),
         "cases_repository": AsyncMock(),
         "evaluations_repository": AsyncMock(),
+        "sources_repository": sources_repository,
         "intelligence_service": intelligence_service,
     }
     return EligibilityService(**deps), deps
@@ -1539,8 +1571,8 @@ async def test_assessment_falls_back_to_rule_type_evidence_when_specific_targets
 
 
 @pytest.mark.asyncio
-async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() -> None:
-    """Persistence should keep source references but defer provenance enrichment off the hot path."""
+async def test_persist_evaluation_attaches_rule_and_tariff_provenance_snapshots_on_write_path() -> None:
+    """Persistence should freeze rule and tariff provenance before the evaluation write commits."""
 
     service, deps = _service()
     case_id = str(_uuid(500))
@@ -1565,12 +1597,10 @@ async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() 
             "rate_source_id": rate_source_id,
         }
     )
-    deps["sources_repository"] = AsyncMock()
-    service.sources_repository = deps["sources_repository"]
     deps["sources_repository"].get_source_snapshot.side_effect = [
         {
             "source": {
-                "source_id": str(rule_source_id),
+                "source_id": rule_source_id,
                 "short_title": "Appendix IV",
                 "version_label": "2025.01",
                 "publication_date": date(2025, 1, 1),
@@ -1578,25 +1608,18 @@ async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() 
             },
             "supporting_provisions": [
                 {
-                    "provision_id": str(_uuid(510)),
-                    "source_id": str(rule_source_id),
-                    "instrument_name": "Appendix IV",
-                    "article_ref": "Art. 6",
-                    "annex_ref": "Annex 2",
+                    "provision_id": _uuid(510),
+                    "source_id": rule_source_id,
+                    "article_label": "Art. 6",
+                    "clause_label": "Annex 2",
                     "topic_primary": "origin_rules",
-                    "page_start": 14,
-                    "page_end": 14,
-                    "provision_text_verbatim": "Change in tariff heading required.",
-                    "provision_text_normalized": "cth",
-                    "effective_date": date(2025, 1, 1),
-                    "expiry_date": None,
-                    "status": "active",
+                    "text_excerpt": "Change in tariff heading required.",
                 }
             ],
         },
         {
             "source": {
-                "source_id": str(schedule_source_id),
+                "source_id": schedule_source_id,
                 "short_title": "Nigeria Schedule",
                 "version_label": "2025-gazette",
                 "publication_date": date(2025, 1, 1),
@@ -1604,19 +1627,31 @@ async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() 
             },
             "supporting_provisions": [
                 {
-                    "provision_id": str(_uuid(511)),
-                    "source_id": str(schedule_source_id),
-                    "instrument_name": "Tariff Schedule",
-                    "article_ref": None,
-                    "annex_ref": "Schedule A",
+                    "provision_id": _uuid(511),
+                    "source_id": schedule_source_id,
+                    "article_label": None,
+                    "clause_label": "Schedule A",
                     "topic_primary": "tariff_schedule",
-                    "page_start": 9,
-                    "page_end": 9,
-                    "provision_text_verbatim": "Preferential rate is 0%.",
-                    "provision_text_normalized": "preferential rate zero",
-                    "effective_date": date(2025, 1, 1),
-                    "expiry_date": None,
-                    "status": "active",
+                    "text_excerpt": "Preferential rate is 0%.",
+                }
+            ],
+        },
+        {
+            "source": {
+                "source_id": rate_source_id,
+                "short_title": "Rate Gazette",
+                "version_label": "2025-rate",
+                "publication_date": date(2025, 1, 1),
+                "effective_date": date(2025, 1, 1),
+            },
+            "supporting_provisions": [
+                {
+                    "provision_id": _uuid(512),
+                    "source_id": rate_source_id,
+                    "article_label": "Art. 2",
+                    "clause_label": "Rate Table",
+                    "topic_primary": "tariff_schedule",
+                    "text_excerpt": "The in-force preferential rate is 0%.",
                 }
             ],
         },
@@ -1656,47 +1691,299 @@ async def test_persist_evaluation_defers_rule_and_tariff_provenance_snapshots() 
         service._make_tariff_trace_check(tariff_result),
     ]
 
-    persisted = await service._persist_evaluation_if_possible(
+    persisted = await service._persist_or_prepare_evaluation(
         request=request,
         assessment_date=date(2025, 1, 1),
         rule_bundle=rule_bundle,
         response=response,
         pathway_used="CTH",
         audit_checks=audit_checks,
+        persist_evaluation=True,
     )
 
     assert persisted is True
-    assert (
-        deps["evaluations_repository"].persist_evaluation.await_args.kwargs["persist_check_results"]
-        is False
-    )
     persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
-    persisted_checks = deps["evaluations_repository"].persist_evaluation.await_args.args[1]
-    rule_check = next(check for check in persisted_checks if check["check_code"] == "PSR_RESOLUTION")
-    tariff_check = next(
-        check for check in persisted_checks if check["check_code"] == "TARIFF_RESOLUTION"
+    decision_snapshot = persisted_evaluation["decision_snapshot_json"]
+    rule_snapshot = decision_snapshot["rule_check"]["details_json"]["provenance_snapshot"]
+    tariff_snapshot = decision_snapshot["tariff_check"]["details_json"]["provenance_snapshot"]
+
+    assert set(rule_snapshot) == {
+        "source_id",
+        "short_title",
+        "version_label",
+        "publication_date",
+        "effective_date",
+        "page_ref",
+        "table_ref",
+        "row_ref",
+        "captured_at",
+        "supporting_provisions",
+    }
+    assert rule_snapshot["source_id"] == str(rule_source_id)
+    assert rule_snapshot["short_title"] == "Appendix IV"
+    assert rule_snapshot["supporting_provisions"] == [
+        {
+            "provision_id": str(_uuid(510)),
+            "source_id": str(rule_source_id),
+            "article_label": "Art. 6",
+            "clause_label": "Annex 2",
+            "topic_primary": "origin_rules",
+            "text_excerpt": "Change in tariff heading required.",
+        }
+    ]
+
+    assert set(tariff_snapshot) == {
+        "schedule_source_id",
+        "rate_source_id",
+        "short_title",
+        "version_label",
+        "publication_date",
+        "effective_date",
+        "line_page_ref",
+        "rate_page_ref",
+        "table_ref",
+        "row_ref",
+        "captured_at",
+        "supporting_provisions",
+    }
+    assert tariff_snapshot["schedule_source_id"] == str(schedule_source_id)
+    assert tariff_snapshot["rate_source_id"] == str(rate_source_id)
+    assert [item["source_id"] for item in tariff_snapshot["supporting_provisions"]] == [
+        str(schedule_source_id),
+        str(rate_source_id),
+    ]
+    assert deps["sources_repository"].get_source_snapshot.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_persist_evaluation_bounds_and_orders_supporting_provisions_in_snapshots() -> None:
+    """Persisted supporting provisions should be deterministic, thin, and capped per source."""
+
+    service, deps = _service()
+    case_id = str(_uuid(530))
+    rule_source_id = _uuid(531)
+    request = _request(
+        hs6_code="110311",
+        facts=[_fact("direct_transport", "boolean", fact_value_boolean=True)],
+        case_id=case_id,
+    )
+    rule_bundle = _rule_bundle(hs6_code="110311").model_copy(
+        update={
+            "psr_rule": _rule_bundle(hs6_code="110311").psr_rule.model_copy(
+                update={"source_id": rule_source_id}
+            )
+        }
+    )
+    tariff_result = _tariff_result()
+    long_text = "A" * 320
+
+    async def _snapshot_for_source(source_id: str) -> dict[str, object]:
+        if str(source_id) == str(rule_source_id):
+            return {
+                "source": {
+                    "source_id": rule_source_id,
+                    "short_title": "Appendix IV",
+                    "version_label": "2025.01",
+                    "publication_date": date(2025, 1, 1),
+                    "effective_date": date(2025, 1, 1),
+                },
+                "supporting_provisions": [
+                    {
+                        "provision_id": _uuid(612),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 1",
+                        "annex_ref": "Clause A",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": long_text,
+                        "authority_weight": Decimal("2.000"),
+                    },
+                    {
+                        "provision_id": _uuid(615),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 5",
+                        "annex_ref": "Clause E",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": "Provision E",
+                        "authority_weight": Decimal("0.500"),
+                    },
+                    {
+                        "provision_id": _uuid(610),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 3",
+                        "annex_ref": "Clause C",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": "Provision C",
+                        "authority_weight": Decimal("2.000"),
+                    },
+                    {
+                        "provision_id": _uuid(611),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 1",
+                        "annex_ref": "Clause B",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": "Provision B",
+                        "authority_weight": Decimal("2.000"),
+                    },
+                    {
+                        "provision_id": _uuid(614),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 4",
+                        "annex_ref": "Clause D",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": "Provision D",
+                        "authority_weight": Decimal("1.000"),
+                    },
+                    {
+                        "provision_id": _uuid(616),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 6",
+                        "annex_ref": "Clause F",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": "Provision F",
+                        "authority_weight": Decimal("0.100"),
+                    },
+                    {
+                        "provision_id": _uuid(613),
+                        "source_id": rule_source_id,
+                        "article_ref": "Art. 2",
+                        "annex_ref": "Clause C",
+                        "topic_primary": "origin_rules",
+                        "provision_text_verbatim": "Provision C2",
+                        "authority_weight": Decimal("1.500"),
+                    },
+                ],
+            }
+
+        return {
+            "source": {
+                "source_id": UUID(str(source_id)),
+                "short_title": "Auxiliary source",
+                "version_label": "pytest-v1",
+                "publication_date": date(2025, 1, 1),
+                "effective_date": date(2025, 1, 1),
+            },
+            "supporting_provisions": [],
+        }
+
+    deps["sources_repository"].get_source_snapshot.side_effect = _snapshot_for_source
+    deps["evaluations_repository"].persist_evaluation.return_value = {
+        "evaluation": {"evaluation_id": str(_uuid(540))},
+        "checks": [],
+    }
+    response = EligibilityAssessmentResponse(
+        hs6_code="110311",
+        eligible=True,
+        pathway_used="CTH",
+        rule_status="agreed",
+        tariff_outcome=service._build_tariff_outcome(tariff_result),
+        failures=[],
+        missing_facts=[],
+        evidence_required=[],
+        missing_evidence=[],
+        readiness_score=1.0,
+        completeness_ratio=1.0,
+        confidence_class="complete",
+    )
+    audit_checks = [
+        service._make_audit_check(
+            check_type="rule",
+            check_code="PSR_RESOLUTION",
+            passed=True,
+            severity="info",
+            expected_value="110311",
+            observed_value=str(rule_bundle.psr_rule.psr_id),
+            explanation="Resolved the governing PSR rule bundle",
+            details_json={
+                "psr_rule": rule_bundle.psr_rule.model_dump(mode="json"),
+                "applicability_type": rule_bundle.applicability_type,
+            },
+        ),
+        service._make_tariff_trace_check(tariff_result),
+    ]
+
+    persisted = await service._persist_or_prepare_evaluation(
+        request=request,
+        assessment_date=date(2025, 1, 1),
+        rule_bundle=rule_bundle,
+        response=response,
+        pathway_used="CTH",
+        audit_checks=audit_checks,
+        persist_evaluation=True,
     )
 
-    assert rule_check["details_json"]["psr_rule"]["source_id"] == str(rule_source_id)
-    assert "provenance_snapshot" not in rule_check["details_json"]
-    assert (
-        tariff_check["details_json"]["tariff_resolution"]["schedule_source_id"]
-        == str(schedule_source_id)
+    assert persisted is True
+    persisted_evaluation = deps["evaluations_repository"].persist_evaluation.await_args.args[0]
+    rule_provisions = persisted_evaluation["decision_snapshot_json"]["rule_check"]["details_json"][
+        "provenance_snapshot"
+    ]["supporting_provisions"]
+
+    assert len(rule_provisions) == 5
+    assert [item["provision_id"] for item in rule_provisions] == [
+        str(_uuid(612)),
+        str(_uuid(611)),
+        str(_uuid(610)),
+        str(_uuid(613)),
+        str(_uuid(614)),
+    ]
+    assert all(
+        set(item) == {
+            "provision_id",
+            "source_id",
+            "article_label",
+            "clause_label",
+            "topic_primary",
+            "text_excerpt",
+        }
+        for item in rule_provisions
     )
-    assert "provenance_snapshot" not in tariff_check["details_json"]
-    assert (
-        persisted_evaluation["decision_snapshot_json"]["rule_check"]["details_json"]["psr_rule"][
-            "source_id"
-        ]
-        == str(rule_source_id)
+    assert rule_provisions[0]["text_excerpt"].endswith("...")
+    assert len(rule_provisions[0]["text_excerpt"]) == 280
+
+
+@pytest.mark.asyncio
+async def test_assess_interface_request_fails_closed_when_replay_provenance_snapshot_is_missing() -> None:
+    """Interface-triggered persistence must fail closed when rule/tariff provenance cannot be frozen."""
+
+    service, deps = _service()
+    request = _request(
+        hs6_code="110311",
+        facts=[
+            _fact("tariff_heading_input", "text", fact_value_text="1001"),
+            _fact("tariff_heading_output", "text", fact_value_text="1103"),
+            _fact("direct_transport", "boolean", fact_value_boolean=True),
+        ],
     )
-    assert "provenance_snapshot" not in persisted_evaluation["decision_snapshot_json"][
-        "rule_check"
-    ]["details_json"]
-    assert (
-        persisted_evaluation["decision_snapshot_json"]["tariff_check"]["details_json"][
-            "tariff_resolution"
-        ]["schedule_source_id"]
-        == str(schedule_source_id)
+    auto_case_id = str(_uuid(541))
+    deps["cases_repository"].create_case.return_value = auto_case_id
+    deps["sources_repository"].get_source_snapshot.side_effect = None
+    deps["sources_repository"].get_source_snapshot.return_value = None
+    deps["classification_service"].resolve_hs6.return_value = _product("110311")
+    deps["rule_resolution_service"].resolve_rule_bundle.return_value = _rule_bundle(hs6_code="110311")
+    deps["tariff_resolution_service"].resolve_tariff_bundle.return_value = _tariff_result()
+    deps["status_service"].get_status_overlay.side_effect = [
+        _status_overlay("in_force", "complete", "Corridor is operational."),
+        _status_overlay("agreed", "complete", "Rule is agreed."),
+    ]
+    deps["fact_normalization_service"].normalize_facts.return_value = {
+        "tariff_heading_input": "1001",
+        "tariff_heading_output": "1103",
+        "direct_transport": True,
+    }
+    deps["expression_evaluator"].evaluate.return_value = _expression_result(
+        passed=True,
+        explanation=FAILURE_CODES["FAIL_CTH_NOT_MET"],
     )
-    assert deps["sources_repository"].get_source_snapshot.await_count == 0
+    deps["general_origin_rules_service"].evaluate.return_value = _general_rules_result(passed=True)
+    deps["evidence_service"].build_readiness.return_value = _evidence_result()
+
+    with pytest.raises(EvaluationPersistenceError) as exc_info:
+        await service.assess_interface_request(request)
+
+    assert exc_info.value.detail == {
+        "case_id": auto_case_id,
+        "reason": "provenance_snapshot_unavailable",
+        "check_code": "PSR_RESOLUTION",
+        "failure_stage": "source_snapshot_missing",
+        "source_id": str(_uuid(11)),
+    }
+    deps["evaluations_repository"].persist_evaluation.assert_not_awaited()

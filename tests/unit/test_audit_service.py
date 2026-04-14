@@ -780,14 +780,10 @@ async def test_get_decision_trace_prefers_persisted_provenance_snapshot() -> Non
                             {
                                 "provision_id": str(_uuid(125)),
                                 "source_id": source_id,
-                                "instrument_name": "Appendix IV",
                                 "article_ref": "Art. 6",
                                 "annex_ref": "Annex 2",
                                 "topic_primary": "origin_rules",
-                                "page_start": 14,
-                                "page_end": 14,
                                 "provision_text_verbatim": "Change in tariff heading required.",
-                                "provision_text_normalized": "cth",
                             }
                         ],
                     },
@@ -816,17 +812,18 @@ async def test_get_decision_trace_prefers_persisted_provenance_snapshot() -> Non
     assert result.final_decision.provenance is not None
     assert result.final_decision.provenance.rule is not None
     assert result.final_decision.provenance.rule.source_id == _uuid(122)
-    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"
-    assert result.final_decision.provenance.rule.source_version_label == "2025.01"
-    assert result.final_decision.provenance.rule.snapshot_captured_at == datetime(
+    assert result.final_decision.provenance.rule.short_title == "Appendix IV"
+    assert result.final_decision.provenance.rule.version_label == "2025.01"
+    assert result.final_decision.provenance.rule.captured_at == datetime(
         2025,
         1,
         1,
         tzinfo=timezone.utc,
     )
-    assert (
-        result.final_decision.provenance.rule.supporting_provisions[0].provision_text_verbatim
-        == "Change in tariff heading required."
+    assert result.final_decision.provenance.rule.supporting_provisions[0].article_label == "Art. 6"
+    assert result.final_decision.provenance.rule.supporting_provisions[0].clause_label == "Annex 2"
+    assert result.final_decision.provenance.rule.supporting_provisions[0].text_excerpt == (
+        "Change in tariff heading required."
     )
     sources_repository.get_provisions_for_source.assert_not_awaited()
 
@@ -907,14 +904,10 @@ async def test_get_decision_trace_fetches_live_provenance_when_snapshot_missing(
         {
             "provision_id": str(_uuid(133)),
             "source_id": source_id,
-            "instrument_name": "Appendix IV",
             "article_ref": "Art. 6",
             "annex_ref": "Annex 2",
             "topic_primary": "origin_rules",
-            "page_start": 14,
-            "page_end": 14,
             "provision_text_verbatim": "Change in tariff heading required.",
-            "provision_text_normalized": "cth",
         }
     ]
 
@@ -922,10 +915,11 @@ async def test_get_decision_trace_fetches_live_provenance_when_snapshot_missing(
 
     assert result.final_decision.provenance is not None
     assert result.final_decision.provenance.rule is not None
-    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"
-    assert (
-        result.final_decision.provenance.rule.supporting_provisions[0].provision_text_verbatim
-        == "Change in tariff heading required."
+    assert result.final_decision.provenance.rule.short_title == "Appendix IV"
+    assert result.final_decision.provenance.rule.supporting_provisions[0].article_label == "Art. 6"
+    assert result.final_decision.provenance.rule.supporting_provisions[0].clause_label == "Annex 2"
+    assert result.final_decision.provenance.rule.supporting_provisions[0].text_excerpt == (
+        "Change in tariff heading required."
     )
     sources_repository.get_source.assert_awaited_once_with(source_id)
     assert sources_repository.get_provisions_for_source.await_count == 1
@@ -987,14 +981,15 @@ async def test_get_decision_trace_rehydrates_summary_checks_from_decision_snapsh
                             "row_ref": "110311",
                         },
                         "provenance_snapshot": {
+                            "source_id": source_id,
+                            "short_title": "Appendix IV",
+                            "version_label": "2025.01",
+                            "publication_date": "2025-01-01",
+                            "effective_date": "2025-01-01",
+                            "page_ref": 1,
+                            "table_ref": "Appendix IV",
+                            "row_ref": "110311",
                             "captured_at": "2025-01-01T00:00:00+00:00",
-                            "source": {
-                                "source_id": source_id,
-                                "short_title": "Appendix IV",
-                                "version_label": "2025.01",
-                                "publication_date": "2025-01-01",
-                                "effective_date": "2025-01-01",
-                            },
                             "supporting_provisions": [],
                         },
                     },
@@ -1121,4 +1116,4 @@ async def test_get_decision_trace_rehydrates_summary_checks_from_decision_snapsh
     assert result.pathway_evaluations[0].checks == []
     assert result.final_decision.provenance is not None
     assert result.final_decision.provenance.rule is not None
-    assert result.final_decision.provenance.rule.source_short_title == "Appendix IV"
+    assert result.final_decision.provenance.rule.short_title == "Appendix IV"

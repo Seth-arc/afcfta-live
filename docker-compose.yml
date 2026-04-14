@@ -2,11 +2,11 @@ services:
   db:
     image: postgres:15
     environment:
-      POSTGRES_DB: afcfta
-      POSTGRES_USER: afcfta
-      POSTGRES_PASSWORD: afcfta_dev
+      POSTGRES_DB: ${LOCAL_DB_NAME:-afcfta}
+      POSTGRES_USER: ${LOCAL_DB_USER:-afcfta}
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-afcfta_dev}
     ports:
-      - "5432:5432"
+      - "${LOCAL_DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 volumes:

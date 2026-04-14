@@ -21,6 +21,7 @@ from app.schemas.audit import (
     HS6ResolvedSnapshot,
     PathwayEvaluationTrace,
     ProvisionSummary,
+    ReplayMode,
     RuleProvenanceTrace,
     TariffProvenanceTrace,
 )
@@ -76,6 +77,7 @@ class AuditService:
             for check in evaluation_bundle["checks"]
         ]
         checks = self._merge_snapshot_checks(evaluation, persisted_checks)
+        replay_mode = self._determine_replay_mode(evaluation, checks)
 
         case_bundle = await self.cases_repository.get_case_with_facts(str(evaluation.case_id))
         case = (
@@ -94,6 +96,7 @@ class AuditService:
             evaluation_id=str(evaluation.evaluation_id),
         )
         return AuditTrail(
+            replay_mode=replay_mode,
             evaluation=evaluation,
             case=case,
             original_input_facts=facts,
@@ -327,6 +330,85 @@ class AuditService:
             str(check.linked_component_id) if check.linked_component_id is not None else None
         )
         return (check.check_type, check.check_code, linked_component_id)
+
+    def _determine_replay_mode(
+        self,
+        evaluation: EligibilityEvaluationResponse,
+        checks: Sequence[EligibilityCheckResultResponse],
+    ) -> ReplayMode:
+        """Classify whether replay is backed by frozen snapshots or legacy fallbacks."""
+
+        snapshot = evaluation.decision_snapshot_json
+        if not isinstance(snapshot, dict) or snapshot.get("snapshot_version") is None:
+            return ReplayMode.LEGACY_LIVE_FALLBACK
+
+        rule_check = self._find_summary_check(
+            checks,
+            check_type="rule",
+            check_code="PSR_RESOLUTION",
+        )
+        if not self._has_snapshot_provenance(
+            rule_check,
+            payload_key="psr_rule",
+        ):
+            return ReplayMode.LEGACY_LIVE_FALLBACK
+
+        tariff_check = self._find_summary_check(
+            checks,
+            check_type="tariff",
+            check_code="TARIFF_RESOLUTION",
+        )
+        if tariff_check is None:
+            return ReplayMode.LEGACY_LIVE_FALLBACK
+
+        tariff_details = self._details(tariff_check)
+        if (
+            isinstance(tariff_details.get("tariff_resolution"), dict)
+            and not isinstance(tariff_details.get("provenance_snapshot"), dict)
+        ):
+            return ReplayMode.LEGACY_LIVE_FALLBACK
+        if (
+            "tariff_resolution" not in tariff_details
+            and "tariff_outcome" not in tariff_details
+        ):
+            return ReplayMode.LEGACY_LIVE_FALLBACK
+
+        return ReplayMode.SNAPSHOT_FROZEN
+
+    @staticmethod
+    def _find_summary_check(
+        checks: Sequence[EligibilityCheckResultResponse],
+        *,
+        check_type: str,
+        check_code: str,
+    ) -> EligibilityCheckResultResponse | None:
+        """Return the first summary check matching one type/code pair."""
+
+        return next(
+            (
+                check
+                for check in checks
+                if check.check_type == check_type and check.check_code == check_code
+            ),
+            None,
+        )
+
+    def _has_snapshot_provenance(
+        self,
+        check: EligibilityCheckResultResponse | None,
+        *,
+        payload_key: str,
+    ) -> bool:
+        """Return whether one summary check carries a persisted provenance snapshot."""
+
+        if check is None:
+            return False
+
+        details = self._details(check)
+        return isinstance(details.get(payload_key), dict) and isinstance(
+            details.get("provenance_snapshot"),
+            dict,
+        )
 
     def _build_hs6_snapshot(
         self,
@@ -595,113 +677,154 @@ class AuditService:
             payload_key="tariff_resolution",
         )
 
-        rule_trace = None
-        if isinstance(rule_payload, dict):
-            rule_source_id = rule_payload.get("source_id")
-            rule_snapshot = self._decode_provenance_snapshot(
-                checks,
-                check_type="rule",
-                check_code="PSR_RESOLUTION",
-            )
-            rule_source = (
-                self._snapshot_source(rule_snapshot)
-                if rule_snapshot is not None
-                else (
-                    await self._fetch_source_details(
-                        str(rule_source_id),
-                        evaluation_id=evaluation_id,
-                    )
-                    if rule_source_id is not None
-                    else None
-                )
-            )
-            rule_provisions = (
-                self._snapshot_provisions(rule_snapshot)
-                if rule_snapshot is not None
-                else (
-                    await self._fetch_provision_summaries(
-                        str(rule_source_id),
-                        evaluation_id=evaluation_id,
-                    )
-                    if rule_source_id is not None
-                    else []
-                )
-            )
-            rule_trace = RuleProvenanceTrace(
-                source_id=rule_source_id,
-                source_short_title=self._source_payload_value(rule_source, "short_title"),
-                source_version_label=self._source_payload_value(rule_source, "version_label"),
-                source_publication_date=self._source_payload_value(
-                    rule_source,
-                    "publication_date",
-                ),
-                source_effective_date=self._source_payload_value(rule_source, "effective_date"),
-                snapshot_captured_at=self._snapshot_captured_at(rule_snapshot),
-                page_ref=rule_payload.get("page_ref"),
-                table_ref=rule_payload.get("table_ref"),
-                row_ref=rule_payload.get("row_ref"),
-                supporting_provisions=rule_provisions,
-            )
-
-        tariff_trace = None
-        if isinstance(tariff_payload, dict):
-            schedule_source_id = tariff_payload.get("schedule_source_id")
-            tariff_snapshot = self._decode_provenance_snapshot(
-                checks,
-                check_type="tariff",
-                check_code="TARIFF_RESOLUTION",
-            )
-            tariff_source = (
-                self._snapshot_source(tariff_snapshot)
-                if tariff_snapshot is not None
-                else (
-                    await self._fetch_source_details(
-                        str(schedule_source_id),
-                        evaluation_id=evaluation_id,
-                    )
-                    if schedule_source_id is not None
-                    else None
-                )
-            )
-            tariff_provisions = (
-                self._snapshot_provisions(tariff_snapshot)
-                if tariff_snapshot is not None
-                else (
-                    await self._fetch_provision_summaries(
-                        str(schedule_source_id),
-                        evaluation_id=evaluation_id,
-                    )
-                    if schedule_source_id is not None
-                    else []
-                )
-            )
-            tariff_trace = TariffProvenanceTrace(
-                schedule_source_id=schedule_source_id,
-                rate_source_id=tariff_payload.get("rate_source_id"),
-                source_short_title=self._source_payload_value(tariff_source, "short_title"),
-                source_version_label=self._source_payload_value(
-                    tariff_source,
-                    "version_label",
-                ),
-                source_publication_date=self._source_payload_value(
-                    tariff_source,
-                    "publication_date",
-                ),
-                source_effective_date=self._source_payload_value(
-                    tariff_source,
-                    "effective_date",
-                ),
-                snapshot_captured_at=self._snapshot_captured_at(tariff_snapshot),
-                line_page_ref=tariff_payload.get("line_page_ref"),
-                rate_page_ref=tariff_payload.get("rate_page_ref"),
-                table_ref=tariff_payload.get("table_ref"),
-                row_ref=tariff_payload.get("row_ref"),
-                supporting_provisions=tariff_provisions,
-            )
+        rule_trace = await self._build_rule_provenance_trace(
+            rule_payload,
+            checks=checks,
+            evaluation_id=evaluation_id,
+        )
+        tariff_trace = await self._build_tariff_provenance_trace(
+            tariff_payload,
+            checks=checks,
+            evaluation_id=evaluation_id,
+        )
 
         if rule_trace is None and tariff_trace is None:
             return None
         return DecisionProvenanceTrace(rule=rule_trace, tariff=tariff_trace)
+
+    async def _build_rule_provenance_trace(
+        self,
+        rule_payload: dict[str, Any] | None,
+        *,
+        checks: Sequence[EligibilityCheckResultResponse],
+        evaluation_id: str,
+    ) -> RuleProvenanceTrace | None:
+        """Build one rule provenance trace from a frozen snapshot or legacy live fallback."""
+
+        if not isinstance(rule_payload, dict):
+            return None
+
+        rule_snapshot = self._decode_provenance_snapshot(
+            checks,
+            check_type="rule",
+            check_code="PSR_RESOLUTION",
+        )
+        if isinstance(rule_snapshot, dict):
+            snapshot_payload = dict(rule_snapshot)
+            snapshot_payload.setdefault("source_id", rule_payload.get("source_id"))
+            snapshot_payload.setdefault("page_ref", rule_payload.get("page_ref"))
+            snapshot_payload.setdefault("table_ref", rule_payload.get("table_ref"))
+            snapshot_payload.setdefault("row_ref", rule_payload.get("row_ref"))
+            return RuleProvenanceTrace.model_validate(snapshot_payload)
+
+        source_id = rule_payload.get("source_id")
+        source = (
+            await self._fetch_source_details(
+                str(source_id),
+                evaluation_id=evaluation_id,
+            )
+            if source_id is not None
+            else None
+        )
+        provisions = (
+            await self._fetch_provision_summaries(
+                str(source_id),
+                evaluation_id=evaluation_id,
+            )
+            if source_id is not None
+            else []
+        )
+        return RuleProvenanceTrace.model_validate(
+            {
+                "source_id": source_id,
+                "short_title": self._source_field(source, "short_title"),
+                "version_label": self._source_field(source, "version_label"),
+                "publication_date": self._source_field(source, "publication_date"),
+                "effective_date": self._source_field(source, "effective_date"),
+                "page_ref": rule_payload.get("page_ref"),
+                "table_ref": rule_payload.get("table_ref"),
+                "row_ref": rule_payload.get("row_ref"),
+                "supporting_provisions": provisions,
+            }
+        )
+
+    async def _build_tariff_provenance_trace(
+        self,
+        tariff_payload: dict[str, Any] | None,
+        *,
+        checks: Sequence[EligibilityCheckResultResponse],
+        evaluation_id: str,
+    ) -> TariffProvenanceTrace | None:
+        """Build one tariff provenance trace from a frozen snapshot or legacy live fallback."""
+
+        if not isinstance(tariff_payload, dict):
+            return None
+
+        tariff_snapshot = self._decode_provenance_snapshot(
+            checks,
+            check_type="tariff",
+            check_code="TARIFF_RESOLUTION",
+        )
+        if isinstance(tariff_snapshot, dict):
+            snapshot_payload = dict(tariff_snapshot)
+            snapshot_payload.setdefault(
+                "schedule_source_id",
+                tariff_payload.get("schedule_source_id"),
+            )
+            snapshot_payload.setdefault(
+                "rate_source_id",
+                tariff_payload.get("rate_source_id"),
+            )
+            snapshot_payload.setdefault("line_page_ref", tariff_payload.get("line_page_ref"))
+            snapshot_payload.setdefault("rate_page_ref", tariff_payload.get("rate_page_ref"))
+            snapshot_payload.setdefault("table_ref", tariff_payload.get("table_ref"))
+            snapshot_payload.setdefault("row_ref", tariff_payload.get("row_ref"))
+            return TariffProvenanceTrace.model_validate(snapshot_payload)
+
+        schedule_source_id = tariff_payload.get("schedule_source_id")
+        rate_source_id = tariff_payload.get("rate_source_id")
+        source_lookup_id = schedule_source_id or rate_source_id
+        source = (
+            await self._fetch_source_details(
+                str(source_lookup_id),
+                evaluation_id=evaluation_id,
+            )
+            if source_lookup_id is not None
+            else None
+        )
+        provisions: list[ProvisionSummary] = []
+        if schedule_source_id is not None:
+            provisions.extend(
+                await self._fetch_provision_summaries(
+                    str(schedule_source_id),
+                    evaluation_id=evaluation_id,
+                )
+            )
+        if (
+            rate_source_id is not None
+            and str(rate_source_id) != str(schedule_source_id)
+        ):
+            provisions.extend(
+                await self._fetch_provision_summaries(
+                    str(rate_source_id),
+                    evaluation_id=evaluation_id,
+                )
+            )
+        return TariffProvenanceTrace.model_validate(
+            {
+                "schedule_source_id": schedule_source_id,
+                "rate_source_id": rate_source_id,
+                "short_title": self._source_field(source, "short_title"),
+                "version_label": self._source_field(source, "version_label"),
+                "publication_date": self._source_field(source, "publication_date"),
+                "effective_date": self._source_field(source, "effective_date"),
+                "line_page_ref": tariff_payload.get("line_page_ref"),
+                "rate_page_ref": tariff_payload.get("rate_page_ref"),
+                "table_ref": tariff_payload.get("table_ref"),
+                "row_ref": tariff_payload.get("row_ref"),
+                "supporting_provisions": provisions,
+            }
+        )
 
     def _decode_provenance_snapshot(
         self,
@@ -722,42 +845,12 @@ class AuditService:
         return None
 
     @staticmethod
-    def _snapshot_source_value(snapshot: dict[str, Any] | None, key: str) -> Any:
-        """Read one source-level field from a persisted provenance snapshot."""
-
-        if not isinstance(snapshot, dict):
-            return None
-        source = snapshot.get("source")
-        if not isinstance(source, dict):
-            return None
-        return source.get(key)
-
-    @staticmethod
-    def _snapshot_source(snapshot: dict[str, Any] | None) -> dict[str, Any] | None:
-        """Return the nested source payload from a persisted provenance snapshot."""
-
-        if not isinstance(snapshot, dict):
-            return None
-        source = snapshot.get("source")
-        if not isinstance(source, dict):
-            return None
-        return source
-
-    @staticmethod
-    def _source_payload_value(source: dict[str, Any] | None, key: str) -> Any:
+    def _source_field(source: dict[str, Any] | None, key: str) -> Any:
         """Read one source-level field from either persisted or live lookup payloads."""
 
         if not isinstance(source, dict):
             return None
         return source.get(key)
-
-    @staticmethod
-    def _snapshot_captured_at(snapshot: dict[str, Any] | None) -> Any:
-        """Return the snapshot capture timestamp when present."""
-
-        if not isinstance(snapshot, dict):
-            return None
-        return snapshot.get("captured_at")
 
     @staticmethod
     def _snapshot_provisions(snapshot: dict[str, Any] | None) -> list[ProvisionSummary]:

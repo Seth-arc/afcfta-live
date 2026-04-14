@@ -12,9 +12,6 @@ from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
-
-import app.core.cache as cache
-from app.config import get_settings
 from app.core.countries import V01_CORRIDORS
 from app.core.entity_keys import make_entity_key
 from app.core.enums import LegalOutcome
@@ -45,6 +42,8 @@ from app.services.general_origin_rules_service import GeneralRulesResult
 
 FAILURE_MESSAGES_TO_CODES = {message: code for code, message in FAILURE_CODES.items()}
 PATHWAY_RULE_TYPES = {"WO", "CTH", "CTSH", "VNM", "VA", "PROCESS"}
+MAX_PROVENANCE_PROVISIONS_PER_SOURCE = 5
+MAX_PROVENANCE_TEXT_EXCERPT_CHARS = 280
 
 _logger = logging.getLogger(__name__)
 
@@ -115,6 +114,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id: str | None = None
         self._last_pending_alert_specs: tuple[dict[str, Any], ...] = ()
         self._last_prepared_persistence: PreparedEvaluationPersistence | None = None
+        self._last_persistence_failure_detail: dict[str, Any] | None = None
 
     async def assess_case(
         self,
@@ -148,6 +148,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
         self._last_prepared_persistence = None
+        self._last_persistence_failure_detail = None
         replayable_request = await self._ensure_replayable_request(request)
         response = await self.assess(replayable_request)
         evaluation_id = self._require_persisted_evaluation_id(replayable_request.case_id)
@@ -168,6 +169,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
         self._last_prepared_persistence = None
+        self._last_persistence_failure_detail = None
         response = await self.assess_case(case_id, request)
         evaluation_id = self._require_persisted_evaluation_id(case_id)
         return InterfaceAssessmentResult(
@@ -186,6 +188,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
         self._last_prepared_persistence = None
+        self._last_persistence_failure_detail = None
         replayable_request = await self._ensure_replayable_request(request)
         response = await self.assess(replayable_request, persist_evaluation=False)
         return PreparedInterfaceAssessment(
@@ -207,6 +210,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
         self._last_prepared_persistence = None
+        self._last_persistence_failure_detail = None
         response = await self.assess_case(case_id, request, persist_evaluation=False)
         return PreparedInterfaceAssessment(
             response=response,
@@ -232,6 +236,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
         self._last_prepared_persistence = None
+        self._last_persistence_failure_detail = None
         response.audit_persisted = await self._persist_evaluation_if_possible(
             request=persistence.request,
             assessment_date=persistence.assessment_date,
@@ -259,6 +264,7 @@ class EligibilityService:
         self._last_persisted_evaluation_id = None
         self._last_pending_alert_specs = ()
         self._last_prepared_persistence = None
+        self._last_persistence_failure_detail = None
         started_at = perf_counter()
         assessment_date = date(request.year, 1, 1)
 
@@ -681,7 +687,8 @@ class EligibilityService:
         if self._last_persisted_evaluation_id is None:
             raise EvaluationPersistenceError(
                 "Interface assessment did not produce a replayable evaluation trail",
-                detail={"case_id": case_id, "reason": "evaluation_not_persisted"},
+                detail=self._last_persistence_failure_detail
+                or {"case_id": case_id, "reason": "evaluation_not_persisted"},
             )
         return self._last_persisted_evaluation_id
 
@@ -1136,116 +1143,308 @@ class EligibilityService:
     async def _attach_provenance_snapshots(
         self,
         audit_checks: list[dict[str, Any]],
-    ) -> None:
+    ) -> dict[str, Any] | None:
         """Attach immutable provenance snapshots to persisted summary checks.
 
-        Audit replay should remain stable even if backing source text is updated
-        later. We snapshot the source version metadata plus the provision text
-        used at decision time into the persisted JSON payload.
+        New replay-safe evaluations must freeze rule and tariff provenance before
+        the assessment leaves the request-scoped snapshot. When that cannot be
+        done, the evaluation may still be legally correct but it must not be
+        treated as replay-safe.
         """
 
-        if self.sources_repository is None:
-            return
-
         snapshot_cache: dict[str, dict[str, Any] | None] = {}
-        summary_targets = (
-            ("rule", "PSR_RESOLUTION", "psr_rule", "source_id"),
-            ("tariff", "TARIFF_RESOLUTION", "tariff_resolution", "schedule_source_id"),
+        captured_at = datetime.now(timezone.utc).isoformat()
+
+        rule_check = self._select_snapshot_check(
+            audit_checks,
+            check_type="rule",
+            check_code="PSR_RESOLUTION",
         )
-        for check_type, check_code, payload_key, source_id_key in summary_targets:
-            summary_check = next(
-                (
-                    check
-                    for check in audit_checks
-                    if check.get("check_type") == check_type and check.get("check_code") == check_code
-                ),
-                None,
+        rule_failure = await self._attach_rule_provenance_snapshot(
+            rule_check,
+            snapshot_cache=snapshot_cache,
+            captured_at=captured_at,
+        )
+        if rule_failure is not None:
+            return rule_failure
+
+        tariff_check = self._select_snapshot_check(
+            audit_checks,
+            check_type="tariff",
+            check_code="TARIFF_RESOLUTION",
+        )
+        tariff_failure = await self._attach_tariff_provenance_snapshot(
+            tariff_check,
+            snapshot_cache=snapshot_cache,
+            captured_at=captured_at,
+        )
+        if tariff_failure is not None:
+            return tariff_failure
+
+        return None
+
+    async def _attach_rule_provenance_snapshot(
+        self,
+        summary_check: Mapping[str, Any] | None,
+        *,
+        snapshot_cache: dict[str, dict[str, Any] | None],
+        captured_at: str,
+    ) -> dict[str, Any] | None:
+        """Freeze the rule provenance snapshot required for replay-safe persistence."""
+
+        if summary_check is None:
+            return None
+
+        details = summary_check.get("details_json")
+        if not isinstance(details, dict):
+            return None
+        if "provenance_snapshot" in details:
+            return None
+
+        payload = details.get("psr_rule")
+        if not isinstance(payload, Mapping):
+            return None
+
+        source_id = payload.get("source_id")
+        if source_id is None:
+            return self._provenance_failure_detail(
+                check_code="PSR_RESOLUTION",
+                reason="missing_source_id",
             )
-            if summary_check is None:
-                continue
 
-            details = summary_check.get("details_json")
-            if not isinstance(details, dict) or "provenance_snapshot" in details:
-                continue
+        source_snapshot = await self._load_source_snapshot(
+            str(source_id),
+            snapshot_cache=snapshot_cache,
+        )
+        if source_snapshot is None:
+            return self._provenance_failure_detail(
+                check_code="PSR_RESOLUTION",
+                reason="source_snapshot_missing",
+                source_id=str(source_id),
+            )
 
-            payload = details.get(payload_key)
-            if not isinstance(payload, dict):
-                continue
+        details["provenance_snapshot"] = {
+            "source_id": source_id,
+            "short_title": source_snapshot.get("short_title"),
+            "version_label": source_snapshot.get("version_label"),
+            "publication_date": source_snapshot.get("publication_date"),
+            "effective_date": source_snapshot.get("effective_date"),
+            "page_ref": payload.get("page_ref"),
+            "table_ref": payload.get("table_ref"),
+            "row_ref": payload.get("row_ref"),
+            "captured_at": captured_at,
+            "supporting_provisions": list(source_snapshot.get("supporting_provisions", [])),
+        }
+        return None
 
-            source_id = payload.get(source_id_key)
-            if source_id is None:
-                continue
+    async def _attach_tariff_provenance_snapshot(
+        self,
+        summary_check: Mapping[str, Any] | None,
+        *,
+        snapshot_cache: dict[str, dict[str, Any] | None],
+        captured_at: str,
+    ) -> dict[str, Any] | None:
+        """Freeze the tariff provenance snapshot required for replay-safe persistence."""
 
-            source_id_str = str(source_id)
-            if source_id_str not in snapshot_cache:
-                snapshot_cache[source_id_str] = await self._build_provenance_snapshot(
-                    source_id_str
+        if summary_check is None:
+            return None
+
+        details = summary_check.get("details_json")
+        if not isinstance(details, dict):
+            return None
+        if "provenance_snapshot" in details:
+            return None
+
+        payload = details.get("tariff_resolution")
+        if not isinstance(payload, Mapping):
+            return None
+
+        schedule_source_id = payload.get("schedule_source_id")
+        rate_source_id = payload.get("rate_source_id")
+        if schedule_source_id is None:
+            return self._provenance_failure_detail(
+                check_code="TARIFF_RESOLUTION",
+                reason="missing_schedule_source_id",
+            )
+        if rate_source_id is None:
+            return self._provenance_failure_detail(
+                check_code="TARIFF_RESOLUTION",
+                reason="missing_rate_source_id",
+                source_id=str(schedule_source_id),
+            )
+
+        schedule_snapshot = await self._load_source_snapshot(
+            str(schedule_source_id),
+            snapshot_cache=snapshot_cache,
+        )
+        if schedule_snapshot is None:
+            return self._provenance_failure_detail(
+                check_code="TARIFF_RESOLUTION",
+                reason="schedule_source_snapshot_missing",
+                source_id=str(schedule_source_id),
+            )
+
+        supporting_provisions = list(schedule_snapshot.get("supporting_provisions", []))
+        if str(rate_source_id) != str(schedule_source_id):
+            rate_snapshot = await self._load_source_snapshot(
+                str(rate_source_id),
+                snapshot_cache=snapshot_cache,
+            )
+            if rate_snapshot is None:
+                return self._provenance_failure_detail(
+                    check_code="TARIFF_RESOLUTION",
+                    reason="rate_source_snapshot_missing",
+                    source_id=str(rate_source_id),
                 )
+            supporting_provisions.extend(rate_snapshot.get("supporting_provisions", []))
 
-            snapshot = snapshot_cache[source_id_str]
-            if snapshot is not None:
-                details["provenance_snapshot"] = snapshot
+        details["provenance_snapshot"] = {
+            "schedule_source_id": schedule_source_id,
+            "rate_source_id": rate_source_id,
+            "short_title": schedule_snapshot.get("short_title"),
+            "version_label": schedule_snapshot.get("version_label"),
+            "publication_date": schedule_snapshot.get("publication_date"),
+            "effective_date": schedule_snapshot.get("effective_date"),
+            "line_page_ref": payload.get("line_page_ref"),
+            "rate_page_ref": payload.get("rate_page_ref"),
+            "table_ref": payload.get("table_ref"),
+            "row_ref": payload.get("row_ref"),
+            "captured_at": captured_at,
+            "supporting_provisions": supporting_provisions,
+        }
+        return None
 
-    async def _build_provenance_snapshot(self, source_id: str) -> dict[str, Any] | None:
-        """Return one request-stamped provenance snapshot, caching the static payload."""
+    async def _load_source_snapshot(
+        self,
+        source_id: str,
+        *,
+        snapshot_cache: dict[str, dict[str, Any] | None],
+    ) -> dict[str, Any] | None:
+        """Load and normalize one thin provenance snapshot for a source."""
 
-        settings = get_settings()
-        cache_key = ("persisted-provenance-snapshot", source_id)
-        static_snapshot: dict[str, Any] | None = None
-        if settings.CACHE_STATIC_LOOKUPS:
-            hit, cached = cache.get(cache.provenance_store, cache_key)
-            if hit:
-                static_snapshot = cached
+        if source_id in snapshot_cache:
+            return snapshot_cache[source_id]
 
-        if static_snapshot is None:
-            try:
-                raw_snapshot = await self.sources_repository.get_source_snapshot(source_id)
-            except Exception:
-                raw_snapshot = None
-            if raw_snapshot is None:
-                return None
-            static_snapshot = self._normalize_provenance_snapshot(raw_snapshot)
-            if settings.CACHE_STATIC_LOOKUPS:
-                cache.put(
-                    cache.provenance_store,
-                    cache_key,
-                    static_snapshot,
-                    settings.CACHE_TTL_SECONDS,
-                )
+        if self.sources_repository is None:
+            snapshot_cache[source_id] = None
+            return None
 
+        try:
+            raw_snapshot = await self.sources_repository.get_source_snapshot(source_id)
+        except Exception:
+            raw_snapshot = None
+
+        normalized = (
+            self._normalize_source_snapshot(raw_snapshot)
+            if isinstance(raw_snapshot, Mapping)
+            else None
+        )
+        snapshot_cache[source_id] = normalized
+        return normalized
+
+    @staticmethod
+    def _normalize_source_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Normalize one repository source snapshot into the persisted thin shape."""
+
+        source = snapshot.get("source")
+        if not isinstance(source, Mapping):
+            return None
+
+        normalized_provisions = EligibilityService._normalize_supporting_provisions(
+            snapshot.get("supporting_provisions")
+        )
         return {
-            "captured_at": datetime.now(timezone.utc).isoformat(),
-            **static_snapshot,
+            "source_id": source.get("source_id"),
+            "short_title": source.get("short_title"),
+            "version_label": source.get("version_label"),
+            "publication_date": source.get("publication_date"),
+            "effective_date": source.get("effective_date"),
+            "supporting_provisions": normalized_provisions,
         }
 
     @staticmethod
-    def _normalize_provenance_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
-        """Normalize the static portion of one repository provenance snapshot."""
+    def _normalize_supporting_provisions(provisions: Any) -> list[dict[str, Any]]:
+        """Bound and normalize provision summaries for persisted provenance snapshots."""
 
-        source = snapshot.get("source")
-        provisions = snapshot.get("supporting_provisions")
-        source_payload = dict(source) if isinstance(source, Mapping) else {}
-        provision_payloads = (
-            [
-                jsonable_encoder(dict(provision))
-                for provision in provisions
-                if isinstance(provision, Mapping)
-            ]
-            if isinstance(provisions, Sequence)
-            else []
-        )
-        return {
-            "source": jsonable_encoder(
+        if not isinstance(provisions, Sequence):
+            return []
+
+        normalized_rows: list[dict[str, Any]] = []
+        for provision in provisions:
+            if not isinstance(provision, Mapping):
+                continue
+            payload = dict(provision)
+            normalized_rows.append(
                 {
-                    "source_id": source_payload.get("source_id"),
-                    "short_title": source_payload.get("short_title"),
-                    "version_label": source_payload.get("version_label"),
-                    "publication_date": source_payload.get("publication_date"),
-                    "effective_date": source_payload.get("effective_date"),
+                    "provision_id": payload.get("provision_id"),
+                    "source_id": payload.get("source_id"),
+                    "article_label": payload.get("article_label") or payload.get("article_ref"),
+                    "clause_label": (
+                        payload.get("clause_label")
+                        or payload.get("subsection_ref")
+                        or payload.get("section_ref")
+                        or payload.get("annex_ref")
+                        or payload.get("appendix_ref")
+                    ),
+                    "topic_primary": payload.get("topic_primary"),
+                    "text_excerpt": EligibilityService._truncate_provision_excerpt(
+                        payload.get("text_excerpt")
+                        or payload.get("provision_text_verbatim")
+                        or payload.get("provision_text_normalized")
+                    ),
+                    "_authority_weight": float(payload.get("authority_weight") or 0),
                 }
-            ),
-            "supporting_provisions": provision_payloads,
+            )
+
+        normalized_rows.sort(
+            key=lambda item: (
+                str(item.get("source_id") or ""),
+                -item.get("_authority_weight", 0),
+                str(item.get("article_label") or ""),
+                str(item.get("clause_label") or ""),
+                str(item.get("provision_id") or ""),
+            )
+        )
+        bounded_rows: list[dict[str, Any]] = []
+        per_source_counts: dict[str, int] = {}
+        for item in normalized_rows:
+            item.pop("_authority_weight", None)
+            source_key = str(item.get("source_id") or "")
+            current_count = per_source_counts.get(source_key, 0)
+            if current_count >= MAX_PROVENANCE_PROVISIONS_PER_SOURCE:
+                continue
+            per_source_counts[source_key] = current_count + 1
+            bounded_rows.append(item)
+        return bounded_rows
+
+    @staticmethod
+    def _truncate_provision_excerpt(value: Any) -> str | None:
+        """Trim one supporting provision text field to the replay snapshot budget."""
+
+        if value is None:
+            return None
+        text = str(value).strip()
+        if len(text) <= MAX_PROVENANCE_TEXT_EXCERPT_CHARS:
+            return text
+        return text[: MAX_PROVENANCE_TEXT_EXCERPT_CHARS - 3].rstrip() + "..."
+
+    @staticmethod
+    def _provenance_failure_detail(
+        *,
+        check_code: str,
+        reason: str,
+        source_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Build one structured persistence-failure payload for replay safety."""
+
+        detail = {
+            "reason": "provenance_snapshot_unavailable",
+            "check_code": check_code,
+            "failure_stage": reason,
         }
+        if source_id is not None:
+            detail["source_id"] = source_id
+        return detail
 
     def _build_decision_snapshot(
         self,
@@ -1366,6 +1565,20 @@ class EligibilityService:
                 }
             return None
 
+        if check_type == "rule" and check_code == "PSR_RESOLUTION":
+            psr_rule = details.get("psr_rule")
+            payload: dict[str, Any] = {
+                "psr_rule": dict(psr_rule) if isinstance(psr_rule, Mapping) else None,
+            }
+            if "applicability_type" in details:
+                payload["applicability_type"] = details.get("applicability_type")
+            provenance_snapshot = EligibilityService._compact_provenance_snapshot(
+                details.get("provenance_snapshot")
+            )
+            if provenance_snapshot is not None:
+                payload["provenance_snapshot"] = provenance_snapshot
+            return payload
+
         if check_type == "pathway" and check_code == "PATHWAY_EVALUATION":
             pathway = details.get("pathway")
             return {
@@ -1392,7 +1605,7 @@ class EligibilityService:
         if check_type == "tariff" and check_code == "TARIFF_RESOLUTION":
             tariff_resolution = details.get("tariff_resolution")
             if isinstance(tariff_resolution, Mapping):
-                return {
+                payload = {
                     "tariff_resolution": {
                         "preferential_rate": tariff_resolution.get("preferential_rate"),
                         "base_rate": tariff_resolution.get("base_rate"),
@@ -1409,12 +1622,106 @@ class EligibilityService:
                         "used_fallback_rate": tariff_resolution.get("used_fallback_rate", False),
                     }
                 }
+                provenance_snapshot = EligibilityService._compact_provenance_snapshot(
+                    details.get("provenance_snapshot")
+                )
+                if provenance_snapshot is not None:
+                    payload["provenance_snapshot"] = provenance_snapshot
+                return payload
             tariff_outcome = details.get("tariff_outcome")
             if isinstance(tariff_outcome, Mapping):
-                return {"tariff_outcome": dict(tariff_outcome)}
+                payload = {"tariff_outcome": dict(tariff_outcome)}
+                provenance_snapshot = EligibilityService._compact_provenance_snapshot(
+                    details.get("provenance_snapshot")
+                )
+                if provenance_snapshot is not None:
+                    payload["provenance_snapshot"] = provenance_snapshot
+                return payload
             return None
 
         return dict(details)
+
+    @staticmethod
+    def _compact_provenance_snapshot(snapshot: Any) -> dict[str, Any] | None:
+        """Persist only the bounded provenance snapshot fields needed for replay."""
+
+        if not isinstance(snapshot, Mapping):
+            return None
+
+        supporting_provisions = EligibilityService._compact_supporting_provisions(
+            snapshot.get("supporting_provisions")
+        )
+        if "schedule_source_id" in snapshot or "rate_source_id" in snapshot:
+            return {
+                "schedule_source_id": snapshot.get("schedule_source_id"),
+                "rate_source_id": snapshot.get("rate_source_id"),
+                "short_title": snapshot.get("short_title"),
+                "version_label": snapshot.get("version_label"),
+                "publication_date": snapshot.get("publication_date"),
+                "effective_date": snapshot.get("effective_date"),
+                "line_page_ref": snapshot.get("line_page_ref"),
+                "rate_page_ref": snapshot.get("rate_page_ref"),
+                "table_ref": snapshot.get("table_ref"),
+                "row_ref": snapshot.get("row_ref"),
+                "captured_at": snapshot.get("captured_at"),
+                "supporting_provisions": supporting_provisions,
+            }
+
+        return {
+            "source_id": snapshot.get("source_id"),
+            "short_title": snapshot.get("short_title"),
+            "version_label": snapshot.get("version_label"),
+            "publication_date": snapshot.get("publication_date"),
+            "effective_date": snapshot.get("effective_date"),
+            "page_ref": snapshot.get("page_ref"),
+            "table_ref": snapshot.get("table_ref"),
+            "row_ref": snapshot.get("row_ref"),
+            "captured_at": snapshot.get("captured_at"),
+            "supporting_provisions": supporting_provisions,
+        }
+
+    @staticmethod
+    def _compact_supporting_provisions(provisions: Any) -> list[dict[str, Any]]:
+        """Trim supporting provisions to the thin persisted shape while preserving order."""
+
+        if not isinstance(provisions, Sequence):
+            return []
+
+        compacted_rows: list[dict[str, Any]] = []
+        per_source_counts: dict[str, int] = {}
+        for provision in provisions:
+            if not isinstance(provision, Mapping):
+                continue
+
+            payload = dict(provision)
+            source_key = str(payload.get("source_id") or "")
+            current_count = per_source_counts.get(source_key, 0)
+            if current_count >= MAX_PROVENANCE_PROVISIONS_PER_SOURCE:
+                continue
+
+            per_source_counts[source_key] = current_count + 1
+            compacted_rows.append(
+                {
+                    "provision_id": payload.get("provision_id"),
+                    "source_id": payload.get("source_id"),
+                    "article_label": payload.get("article_label") or payload.get("article_ref"),
+                    "clause_label": (
+                        payload.get("clause_label")
+                        or payload.get("subsection_ref")
+                        or payload.get("section_ref")
+                        or payload.get("annex_ref")
+                        or payload.get("appendix_ref")
+                    ),
+                    "topic_primary": payload.get("topic_primary"),
+                    "text_excerpt": EligibilityService._truncate_provision_excerpt(
+                        payload.get("text_excerpt")
+                        or payload.get("provision_text_verbatim")
+                        or payload.get("provision_text_normalized")
+                    ),
+                }
+            )
+
+        return compacted_rows
 
     def _select_selected_pathway_check(
         self,
@@ -1482,8 +1789,6 @@ class EligibilityService:
         }
         try:
             mutable_checks = [dict(check) for check in audit_checks]
-            # Provenance snapshots are hydrated lazily by AuditService so the assessment
-            # path does not block on extra source/provision reads before persisting.
             evaluation_data["decision_snapshot_json"] = self._build_decision_snapshot(
                 mutable_checks,
                 selected_pathway_code=response.pathway_used,
@@ -1508,6 +1813,7 @@ class EligibilityService:
             self._last_persisted_evaluation_id = (
                 str(evaluation_id) if evaluation_id is not None else None
             )
+            self._last_persistence_failure_detail = None
             if isinstance(persisted, Mapping) and evaluation_id is None:
                 return False
             return True
@@ -1519,6 +1825,21 @@ class EligibilityService:
                 extra={"case_id": request.case_id, "hs6_code": response.hs6_code},
             )
             return False
+
+    async def _prepare_replay_persistence_checks(
+        self,
+        audit_checks: Sequence[Mapping[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        """Clone one assessment trace and attach replay-safe provenance snapshots."""
+
+        cloned_checks = jsonable_encoder(list(audit_checks))
+        mutable_checks = [
+            dict(check)
+            for check in cloned_checks
+            if isinstance(check, Mapping)
+        ]
+        failure_detail = await self._attach_provenance_snapshots(mutable_checks)
+        return mutable_checks, failure_detail
 
     async def _persist_or_prepare_evaluation(
         self,
@@ -1533,6 +1854,24 @@ class EligibilityService:
     ) -> bool:
         """Persist immediately or capture a compact replay payload for detached writes."""
 
+        mutable_checks, failure_detail = await self._prepare_replay_persistence_checks(
+            audit_checks
+        )
+        if failure_detail is not None:
+            failure_detail = {
+                "case_id": request.case_id,
+                **failure_detail,
+            }
+            self._last_persistence_failure_detail = failure_detail
+            self._last_persisted_evaluation_id = None
+            self._last_prepared_persistence = None
+            if not persist_evaluation:
+                raise EvaluationPersistenceError(
+                    "Interface assessment could not freeze replay-safe provenance",
+                    detail=failure_detail,
+                )
+            return False
+
         if persist_evaluation:
             self._last_prepared_persistence = None
             return await self._persist_evaluation_if_possible(
@@ -1541,16 +1880,17 @@ class EligibilityService:
                 rule_bundle=rule_bundle,
                 response=response,
                 pathway_used=pathway_used,
-                audit_checks=audit_checks,
+                audit_checks=mutable_checks,
             )
 
         self._last_persisted_evaluation_id = None
+        self._last_persistence_failure_detail = None
         self._last_prepared_persistence = PreparedEvaluationPersistence(
             request=request.model_copy(deep=True),
             assessment_date=assessment_date,
             rule_bundle=rule_bundle,
             pathway_used=pathway_used,
-            audit_checks=tuple(dict(check) for check in audit_checks),
+            audit_checks=tuple(dict(check) for check in mutable_checks),
         )
         return False
 

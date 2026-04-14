@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+import json
 import logging
 from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
 
+import app.core.cache as cache
 from app.core.entity_keys import make_entity_key
 from app.core.enums import AuthorityTierEnum, InstrumentTypeEnum, SourceTypeEnum
 from app.db.base import get_async_session_factory
@@ -1331,8 +1333,19 @@ async def test_audit_trail_rule_provenance_supporting_provisions_are_populated(
 
     for prov in rule_provisions:
         assert "provision_id" in prov
-        assert "instrument_name" in prov
+        assert "source_id" in prov
+        assert "article_label" in prov
+        assert "clause_label" in prov
         assert "topic_primary" in prov
+        assert "text_excerpt" in prov
+        assert set(prov) == {
+            "provision_id",
+            "source_id",
+            "article_label",
+            "clause_label",
+            "topic_primary",
+            "text_excerpt",
+        }
         # Each provision_id must be reachable via the provisions API
         prov_response = await async_client.get(f"/api/v1/provisions/{prov['provision_id']}")
         assert prov_response.status_code == 200, (
@@ -1341,17 +1354,123 @@ async def test_audit_trail_rule_provenance_supporting_provisions_are_populated(
         )
         prov_body = prov_response.json()
         assert prov_body["provision_id"] == prov["provision_id"]
-        assert prov_body["instrument_name"] == prov["instrument_name"]
+        assert prov_body["source_id"] == prov["source_id"]
+        assert prov_body["article_ref"] == prov["article_label"]
         assert prov_body["topic_primary"] == prov["topic_primary"]
+        excerpt_prefix = prov["text_excerpt"].removesuffix("...")
+        assert prov_body["provision_text_verbatim"].startswith(excerpt_prefix)
 
     tariff_prov = provenance.get("tariff")
     if tariff_prov is not None:
         assert "supporting_provisions" in tariff_prov
         for prov in tariff_prov["supporting_provisions"]:
             assert "provision_id" in prov
+            assert set(prov) == {
+                "provision_id",
+                "source_id",
+                "article_label",
+                "clause_label",
+                "topic_primary",
+                "text_excerpt",
+            }
             prov_response = await async_client.get(f"/api/v1/provisions/{prov['provision_id']}")
             assert prov_response.status_code == 200, prov_response.text
             assert prov_response.json()["provision_id"] == prov["provision_id"]
+
+
+@pytest.mark.asyncio
+async def test_new_evaluation_replay_provenance_is_stable_after_live_source_mutation(
+    async_client: AsyncClient,
+) -> None:
+    """New persisted evaluations must replay the exact same provenance after live source edits."""
+
+    candidate = _require_candidate(
+        await _select_supported_candidate(
+            require_component_types=("WO", "CTH", "VNM"),
+            preferred_hs6_codes=("110311",),
+            preferred_corridors=(("GHA", "NGA"), ("CMR", "NGA")),
+        ),
+        "No supported candidate for provenance snapshot immutability test.",
+    )
+    facts = _best_effort_pass_facts(candidate)
+
+    assessment_response = await async_client.post(
+        "/api/v1/assessments",
+        json=_assessment_payload(
+            hs6_code=candidate["hs6_code"],
+            exporter=candidate["exporter"],
+            importer=candidate["importer"],
+            facts=facts,
+        ),
+    )
+    assert assessment_response.status_code == 200, assessment_response.text
+    _, evaluation_id = _assert_assessment_replay_headers(assessment_response)
+
+    trail_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert trail_response.status_code == 200, trail_response.text
+    original_trail = trail_response.json()
+    original_provenance = original_trail["final_decision"]["provenance"]
+    assert original_provenance is not None
+
+    source_ids: set[str] = set()
+    provision_ids: set[str] = set()
+    rule_prov = original_provenance.get("rule") or {}
+    tariff_prov = original_provenance.get("tariff") or {}
+
+    for source_id in (
+        rule_prov.get("source_id"),
+        tariff_prov.get("schedule_source_id"),
+        tariff_prov.get("rate_source_id"),
+    ):
+        if source_id:
+            source_ids.add(str(source_id))
+
+    for prov in list(rule_prov.get("supporting_provisions") or []) + list(
+        tariff_prov.get("supporting_provisions") or []
+    ):
+        provision_id = prov.get("provision_id")
+        if provision_id:
+            provision_ids.add(str(provision_id))
+
+    assert source_ids
+    assert provision_ids
+
+    session_factory = get_async_session_factory()
+    async with session_factory() as session:
+        repository = SourcesRepository(session)
+        for source_id in source_ids:
+            updated = await repository.update_source(
+                source_id,
+                {
+                    "short_title": f"MUTATED-{source_id[-6:]}",
+                    "version_label": "mutated-v2",
+                    "publication_date": date(2026, 1, 1),
+                    "effective_date": date(2026, 1, 1),
+                },
+            )
+            assert updated is not None
+        for provision_id in provision_ids:
+            updated = await repository.update_provision(
+                provision_id,
+                {
+                    "article_ref": "Art. 99",
+                    "annex_ref": "Mutated Clause",
+                    "provision_text_verbatim": f"Mutated live provision text {provision_id}",
+                    "provision_text_normalized": f"mutated live provision text {provision_id}",
+                },
+            )
+            assert updated is not None
+        await session.commit()
+    cache.clear_all()
+
+    mutated_response = await async_client.get(f"/api/v1/audit/evaluations/{evaluation_id}")
+    assert mutated_response.status_code == 200, mutated_response.text
+    mutated_trail = mutated_response.json()
+
+    assert json.dumps(mutated_trail["final_decision"]["provenance"], sort_keys=True) == json.dumps(
+        original_provenance,
+        sort_keys=True,
+    )
 
 
 @pytest.mark.asyncio

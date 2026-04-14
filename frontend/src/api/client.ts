@@ -1,7 +1,7 @@
 /**
- * AIS API client.
+ * Browser-safe AIS API client.
  *
- * - Forwards X-API-Key from configuration.
+ * - Uses the same-origin `/web/api/` boundary only.
  * - Captures X-AIS-Case-Id, X-AIS-Evaluation-Id, X-AIS-Audit-URL response headers.
  * - Sends X-Request-ID on every request for tracing.
  * - Parses error responses into typed AisApiError objects.
@@ -22,12 +22,10 @@ import { AisApiError, parseErrorResponse } from "./errors";
 
 export interface ApiClientConfig {
   baseUrl: string;
-  apiKey: string;
 }
 
 let _config: ApiClientConfig = {
-  baseUrl: "",
-  apiKey: "",
+  baseUrl: "/web/api",
 };
 
 export function configureApiClient(config: ApiClientConfig): void {
@@ -51,26 +49,29 @@ interface ApiResponse<T> {
   replayHeaders: ReplayHeaders;
 }
 
+function resolveUrl(path: string): string {
+  const baseUrl = _config.baseUrl.replace(/\/+$/, "");
+  return `${baseUrl}${path}`;
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<ApiResponse<T>> {
-  const url = `${_config.baseUrl}${path}`;
-
-  const apiKey = _config.apiKey || "dev-local-key";
+  const url = resolveUrl(path);
 
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     "X-Request-ID": generateRequestId(),
-    "X-API-Key": apiKey,
   };
-
-  console.debug("[AIS client]", method, path, "apiKey present:", !!apiKey);
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
 
   const response = await fetch(url, {
     method,
     headers,
+    credentials: "same-origin",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -94,7 +95,7 @@ async function request<T>(
 // ---------------------------------------------------------------------------
 
 /**
- * POST /api/v1/assessments
+ * POST /web/api/assessments
  * Runs the full deterministic eligibility engine.
  */
 export async function postAssessment(
@@ -102,13 +103,13 @@ export async function postAssessment(
 ): Promise<ApiResponse<EligibilityAssessmentResponse>> {
   return request<EligibilityAssessmentResponse>(
     "POST",
-    "/api/v1/assessments",
+    "/assessments",
     assessmentRequest,
   );
 }
 
 /**
- * POST /api/v1/assistant/assess
+ * POST /web/api/assistant/assess
  * Submits a natural-language query to the NIM assistant.
  */
 export async function postAssistantQuery(
@@ -116,56 +117,22 @@ export async function postAssistantQuery(
 ): Promise<ApiResponse<AssistantResponseEnvelope>> {
   return request<AssistantResponseEnvelope>(
     "POST",
-    "/api/v1/assistant/assess",
+    "/assistant/assess",
     assistantRequest,
   );
 }
 
 /**
- * GET /api/v1/audit/evaluations/{evaluationId}
+ * GET /web/api/audit/evaluations/{evaluationId}
  * Reconstructs the stored decision trace for one persisted evaluation.
  */
 export async function getAuditTrail(
   evaluationId: string,
 ): Promise<ApiResponse<unknown>> {
-  return request<unknown>("GET", `/api/v1/audit/evaluations/${encodeURIComponent(evaluationId)}`);
-}
-
-/**
- * GET /api/v1/rules/{hs6Code}
- * Resolves the governing product-specific rule bundle for a product.
- */
-export async function getRules(
-  hs6Code: string,
-  hsVersion?: string,
-  asOfDate?: string,
-): Promise<ApiResponse<unknown>> {
-  const params = new URLSearchParams();
-  if (hsVersion) params.set("hs_version", hsVersion);
-  if (asOfDate) params.set("as_of_date", asOfDate);
-  const qs = params.toString();
-  return request<unknown>("GET", `/api/v1/rules/${encodeURIComponent(hs6Code)}${qs ? `?${qs}` : ""}`);
-}
-
-/**
- * GET /api/v1/tariffs
- * Returns the tariff outcome for a corridor, HS6 code, and year.
- */
-export async function getTariffs(params: {
-  exporter: string;
-  importer: string;
-  hs6: string;
-  year: number;
-  hs_version?: string;
-}): Promise<ApiResponse<unknown>> {
-  const searchParams = new URLSearchParams({
-    exporter: params.exporter,
-    importer: params.importer,
-    hs6: params.hs6,
-    year: String(params.year),
-  });
-  if (params.hs_version) searchParams.set("hs_version", params.hs_version);
-  return request<unknown>("GET", `/api/v1/tariffs?${searchParams.toString()}`);
+  return request<unknown>(
+    "GET",
+    `/audit/evaluations/${encodeURIComponent(evaluationId)}`,
+  );
 }
 
 export { AisApiError };

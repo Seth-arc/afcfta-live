@@ -590,26 +590,60 @@ boundary now fail with HTTP 422 before any NIM call is attempted.
 Do not route public or trader-facing traffic until all section 8 conditions are met,
 plus:
 
-### 9.1 API key rotation is operational
+### 9.1 Browser traffic goes through the same-origin `/web/api/` boundary
+
+The trader UI must use the browser-safe `/web/api/` route family only. Browser
+requests must never send `X-API-Key`, `API_AUTH_KEY`, or any equivalent reusable
+backend secret. The `/api/v1/` family remains for machine and operator clients.
+This change removes browser secret exposure; it does not yet replace the later
+session and CSRF controls required for a launch-grade public user boundary.
+
+Local development must keep that same boundary:
+
+- run the API on `http://localhost:8000`
+- run the Vite dev server from `frontend/`
+- use the `/web/api` Vite proxy; do not add `VITE_API_KEY` or a fallback browser key
+
+Local developer warning:
+
+- do not leave the Docker API container published on `8000` while also trying to
+  run `python -m uvicorn app.main:app` for trader UI work
+- if `http://localhost:5173/web/api/assistant/assess` returns `404` while the
+  checked-in app clearly mounts `/web/api/assistant/assess`, first check what owns
+  port `8000`
+- a stale container such as `afcfta-live-api-1` can satisfy the Vite proxy and
+  return FastAPI `{"detail":"Not Found"}` from an older app state
+- the local fix is operational, not code-level: stop the container that owns
+  `8000`, confirm the port is free, then start the repo's backend explicitly with
+  `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload`
+
+Before exposing the UI, verify:
+
+1. the built frontend bundle contains zero hits for `X-API-Key`, `API_AUTH_KEY`,
+   `VITE_API_KEY`, and `dev-local-key`
+2. browser network requests target `/web/api/*`
+3. replay links returned to the UI point to `/web/api/audit/evaluations/{id}`
+
+### 9.2 API key rotation is operational
 
 The API key is a single shared secret (`API_AUTH_KEY`). Before public exposure,
 confirm you have a process to rotate it without downtime (update `.env.prod` and
 restart workers).
 
-### 9.2 Assessment rate limits match expected trader volume
+### 9.3 Assessment rate limits match expected trader volume
 
 `RATE_LIMIT_ASSESSMENTS_MAX_REQUESTS=10` per 60-second window is the default. Measure
 actual peak per-user request rates from any pilot or staging observation and set the
 limit explicitly before public launch.
 
-### 9.3 Log aggregation is capturing structured request logs
+### 9.4 Log aggregation is capturing structured request logs
 
 The API emits JSON-structured request logs with `request_id`,
 `authenticated_principal`, `method`, `route`, `status_code`, and `latency_ms`.
 Confirm the log pipeline is ingesting those fields before public traffic arrives
 so you have a baseline for latency and error-rate alerting.
 
-### 9.4 Assessment responses are verified against golden cases
+### 9.5 Assessment responses are verified against golden cases
 
 Run the locked golden corpus through the live API and confirm all 15 cases pass.
 The current acceptance slice in `tests/fixtures/golden_cases.py` covers 9 distinct
@@ -621,12 +655,12 @@ python -m pytest tests/integration/test_golden_path.py -v
 
 All 15 must return the expected `eligible` value and `pathway_used`.
 
-### 9.5 Database backup confirmed
+### 9.6 Database backup confirmed
 
 Confirm a database backup was taken and the restore procedure has been tested at
 least once in staging before accepting trader submissions.
 
-### 9.6 Coverage gaps noted in testing.md are not on the critical path
+### 9.7 Coverage gaps noted in testing.md are not on the critical path
 
 Review [docs/dev/testing.md](testing.md) for the list of repository paths only
 reachable with a live stack that are not yet covered by integration tests.

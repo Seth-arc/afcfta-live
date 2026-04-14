@@ -2,8 +2,7 @@ import { configureApiClient } from "./api/client";
 import { AssessPage } from "./pages/AssessPage";
 
 configureApiClient({
-  baseUrl: "",
-  apiKey: import.meta.env.VITE_API_KEY ?? "",
+  baseUrl: "/web/api",
 });
 
 export function App() {

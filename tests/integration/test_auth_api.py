@@ -92,6 +92,7 @@ async def test_health_endpoint_remains_unauthenticated(
         ("post", f"/api/v1/cases/{uuid4()}/assess", {"json": _valid_case_assessment_payload()}),
         ("get", f"/api/v1/cases/{uuid4()}/latest", {}),
         ("post", "/api/v1/assessments", {"json": _valid_assessment_payload()}),
+        ("post", "/api/v1/assistant/assess", {"json": {"user_input": "Can I export HS 110311?"}}),
         (
             "post",
             f"/api/v1/assessments/cases/{uuid4()}",

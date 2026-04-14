@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from app.services.nim.intake_service import IntakeService
     from app.services.nim.rendering_service import RenderingService
 
-from fastapi import BackgroundTasks, Depends, Request
+from fastapi import BackgroundTasks, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -48,6 +48,9 @@ from app.services.tariff_resolution_service import TariffResolutionService
 from app.schemas.assessments import CaseAssessmentRequest, EligibilityRequest
 
 logger = logging.getLogger(__name__)
+
+_MACHINE_AUDIT_URL_PREFIX = "/api/v1/audit/evaluations/"
+_BROWSER_AUDIT_URL_PREFIX = "/web/api/audit/evaluations/"
 
 
 @dataclass(frozen=True)
@@ -208,6 +211,35 @@ async def require_authenticated_principal(
         auth_scheme=principal.auth_scheme,
     )
     return principal
+
+
+def rewrite_browser_audit_url(audit_url: str | None) -> str | None:
+    """Translate machine audit links into the browser-safe BFF route family."""
+
+    if audit_url is None:
+        return None
+    if audit_url.startswith(_MACHINE_AUDIT_URL_PREFIX):
+        return audit_url.replace(_MACHINE_AUDIT_URL_PREFIX, _BROWSER_AUDIT_URL_PREFIX, 1)
+    return audit_url
+
+
+def scrub_browser_response_auth_headers(
+    response: Response,
+    *,
+    settings: Settings,
+) -> None:
+    """Remove internal auth headers before a browser-facing response is returned."""
+
+    for header_name in (
+        settings.API_AUTH_HEADER_NAME,
+        settings.METRICS_AUTH_HEADER_NAME,
+        "Authorization",
+        "Proxy-Authorization",
+    ):
+        try:
+            del response.headers[header_name]
+        except KeyError:
+            continue
 
 
 def _rate_limit_policy(policy_name: str, settings: Settings) -> RateLimitPolicy:

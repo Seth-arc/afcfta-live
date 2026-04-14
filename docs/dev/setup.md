@@ -269,6 +269,26 @@ python -m pytest tests/ -v
 python -m uvicorn app.main:app --reload
 ```
 
+If you are doing trader UI work through the Vite `/web/api` proxy, make sure the
+backend listening on `8000` is this repo's local `uvicorn` process, not a Docker
+container from a previous run. A container such as `afcfta-live-api-1` can still
+publish `0.0.0.0:8000->8000/tcp`, which makes the browser and Vite proxy talk to
+the wrong API process and surface `POST /web/api/assistant/assess` as `404` even
+though the current source mounts that route.
+
+If that happens:
+
+```bash
+docker ps --format "table {{.ID}}\t{{.Image}}\t{{.Ports}}\t{{.Names}}" | findstr "8000"
+docker stop afcfta-live-api-1
+netstat -aon | findstr ":8000"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Pass condition: `netstat -aon | findstr ":8000"` shows only the local Python
+process you just started, and both `http://127.0.0.1:8000/web/api/assistant/assess`
+and `http://localhost:5173/web/api/assistant/assess` return non-`404` responses.
+
 ## Production Containers
 
 Use the production artifacts when you want a containerized runtime closer to staging or production:
@@ -408,6 +428,31 @@ Expected response:
 ```
 
 ## Troubleshooting
+
+## Trader UI Returns 404 On `/web/api/*`
+
+If the browser shows `POST http://localhost:5173/web/api/assistant/assess 404`,
+separate the proxy path from the backend path:
+
+1. Verify the current app imports the browser routes:
+
+```bash
+python -c "from app.main import app; print(sorted(route.path for route in app.routes if route.path.startswith('/web/api')))"
+```
+
+2. Check who owns port `8000`:
+
+```bash
+netstat -aon | findstr ":8000"
+Get-CimInstance Win32_Process -Filter "ProcessId = <pid>" | Select-Object ProcessId, Name, CommandLine
+```
+
+3. If Docker or WSL is fronting the port instead of your local Python process,
+   stop the stale API container, free the port, and restart `uvicorn` on
+   `127.0.0.1:8000`.
+
+FastAPI `{"detail":"Not Found"}` from `5173` usually means Vite is proxying
+correctly but the process on `8000` is the wrong app instance.
 
 ## Docker Is Running But The App Cannot Connect
 

@@ -16,8 +16,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.api.router import api_router
-from app.api.deps import InMemoryRateLimiter, RedisRateLimiter
+from app.api.router import api_router, web_router
+from app.api.deps import (
+    InMemoryRateLimiter,
+    RedisRateLimiter,
+    scrub_browser_response_auth_headers,
+)
 from app.config import get_settings
 from app.core.exceptions import AISBaseException, RateLimitExceededError
 from app.core.http_status import DOMAIN_STATUS_CODES
@@ -358,6 +362,8 @@ def create_app() -> FastAPI:
             reset_request_log_context(context_tokens)
             raise
 
+        if request.url.path.startswith("/web/api/"):
+            scrub_browser_response_auth_headers(response, settings=settings)
         response.headers.setdefault("X-Request-ID", request.state.request_id)
         if settings.LOG_REQUESTS_ENABLED:
             _log_http_request(request, status_code=response.status_code, started_at=started_at)
@@ -366,6 +372,7 @@ def create_app() -> FastAPI:
 
     app.add_exception_handler(AISBaseException, _domain_exception_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)
+    app.include_router(web_router, prefix="/web/api")
     app.include_router(api_router, prefix="/api/v1")
     return app
 

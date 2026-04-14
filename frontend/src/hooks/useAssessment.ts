@@ -5,6 +5,7 @@ import type {
   AssistantRequest,
   AssistantResponseEnvelope,
   ProductionFact,
+  ReplayHeaders,
 } from "../api/types";
 
 export type AssessmentStatus = "idle" | "loading" | "success" | "error";
@@ -65,6 +66,22 @@ function buildAssistantRequest(request: AssessmentRequest): AssistantRequest {
   };
 }
 
+function applyReplayHeaders(
+  envelope: AssistantResponseEnvelope,
+  replayHeaders: ReplayHeaders,
+): AssistantResponseEnvelope {
+  if (envelope.response_type !== "assessment") {
+    return envelope;
+  }
+
+  return {
+    ...envelope,
+    case_id: replayHeaders.caseId ?? envelope.case_id,
+    evaluation_id: replayHeaders.evaluationId ?? envelope.evaluation_id,
+    audit_url: replayHeaders.auditUrl ?? envelope.audit_url,
+  };
+}
+
 export function useAssessment() {
   const [state, setState] = useState<AssessmentState>(INITIAL_STATE);
 
@@ -73,9 +90,10 @@ export function useAssessment() {
 
     try {
       const result = await postAssistantQuery(buildAssistantRequest(request));
+      const response = applyReplayHeaders(result.data, result.replayHeaders);
       setState({
         status: "success",
-        response: result.data,
+        response,
         error: null,
       });
     } catch (err) {

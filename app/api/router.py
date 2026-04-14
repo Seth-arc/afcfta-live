@@ -6,6 +6,7 @@ from app.api.deps import (
 	require_authenticated_principal,
 	require_default_rate_limit,
 )
+from app.api.web import trader
 from app.api.v1 import (
 	assessments,
 	assistant,
@@ -21,6 +22,9 @@ from app.api.v1 import (
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+
+web_router = APIRouter()
+web_router.include_router(trader.router)
 
 protected_router = APIRouter(
 	dependencies=[
